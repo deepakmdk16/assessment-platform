@@ -18,8 +18,17 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Interviewer(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    email: str = Field(unique=True, index=True)
+    password_hash: str
+    name: str
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 class Question(SQLModel, table=True):
     id: str = Field(primary_key=True)
+    owner_id: int = Field(foreign_key="interviewer.id", index=True)
     title: str
     prompt: str
     constraints: str
@@ -49,10 +58,25 @@ class QuestionTestCase(SQLModel, table=True):
     question: Question | None = Relationship(back_populates="test_cases")
 
 
+class Invite(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    token: str = Field(unique=True, index=True)  # url-safe random, shared with candidate
+    question_id: str = Field(foreign_key="question.id", index=True)
+    created_by: int = Field(foreign_key="interviewer.id", index=True)
+    recipients: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    expires_at: datetime | None = None
+    status: str = "active"
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 class Submission(SQLModel, table=True):
     id: str = Field(primary_key=True)  # uuid hex, assigned in the route
     question_id: str = Field(foreign_key="question.id", index=True)
-    candidate: str
+    # Set when the submission came in through a candidate invite link (nullable so
+    # the direct POST /submissions path still works without an invite).
+    invite_id: int | None = Field(default=None, foreign_key="invite.id", index=True)
+    candidate: str  # candidate display name
+    candidate_email: str | None = None
     language: str
     code: str
     status: str = "pending"  # "pending" | "running" | "done" | "error"

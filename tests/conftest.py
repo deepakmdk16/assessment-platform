@@ -1,7 +1,12 @@
-"""Test fixtures: a temp-file SQLite DB and a TestClient wired to it.
+"""Test fixtures: a temp in-memory SQLite DB and TestClients wired to it.
 
-We build a throwaway engine per test and override the app's `get_session`
-dependency so tests never touch the real `platform.db` and never hit the network.
+Tests never touch the real `platform.db` and never hit the network.
+
+- `anon_client`: no auth header (auth endpoints, ownership tests managing their
+  own tokens, public candidate endpoints).
+- `client`: `anon_client` plus a registered default interviewer whose bearer
+  token is set as the default Authorization header, so the interviewer-owned
+  routes (questions, etc.) work without each test re-doing the auth dance.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from assessment_platform.db import get_session
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
+def anon_client() -> Iterator[TestClient]:
     # In-memory SQLite shared across connections via StaticPool.
     engine = create_engine(
         "sqlite://",
@@ -40,3 +45,19 @@ def client() -> Iterator[TestClient]:
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+
+
+def register_interviewer(
+    client: TestClient, email: str, password: str = "pw", name: str = "Tester"
+) -> str:
+    """Register + log in an interviewer; return a bearer token."""
+    client.post("/auth/register", json={"email": email, "password": password, "name": name})
+    resp = client.post("/auth/login", json={"email": email, "password": password})
+    return resp.json()["access_token"]
+
+
+@pytest.fixture
+def client(anon_client: TestClient) -> Iterator[TestClient]:
+    token = register_interviewer(anon_client, "owner@test.io", name="Owner")
+    anon_client.headers["Authorization"] = f"Bearer {token}"
+    yield anon_client
