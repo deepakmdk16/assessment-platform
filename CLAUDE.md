@@ -84,23 +84,53 @@ agent+platform integration run (register→invite→candidate submit→grade→c
 dashboard PASS) and the full offline suite (`pytest` green, ruff+mypy clean;
 `web` build/typecheck/lint/test clean).
 
-**Open items (pick up here):**
-1. **Slice 3 — invites + UX.** Actually *email* the invite link to recipients
-   (they're stored but not sent). Polish the dashboard and the multi-step
-   add-question form.
-2. **Auth the internal `/submissions*` routes** — currently un-authed; put them
-   behind interviewer auth.
+**Slice 2 done (backend security/hardening, 2026-07-14).** Closed the
+gap-analysis findings on the backend, all offline-tested (`pytest` 40 passed,
+ruff+mypy clean):
+- **CORS** — `CORSMiddleware` with env-driven `CORS_ORIGINS` (default
+  `FRONTEND_BASE_URL`); the SPA can now call the API cross-origin. Without this
+  the browser flow was blocked — it had only ever been exercised by scripted
+  requests, never a real browser.
+- **`/submissions*` now auth'd + owner-scoped** (`POST`, `GET` list/detail,
+  `retry`) via a new `_owned_submission` helper.
+- **Invite lifecycle** — `Invite.status` is now enforced (revoked/inactive →
+  410); new owner-scoped `POST /questions/{id}/invites/{token}/revoke`; and
+  **one submission per email per invite** (case-insensitive; second attempt for
+  the same email → 409). Different emails may each submit once.
+- **Rate limiting** — dependency-free in-process limiter (`ratelimit.py`) on
+  `/auth/login` (brute-force) and `POST /invite/{token}/submit` (spam → paid
+  agent jobs); env-tunable (`LOGIN_RATE_LIMIT_MAX`, `SUBMIT_RATE_LIMIT_MAX`,
+  `RATE_LIMIT_WINDOW_S`; set MAX=0 to disable). 429 on exceed.
+- **Gated registration** — `REGISTRATION_CODE` env; when set, `/auth/register`
+  requires a matching `registration_code` in the body (403 otherwise). Unset =>
+  open sign-up (dev).
+- **Invite emailing** — `email_client.send_invite_emails` (stdlib `smtplib`),
+  best-effort on invite create; logs the link when SMTP is unconfigured (dev),
+  mocked in tests. SMTP_* env config.
+- **N+1 fix** — `_results_by_submission` batch-fetches results for the list +
+  dashboard reads in one query.
+
+**Open items (pick up here — each its own session):**
+1. **Frontend UX (`web/`)** — surface the new backend: a **revoke** button on
+   the question-detail invites list, and candidate-facing handling of the new
+   **409** (email already submitted) / **410** (invite revoked/expired) errors.
+   Plus the earlier dashboard + multi-step add-question polish. Run the `npm`
+   build/typecheck/lint/test loop after.
+2. **Prod hardening.** **Alembic** migrations (schema is `create_all` today — a
+   fresh DB picks up new columns, but existing DBs need migrations); `EmailStr`
+   validation (emails are plain `str` — adds the `email-validator` dep);
+   **HMAC body-signing** to harden the shared-secret agent↔platform auth. NOTE:
+   HMAC is **cross-repo** — the Agent (`../AssesmentAgent`) must implement the
+   signing/verifying counterpart or the platform-side change is inert.
 3. **Browser E2E for `web/`** — today the frontend is contract-aligned +
-   unit-tested (vitest), not click-through-tested. Add Playwright.
+   unit-tested (vitest), not click-through-tested. Add Playwright (browser +
+   dev-server infra). This is the test class that would have caught the CORS gap.
 4. **Agentic (deferred).** The recommended first agentic feature is an
    AI **question-authoring assistant** on the add-question screen (drafts
    constraints + a reference solution + a validated test suite; human approves).
    See the agent repo's CLAUDE.md "agentic direction" note. Adversarial test-gen
-   and a candidate-feedback agent follow from it.
-5. **Prod hardening.** Alembic migrations (schema is `create_all` today — a fresh
-   DB picks up new columns, but existing DBs need migrations); `EmailStr`
-   validation (emails are plain `str`); **HMAC body-signing** to harden the
-   shared-secret agent↔platform auth.
+   and a candidate-feedback agent follow from it. Spans both repos — a project,
+   not a cleanup item.
 
 ## Companion repo
 

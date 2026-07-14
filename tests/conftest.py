@@ -21,6 +21,15 @@ from sqlmodel.pool import StaticPool
 from assessment_platform import db as db_module
 from assessment_platform.api import app
 from assessment_platform.db import get_session
+from assessment_platform.ratelimit import limiter
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> Iterator[None]:
+    # The limiter is process-global; clear it between tests so counts from one
+    # test don't bleed into the next (they share the fast monotonic window).
+    limiter.reset()
+    yield
 
 
 @pytest.fixture
