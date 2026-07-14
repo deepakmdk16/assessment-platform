@@ -17,8 +17,12 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  retries: 0,
-  reporter: 'list',
+  // One retry in CI so a genuine flake doesn't fail the run — and so the
+  // trace/HTML report below actually capture something on the retry.
+  retries: process.env.CI ? 1 : 0,
+  // On CI also emit an HTML report (uploaded as a failure artifact); locally
+  // the plain list output is enough.
+  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL: FRONTEND_URL,
     trace: 'on-first-retry',
