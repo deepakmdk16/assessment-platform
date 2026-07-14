@@ -29,6 +29,8 @@ API to render real content.
 - `npm run typecheck` — `tsc -b --noEmit`
 - `npm run lint` — ESLint
 - `npm run test` — run the Vitest test suite once
+- `npm run test:e2e` — run the Playwright browser E2E suite (see below)
+- `npm run test:e2e:ui` — the same suite in Playwright's interactive UI runner
 - `npm run preview` — preview the production build locally
 
 ## Structure
@@ -71,6 +73,25 @@ textarea in the candidate-flow test. Covered:
   case rows
 - `pages/__tests__/CandidatePage.test.tsx` — gate → editor → submitted flow, and the
   404/410 error states
+
+### Browser E2E (Playwright)
+
+`npm run test:e2e` drives the real browser against the real stack — the only test class
+that exercises the SPA ↔ API boundary end-to-end (it's what would have caught the earlier
+CORS gap). `playwright.config.ts` starts three servers automatically:
+
+- **mock agent** (`e2e/mock-agent.mjs`) — a tiny Node stand-in for `../AssesmentAgent`, so
+  the suite runs fully offline. It accepts `POST /assessments` and posts a `PASS` result
+  back to the platform's callback. No real agent or LLM key is needed.
+- **platform API** (`uv run platform-api`) — pointed at the mock agent, a throwaway
+  `e2e-platform.db`, with rate limits disabled.
+- **Vite dev server** — the app under test.
+
+First run needs the browser binary: `npx playwright install chromium`. Specs mint unique
+interviewer emails / question ids per run (no DB reset needed) and live in `e2e/`; vitest
+is scoped to `src/` so it never picks them up. Covered: register → add-question → create
+invite → candidate submit → graded `PASS` on the dashboard, plus revoke → `410` and
+duplicate-email → `409`.
 
 ## Assumptions / contract notes
 

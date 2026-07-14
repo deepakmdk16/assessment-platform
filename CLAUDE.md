@@ -142,21 +142,36 @@ build green):
 - Tests: 409 case added to `CandidatePage.test.tsx`; new `QuestionDetailPage.test.tsx`
   (revoke happy-path + confirm-dismissed).
 
+**Slice 4 done (Playwright browser E2E, 2026-07-14).** Added the browser E2E
+harness for `web/` (open item #3), all offline/deterministic:
+- **`web/playwright.config.ts`** auto-starts three servers: a **mock agent**
+  (`web/e2e/mock-agent.mjs`, a Node stand-in for `../AssesmentAgent` that accepts
+  `POST /assessments` and posts a `PASS` callback), `uv run platform-api` (pointed
+  at the mock, a throwaway `e2e-platform.db`, rate limits off), and the Vite dev
+  server. No live agent / LLM key needed.
+- **Specs** (`web/e2e/`): the full happy path (register → add-question → create
+  invite → candidate submit → graded `PASS` on the dashboard) plus revoke → `410`
+  and duplicate-email → `409`. Tests mint unique interviewer/question data per run
+  (no DB reset); vitest `include` is scoped to `src/` so it ignores `e2e/`.
+- Run: `npm run test:e2e` (first run: `npx playwright install chromium`). Verified
+  3/3 green; `pytest` 40, ruff+mypy clean; `web` typecheck/lint/unit/build clean.
+- **Not wired into CI** (deliberate, per plan) — harness only for now.
+
 **Open items (pick up here — each its own session):**
 1. **Frontend UX polish (`web/`)** — the Slice-2 surfacing (revoke, 409/410) is
-   done (Slice 3 above). Remaining: the earlier **dashboard + multi-step
-   add-question polish**, and a nit from review — revoke errors currently reuse
-   the create-invite form's error slot (shows far from the table row). Run the
-   `npm` build/typecheck/lint/test loop after.
+   done (Slice 3). Remaining: the earlier **dashboard + multi-step add-question
+   polish**, and a nit from review — revoke errors currently reuse the
+   create-invite form's error slot (shows far from the table row). Run the `npm`
+   build/typecheck/lint/test loop after.
 2. **Prod hardening.** **Alembic** migrations (schema is `create_all` today — a
    fresh DB picks up new columns, but existing DBs need migrations); `EmailStr`
    validation (emails are plain `str` — adds the `email-validator` dep);
    **HMAC body-signing** to harden the shared-secret agent↔platform auth. NOTE:
    HMAC is **cross-repo** — the Agent (`../AssesmentAgent`) must implement the
    signing/verifying counterpart or the platform-side change is inert.
-3. **Browser E2E for `web/`** — today the frontend is contract-aligned +
-   unit-tested (vitest), not click-through-tested. Add Playwright (browser +
-   dev-server infra). This is the test class that would have caught the CORS gap.
+3. **CI for the E2E suite (follow-on to Slice 4)** — the Playwright harness exists
+   but runs only locally. Add a GitHub Actions workflow (browser install +
+   `uv`/`npm` setup) so E2E runs on PRs.
 4. **Agentic (deferred).** The recommended first agentic feature is an
    AI **question-authoring assistant** on the add-question screen (drafts
    constraints + a reference solution + a validated test suite; human approves).
