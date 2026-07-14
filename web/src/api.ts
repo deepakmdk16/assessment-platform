@@ -127,6 +127,12 @@ export const api = {
   listInvites: (questionId: string) =>
     request<Invite[]>(`/questions/${questionId}/invites`, { auth: true }),
 
+  revokeInvite: (questionId: string, token: string) =>
+    request<Invite>(`/questions/${questionId}/invites/${token}/revoke`, {
+      method: 'POST',
+      auth: true,
+    }),
+
   listSubmissions: (questionId: string) =>
     request<SubmissionRow[]>(`/questions/${questionId}/submissions`, { auth: true }),
 

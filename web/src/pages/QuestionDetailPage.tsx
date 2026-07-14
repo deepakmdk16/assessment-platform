@@ -14,6 +14,7 @@ export function QuestionDetailPage() {
   const [creatingInvite, setCreatingInvite] = useState(false)
   const [inviteError, setInviteError] = useState<string | null>(null)
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null)
+  const [revokingToken, setRevokingToken] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -44,6 +45,21 @@ export function QuestionDetailPage() {
       setInviteError(err instanceof ApiError ? err.message : 'Failed to generate invite')
     } finally {
       setCreatingInvite(false)
+    }
+  }
+
+  async function handleRevoke(token: string) {
+    if (!id) return
+    if (!window.confirm('Revoke this invite? The candidate link will stop working.')) return
+    setInviteError(null)
+    setRevokingToken(token)
+    try {
+      const updated = await api.revokeInvite(id, token)
+      setInvites((prev) => prev.map((inv) => (inv.token === token ? updated : inv)))
+    } catch (err) {
+      setInviteError(err instanceof ApiError ? err.message : 'Failed to revoke invite')
+    } finally {
+      setRevokingToken(null)
     }
   }
 
@@ -113,10 +129,20 @@ export function QuestionDetailPage() {
                   <td>{invite.recipients.join(', ') || '—'}</td>
                   <td>{invite.status}</td>
                   <td>{invite.expires_at ?? 'never'}</td>
-                  <td>
+                  <td className="invite-actions">
                     <button type="button" onClick={() => copyUrl(invite.url)}>
                       {copiedUrl === invite.url ? 'Copied!' : 'Copy link'}
                     </button>
+                    {invite.status === 'active' && (
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => handleRevoke(invite.token)}
+                        disabled={revokingToken === invite.token}
+                      >
+                        {revokingToken === invite.token ? 'Revoking…' : 'Revoke'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
