@@ -62,6 +62,22 @@ deterministic grade.
 - **Secrets from env only** — `JWT_SECRET`, `ASSESS_API_TOKEN`, `CALLBACK_TOKEN`,
   SMTP creds. Never commit them.
 
+## Git hygiene (branch flow)
+
+**Always start new work from an up-to-date `main`.** Before cutting a branch:
+
+```bash
+git checkout main
+git pull            # get the latest merged main (e.g. the PR just merged)
+git checkout -b <slice-name>
+```
+
+Never branch off a stale local `main` or off another feature branch. Each unit
+of work is its own branch → push → PR → the user merges to `main`. Do not merge
+or push to `main` directly, and don't push a branch until the pre-push
+checkpoints below pass. After the user merges, pull `main` again before the next
+branch.
+
 ## Pre-push checkpoints (in addition to the global §6 gates)
 
 1. `uv run pytest` passes; `uv run ruff check .` and `uv run mypy` clean.
