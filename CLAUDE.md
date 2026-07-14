@@ -155,7 +155,24 @@ harness for `web/` (open item #3), all offline/deterministic:
   (no DB reset); vitest `include` is scoped to `src/` so it ignores `e2e/`.
 - Run: `npm run test:e2e` (first run: `npx playwright install chromium`). Verified
   3/3 green; `pytest` 40, ruff+mypy clean; `web` typecheck/lint/unit/build clean.
-- **Not wired into CI** (deliberate, per plan) — harness only for now.
+
+**Slice 5 done (E2E in CI, 2026-07-14).** Wired the Slice-4 Playwright harness
+into GitHub Actions (open item #3):
+- **`.github/workflows/e2e.yml`** runs on every PR + pushes to `main`. Provisions
+  the toolchains only (`astral-sh/setup-uv` → `uv sync`; `actions/setup-node` 22 →
+  `npm ci`; `npx playwright install --with-deps chromium`) then `npm run test:e2e`
+  — the Playwright config auto-starts the three servers itself, so no live agent /
+  LLM key is needed. `concurrency` cancels superseded runs; the HTML report uploads
+  as a failure artifact.
+- **`web/playwright.config.ts`** now, **only under `CI`**, emits an HTML report
+  (`[['list'],['html']]`) and retries once (so `trace: on-first-retry` captures a
+  trace). Local behaviour is unchanged (`list`, no retries).
+- CI always starts from a fresh DB (`e2e-platform.db` is gitignored → not checked
+  out, ephemeral runner). Verified green with `CI=true npm run test:e2e` on a fresh
+  DB (3/3); `pytest` 40, ruff+mypy clean; `web` build/typecheck/lint/unit clean.
+  NOTE: the suite is *not* resilient to a **stale** local `e2e-platform.db` (state
+  accumulates → the PASS-grading spec can time out); `rm e2e-platform.db` before a
+  local run if it flakes. Doesn't affect CI.
 
 **Open items (pick up here — each its own session):**
 1. **Frontend UX polish (`web/`)** — the Slice-2 surfacing (revoke, 409/410) is
@@ -169,9 +186,12 @@ harness for `web/` (open item #3), all offline/deterministic:
    **HMAC body-signing** to harden the shared-secret agent↔platform auth. NOTE:
    HMAC is **cross-repo** — the Agent (`../AssesmentAgent`) must implement the
    signing/verifying counterpart or the platform-side change is inert.
-3. **CI for the E2E suite (follow-on to Slice 4)** — the Playwright harness exists
-   but runs only locally. Add a GitHub Actions workflow (browser install +
-   `uv`/`npm` setup) so E2E runs on PRs.
+3. **CI for the E2E suite** — **done (Slice 5).** GitHub Actions runs the
+   Playwright suite on every PR + push to `main`. Follow-ons if wanted: also run
+   the offline gates (`pytest`/ruff/mypy + `web` build/typecheck/lint/unit) in CI
+   (currently no workflow covers them), and make the E2E suite resilient to a
+   stale local DB (reset `e2e-platform.db` on start instead of relying on unique
+   per-run data).
 4. **Agentic (deferred).** The recommended first agentic feature is an
    AI **question-authoring assistant** on the add-question screen (drafts
    constraints + a reference solution + a validated test suite; human approves).
