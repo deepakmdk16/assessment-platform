@@ -5,13 +5,16 @@ results the agent returns. It never grades. `POST /submissions` triggers a job
 on the agent (passing a callback_url pointing back here); the agent later POSTs
 the full result to `POST /assessments/callback`, which we persist verbatim.
 
-Auth is intentionally absent in v1. A shared secret on the inbound submit AND on
-the callback is a required TODO before production (see README).
+Interviewers authenticate with a JWT bearer (see `auth.py`) and own their
+questions; candidates reach a question through a public, token-gated invite link
+that never exposes the test cases / expected outputs. A shared secret guards the
+platform<->agent link (see README).
 """
 
 from __future__ import annotations
 
 import logging
+import secrets
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -22,17 +25,41 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from sqlmodel import Session, select
 
 from . import agent_client, config
+from .auth import (
+    create_access_token,
+    get_current_interviewer,
+    hash_password,
+    verify_password,
+)
 from .config import PLATFORM_BASE_URL
 from .db import get_session, init_db
-from .models import AssessmentResult, Question, QuestionTestCase, Submission
+from .models import (
+    AssessmentResult,
+    Interviewer,
+    Invite,
+    Question,
+    QuestionTestCase,
+    Submission,
+)
 from .schemas import (
+    CandidateQuestionView,
+    CandidateSubmitIn,
+    CandidateSubmitOut,
+    DashboardSubmissionOut,
+    InterviewerOut,
+    InviteCreate,
+    InviteOut,
+    InvitePublicOut,
+    LoginIn,
     QuestionCreate,
     QuestionOut,
     QuestionUpdate,
+    RegisterIn,
     ResultOut,
     SubmissionCreate,
     SubmissionOut,
     TestCaseOut,
+    TokenOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,6 +134,30 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
     )
 
 
+def _invite_url(token: str) -> str:
+    return f"{config.FRONTEND_BASE_URL}/t/{token}"
+
+
+def _invite_out(inv: Invite) -> InviteOut:
+    return InviteOut(
+        token=inv.token,
+        url=_invite_url(inv.token),
+        question_id=inv.question_id,
+        recipients=inv.recipients,
+        expires_at=inv.expires_at,
+        status=inv.status,
+    )
+
+
+def _is_expired(expires_at: datetime | None) -> bool:
+    """True if the invite's expiry has passed. Stored datetimes may come back
+    naive from SQLite; treat those as UTC so the comparison never crashes."""
+    if expires_at is None:
+        return False
+    exp = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) > exp
+
+
 # --------------------------------------------------------------------------- #
 # Health                                                                        #
 # --------------------------------------------------------------------------- #
@@ -118,16 +169,73 @@ def health() -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Auth (interviewers)                                                           #
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/auth/register", response_model=InterviewerOut, status_code=201)
+def register(body: RegisterIn, session: Session = Depends(get_session)) -> InterviewerOut:
+    existing = session.exec(
+        select(Interviewer).where(Interviewer.email == body.email)
+    ).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=f"email {body.email!r} already registered.")
+    interviewer = Interviewer(
+        email=body.email,
+        password_hash=hash_password(body.password),
+        name=body.name,
+    )
+    session.add(interviewer)
+    session.commit()
+    session.refresh(interviewer)
+    assert interviewer.id is not None  # persisted -> has an id
+    return InterviewerOut(id=interviewer.id, email=interviewer.email, name=interviewer.name)
+
+
+@app.post("/auth/login", response_model=TokenOut)
+def login(body: LoginIn, session: Session = Depends(get_session)) -> TokenOut:
+    interviewer = session.exec(
+        select(Interviewer).where(Interviewer.email == body.email)
+    ).first()
+    if interviewer is None or not verify_password(body.password, interviewer.password_hash):
+        raise HTTPException(status_code=401, detail="invalid email or password.")
+    assert interviewer.id is not None  # persisted -> has an id
+    return TokenOut(access_token=create_access_token(interviewer.id))
+
+
+@app.get("/auth/me", response_model=InterviewerOut)
+def me(current: Interviewer = Depends(get_current_interviewer)) -> InterviewerOut:
+    assert current.id is not None  # loaded from DB -> has an id
+    return InterviewerOut(id=current.id, email=current.email, name=current.name)
+
+
+# --------------------------------------------------------------------------- #
 # Questions CRUD                                                                #
 # --------------------------------------------------------------------------- #
 
 
+def _owned_question(question_id: str, current: Interviewer, session: Session) -> Question:
+    """Load a question and enforce ownership: 404 if missing, 403 if not the caller's."""
+    q = session.get(Question, question_id)
+    if q is None:
+        raise HTTPException(status_code=404, detail=f"no question with id {question_id!r}.")
+    if q.owner_id != current.id:
+        raise HTTPException(status_code=403, detail="not your question.")
+    return q
+
+
 @app.post("/questions", response_model=QuestionOut, status_code=201)
-def create_question(body: QuestionCreate, session: Session = Depends(get_session)) -> QuestionOut:
+def create_question(
+    body: QuestionCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> QuestionOut:
     if session.get(Question, body.id) is not None:
         raise HTTPException(status_code=409, detail=f"question {body.id!r} already exists.")
+    assert current.id is not None  # loaded from DB -> has an id
     q = Question(
         id=body.id,
+        owner_id=current.id,
         title=body.title,
         prompt=body.prompt,
         constraints=body.constraints,
@@ -154,26 +262,33 @@ def create_question(body: QuestionCreate, session: Session = Depends(get_session
 
 
 @app.get("/questions", response_model=list[QuestionOut])
-def list_questions(session: Session = Depends(get_session)) -> list[QuestionOut]:
-    questions = session.exec(select(Question)).all()
+def list_questions(
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> list[QuestionOut]:
+    questions = session.exec(
+        select(Question).where(Question.owner_id == current.id)
+    ).all()
     return [_question_out(q) for q in questions]
 
 
 @app.get("/questions/{question_id}", response_model=QuestionOut)
-def get_question(question_id: str, session: Session = Depends(get_session)) -> QuestionOut:
-    q = session.get(Question, question_id)
-    if q is None:
-        raise HTTPException(status_code=404, detail=f"no question with id {question_id!r}.")
-    return _question_out(q)
+def get_question(
+    question_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> QuestionOut:
+    return _question_out(_owned_question(question_id, current, session))
 
 
 @app.put("/questions/{question_id}", response_model=QuestionOut)
 def update_question(
-    question_id: str, body: QuestionUpdate, session: Session = Depends(get_session)
+    question_id: str,
+    body: QuestionUpdate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
 ) -> QuestionOut:
-    q = session.get(Question, question_id)
-    if q is None:
-        raise HTTPException(status_code=404, detail=f"no question with id {question_id!r}.")
+    q = _owned_question(question_id, current, session)
     q.title = body.title
     q.prompt = body.prompt
     q.constraints = body.constraints
@@ -202,12 +317,117 @@ def update_question(
 
 
 @app.delete("/questions/{question_id}", status_code=204)
-def delete_question(question_id: str, session: Session = Depends(get_session)) -> None:
-    q = session.get(Question, question_id)
-    if q is None:
-        raise HTTPException(status_code=404, detail=f"no question with id {question_id!r}.")
+def delete_question(
+    question_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> None:
+    q = _owned_question(question_id, current, session)
     session.delete(q)
     session.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Invites (interviewer creates a candidate link)                                #
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/questions/{question_id}/invites", response_model=InviteOut, status_code=201)
+def create_invite(
+    question_id: str,
+    body: InviteCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> InviteOut:
+    _owned_question(question_id, current, session)  # 404/403 guard
+    assert current.id is not None
+    invite = Invite(
+        token=secrets.token_urlsafe(32),
+        question_id=question_id,
+        created_by=current.id,
+        recipients=body.recipients,
+        expires_at=body.expires_at,
+    )
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    # Slice 1: create + return the link only; emailing recipients is a later slice.
+    return _invite_out(invite)
+
+
+@app.get("/questions/{question_id}/invites", response_model=list[InviteOut])
+def list_invites(
+    question_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> list[InviteOut]:
+    _owned_question(question_id, current, session)
+    invites = session.exec(
+        select(Invite).where(Invite.question_id == question_id)
+    ).all()
+    return [_invite_out(inv) for inv in invites]
+
+
+# --------------------------------------------------------------------------- #
+# Candidate (public, token-gated — NO bearer). MUST NOT leak test cases.        #
+# --------------------------------------------------------------------------- #
+
+
+def _load_invite_or_error(token: str, session: Session) -> Invite:
+    """Resolve a candidate token: 404 if unknown, 410 if expired."""
+    invite = session.exec(select(Invite).where(Invite.token == token)).first()
+    if invite is None:
+        raise HTTPException(status_code=404, detail="invalid invite token.")
+    if _is_expired(invite.expires_at):
+        raise HTTPException(status_code=410, detail="this invite has expired.")
+    return invite
+
+
+@app.get("/invite/{token}", response_model=InvitePublicOut)
+def get_invite(token: str, session: Session = Depends(get_session)) -> InvitePublicOut:
+    invite = _load_invite_or_error(token, session)
+    q = session.get(Question, invite.question_id)
+    if q is None:  # question deleted after the invite was issued
+        raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
+    # Candidate-facing view only — never expose test_cases or expected outputs.
+    return InvitePublicOut(
+        question=CandidateQuestionView(
+            title=q.title,
+            prompt=q.prompt,
+            constraints=q.constraints,
+            example_input=q.example_input,
+            example_output=q.example_output,
+            time_limit_s=q.time_limit_s,
+        ),
+        languages=config.SUPPORTED_LANGUAGES,
+    )
+
+
+@app.post("/invite/{token}/submit", response_model=CandidateSubmitOut, status_code=201)
+def candidate_submit(
+    token: str, body: CandidateSubmitIn, session: Session = Depends(get_session)
+) -> CandidateSubmitOut:
+    invite = _load_invite_or_error(token, session)
+    question = session.get(Question, invite.question_id)
+    if question is None:
+        raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
+
+    sub = Submission(
+        id=uuid.uuid4().hex,
+        question_id=question.id,
+        invite_id=invite.id,
+        candidate=body.candidate_name,
+        candidate_email=body.candidate_email,
+        language=body.language,
+        code=body.code,
+        status="pending",
+    )
+    session.add(sub)
+    session.commit()
+    session.refresh(sub)
+
+    sub = _trigger_agent(session, question, sub)
+    return CandidateSubmitOut(submission_id=sub.id, status=sub.status)
 
 
 # --------------------------------------------------------------------------- #
@@ -316,6 +536,41 @@ def get_submission(submission_id: str, session: Session = Depends(get_session)) 
         select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
     ).first()
     return _submission_out(sub, result)
+
+
+# --------------------------------------------------------------------------- #
+# Dashboard (interviewer: submissions for one of their questions)               #
+# --------------------------------------------------------------------------- #
+
+
+@app.get("/questions/{question_id}/submissions", response_model=list[DashboardSubmissionOut])
+def question_submissions(
+    question_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> list[DashboardSubmissionOut]:
+    _owned_question(question_id, current, session)  # 404/403 guard
+    subs = session.exec(
+        select(Submission).where(Submission.question_id == question_id)
+    ).all()
+    out = []
+    for sub in subs:
+        result = session.exec(
+            select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
+        ).first()
+        out.append(
+            DashboardSubmissionOut(
+                submission_id=sub.id,
+                candidate_name=sub.candidate,
+                candidate_email=sub.candidate_email,
+                language=sub.language,
+                status=sub.status,
+                verdict=result.verdict if result else None,
+                score_pct=result.score_pct if result else None,
+                created_at=sub.created_at,
+            )
+        )
+    return out
 
 
 # --------------------------------------------------------------------------- #

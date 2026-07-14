@@ -7,7 +7,11 @@ only an env change (no code change).
 
 from __future__ import annotations
 
+import logging
 import os
+import secrets
+
+logger = logging.getLogger(__name__)
 
 # SQLAlchemy URL. Default: local SQLite file. Set to a postgresql+psycopg URL in prod.
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./platform.db")
@@ -32,3 +36,32 @@ AGENT_TIMEOUT_S = float(os.getenv("AGENT_TIMEOUT_S", "10.0"))
 AUTH_HEADER = "X-Assess-Token"
 CALLBACK_TOKEN = os.getenv("CALLBACK_TOKEN") or None
 ASSESS_API_TOKEN = os.getenv("ASSESS_API_TOKEN") or None
+
+# Interviewer auth (JWT bearer). JWT_SECRET is REQUIRED in production; if unset we
+# fall back to an ephemeral per-process secret so dev/tests work out of the box —
+# tokens then don't survive a restart, hence the warning.
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    JWT_SECRET = secrets.token_urlsafe(32)
+    logger.warning(
+        "JWT_SECRET is not set; using an ephemeral dev secret (tokens will not "
+        "survive a restart). Set JWT_SECRET in production."
+    )
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "720"))
+
+# Base URL of the interviewer/candidate frontend, used to build candidate invite
+# links (f"{FRONTEND_BASE_URL}/t/{token}").
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://127.0.0.1:5173")
+
+# Languages offered to candidates (UI-facing; the agent enforces what it supports).
+SUPPORTED_LANGUAGES = [
+    "python",
+    "javascript",
+    "java",
+    "cpp",
+    "c",
+    "go",
+    "ruby",
+    "rust",
+]
