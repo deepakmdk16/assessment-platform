@@ -54,6 +54,35 @@ JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "720"))
 # links (f"{FRONTEND_BASE_URL}/t/{token}").
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://127.0.0.1:5173")
 
+# Browser origins allowed to call the API (CORS). The SPA is a separate origin,
+# so without this every browser request is blocked by the preflight. Comma-
+# separated; defaults to the dev frontend origin.
+CORS_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", FRONTEND_BASE_URL).split(",")
+    if o.strip()
+]
+
+# Interviewer sign-up gate. When set, POST /auth/register requires a matching
+# `registration_code` in the body (403 otherwise). Unset => open sign-up (dev).
+REGISTRATION_CODE = os.getenv("REGISTRATION_CODE") or None
+
+# SMTP for emailing invite links. When SMTP_HOST is unset the mailer logs the
+# link instead of sending (dev/tests), so nothing here is required to run.
+SMTP_HOST = os.getenv("SMTP_HOST") or None
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER") or None
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or None
+SMTP_FROM = os.getenv("SMTP_FROM", "no-reply@assessment.local")
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
+
+# In-process rate limits (requests per window, seconds). Guards brute-force on
+# login and spam on the public candidate submit (which triggers paid agent jobs).
+# Set the *_MAX to 0 to disable a given limiter.
+RATE_LIMIT_WINDOW_S = int(os.getenv("RATE_LIMIT_WINDOW_S", "60"))
+LOGIN_RATE_LIMIT_MAX = int(os.getenv("LOGIN_RATE_LIMIT_MAX", "10"))
+SUBMIT_RATE_LIMIT_MAX = int(os.getenv("SUBMIT_RATE_LIMIT_MAX", "20"))
+
 # Languages offered to candidates (UI-facing; the agent enforces what it supports).
 SUPPORTED_LANGUAGES = [
     "python",

@@ -105,6 +105,8 @@ class RegisterIn(BaseModel):
     email: str
     password: str = Field(min_length=1)
     name: str
+    # Required only when the server sets REGISTRATION_CODE (gated sign-up).
+    registration_code: str | None = None
 
 
 class InterviewerOut(BaseModel):

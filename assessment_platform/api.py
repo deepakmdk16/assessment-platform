@@ -16,15 +16,16 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 
-from . import agent_client, config
+from . import agent_client, config, email_client
 from .auth import (
     create_access_token,
     get_current_interviewer,
@@ -41,6 +42,7 @@ from .models import (
     QuestionTestCase,
     Submission,
 )
+from .ratelimit import client_ip, limiter
 from .schemas import (
     CandidateQuestionView,
     CandidateSubmitIn,
@@ -76,6 +78,16 @@ app = FastAPI(
     description="System of record for coding questions, submissions, and agent results.",
     version="0.1.0",
     lifespan=_lifespan,
+)
+
+# The SPA is served from a different origin than the API, so browser requests
+# need CORS. Origins are env-driven (see config.CORS_ORIGINS).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -134,6 +146,19 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
     )
 
 
+def _results_by_submission(
+    subs: Sequence[Submission], session: Session
+) -> dict[str, AssessmentResult]:
+    """Fetch all results for `subs` in one query, keyed by submission_id (avoids N+1)."""
+    ids = [s.id for s in subs]
+    if not ids:
+        return {}
+    results = session.exec(
+        select(AssessmentResult).where(AssessmentResult.submission_id.in_(ids))  # type: ignore[attr-defined]
+    ).all()
+    return {r.submission_id: r for r in results}
+
+
 def _invite_url(token: str) -> str:
     return f"{config.FRONTEND_BASE_URL}/t/{token}"
 
@@ -175,6 +200,9 @@ def health() -> dict:
 
 @app.post("/auth/register", response_model=InterviewerOut, status_code=201)
 def register(body: RegisterIn, session: Session = Depends(get_session)) -> InterviewerOut:
+    # Gated sign-up: when a registration code is configured, require a match.
+    if config.REGISTRATION_CODE and body.registration_code != config.REGISTRATION_CODE:
+        raise HTTPException(status_code=403, detail="invalid or missing registration code.")
     existing = session.exec(
         select(Interviewer).where(Interviewer.email == body.email)
     ).first()
@@ -193,7 +221,12 @@ def register(body: RegisterIn, session: Session = Depends(get_session)) -> Inter
 
 
 @app.post("/auth/login", response_model=TokenOut)
-def login(body: LoginIn, session: Session = Depends(get_session)) -> TokenOut:
+def login(
+    body: LoginIn, request: Request, session: Session = Depends(get_session)
+) -> TokenOut:
+    limiter.check(
+        "login", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
     interviewer = session.exec(
         select(Interviewer).where(Interviewer.email == body.email)
     ).first()
@@ -222,6 +255,15 @@ def _owned_question(question_id: str, current: Interviewer, session: Session) ->
     if q.owner_id != current.id:
         raise HTTPException(status_code=403, detail="not your question.")
     return q
+
+
+def _owned_submission(submission_id: str, current: Interviewer, session: Session) -> Submission:
+    """Load a submission and enforce ownership via its question's owner."""
+    sub = session.get(Submission, submission_id)
+    if sub is None:
+        raise HTTPException(status_code=404, detail=f"no submission with id {submission_id!r}.")
+    _owned_question(sub.question_id, current, session)  # 403 if not the caller's question
+    return sub
 
 
 @app.post("/questions", response_model=QuestionOut, status_code=201)
@@ -339,7 +381,7 @@ def create_invite(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> InviteOut:
-    _owned_question(question_id, current, session)  # 404/403 guard
+    question = _owned_question(question_id, current, session)  # 404/403 guard
     assert current.id is not None
     invite = Invite(
         token=secrets.token_urlsafe(32),
@@ -351,7 +393,8 @@ def create_invite(
     session.add(invite)
     session.commit()
     session.refresh(invite)
-    # Slice 1: create + return the link only; emailing recipients is a later slice.
+    # Best-effort email of the link to recipients (no-op/logs when SMTP unset).
+    email_client.send_invite_emails(invite.recipients, _invite_url(invite.token), question.title)
     return _invite_out(invite)
 
 
@@ -368,16 +411,39 @@ def list_invites(
     return [_invite_out(inv) for inv in invites]
 
 
+@app.post("/questions/{question_id}/invites/{token}/revoke", response_model=InviteOut)
+def revoke_invite(
+    question_id: str,
+    token: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> InviteOut:
+    """Deactivate an invite so its link stops working (candidate view/submit 410)."""
+    _owned_question(question_id, current, session)  # 404/403 guard
+    invite = session.exec(
+        select(Invite).where(Invite.token == token, Invite.question_id == question_id)
+    ).first()
+    if invite is None:
+        raise HTTPException(status_code=404, detail="invalid invite token.")
+    invite.status = "revoked"
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    return _invite_out(invite)
+
+
 # --------------------------------------------------------------------------- #
 # Candidate (public, token-gated — NO bearer). MUST NOT leak test cases.        #
 # --------------------------------------------------------------------------- #
 
 
 def _load_invite_or_error(token: str, session: Session) -> Invite:
-    """Resolve a candidate token: 404 if unknown, 410 if expired."""
+    """Resolve a candidate token: 404 if unknown, 410 if expired or revoked."""
     invite = session.exec(select(Invite).where(Invite.token == token)).first()
     if invite is None:
         raise HTTPException(status_code=404, detail="invalid invite token.")
+    if invite.status != "active":
+        raise HTTPException(status_code=410, detail="this invite is no longer active.")
     if _is_expired(invite.expires_at):
         raise HTTPException(status_code=410, detail="this invite has expired.")
     return invite
@@ -405,19 +471,40 @@ def get_invite(token: str, session: Session = Depends(get_session)) -> InvitePub
 
 @app.post("/invite/{token}/submit", response_model=CandidateSubmitOut, status_code=201)
 def candidate_submit(
-    token: str, body: CandidateSubmitIn, session: Session = Depends(get_session)
+    token: str,
+    body: CandidateSubmitIn,
+    request: Request,
+    session: Session = Depends(get_session),
 ) -> CandidateSubmitOut:
+    limiter.check(
+        "submit", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
     invite = _load_invite_or_error(token, session)
     question = session.get(Question, invite.question_id)
     if question is None:
         raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
+
+    # One submission per email address per invite (decision A). Case-insensitive
+    # so "A@x.com" and "a@x.com" count as the same candidate.
+    email = body.candidate_email.strip().lower()
+    already = session.exec(
+        select(Submission).where(
+            Submission.invite_id == invite.id,
+            Submission.candidate_email == email,
+        )
+    ).first()
+    if already is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="a submission for this email already exists on this invite.",
+        )
 
     sub = Submission(
         id=uuid.uuid4().hex,
         question_id=question.id,
         invite_id=invite.id,
         candidate=body.candidate_name,
-        candidate_email=body.candidate_email,
+        candidate_email=email,
         language=body.language,
         code=body.code,
         status="pending",
@@ -463,11 +550,11 @@ def _trigger_agent(session: Session, question: Question, sub: Submission) -> Sub
 
 @app.post("/submissions", response_model=SubmissionOut, status_code=201)
 def create_submission(
-    body: SubmissionCreate, session: Session = Depends(get_session)
+    body: SubmissionCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
 ) -> SubmissionOut:
-    question = session.get(Question, body.question_id)
-    if question is None:
-        raise HTTPException(status_code=404, detail=f"no question with id {body.question_id!r}.")
+    question = _owned_question(body.question_id, current, session)  # 404/403 guard
 
     sub = Submission(
         id=uuid.uuid4().hex,
@@ -487,16 +574,16 @@ def create_submission(
 
 @app.post("/submissions/{submission_id}/retry", response_model=SubmissionOut)
 def retry_submission(
-    submission_id: str, session: Session = Depends(get_session)
+    submission_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
 ) -> SubmissionOut:
     """Re-trigger the agent for a submission stuck in "error" (its prior trigger failed).
 
     Submissions are immutable; this only re-runs the SAME submission — it does not
     create a new one. Only allowed from "error"; other states are a 409.
     """
-    sub = session.get(Submission, submission_id)
-    if sub is None:
-        raise HTTPException(status_code=404, detail=f"no submission with id {submission_id!r}.")
+    sub = _owned_submission(submission_id, current, session)  # 404/403 guard
     if sub.status != "error":
         raise HTTPException(
             status_code=409,
@@ -516,22 +603,27 @@ def retry_submission(
 
 
 @app.get("/submissions", response_model=list[SubmissionOut])
-def list_submissions(session: Session = Depends(get_session)) -> list[SubmissionOut]:
-    subs = session.exec(select(Submission)).all()
-    out = []
-    for sub in subs:
-        result = session.exec(
-            select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
-        ).first()
-        out.append(_submission_out(sub, result))
-    return out
+def list_submissions(
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> list[SubmissionOut]:
+    # Only submissions for the caller's own questions.
+    subs = session.exec(
+        select(Submission)
+        .join(Question)  # FK Submission.question_id -> Question.id infers the ON clause
+        .where(Question.owner_id == current.id)
+    ).all()
+    results = _results_by_submission(subs, session)
+    return [_submission_out(sub, results.get(sub.id)) for sub in subs]
 
 
 @app.get("/submissions/{submission_id}", response_model=SubmissionOut)
-def get_submission(submission_id: str, session: Session = Depends(get_session)) -> SubmissionOut:
-    sub = session.get(Submission, submission_id)
-    if sub is None:
-        raise HTTPException(status_code=404, detail=f"no submission with id {submission_id!r}.")
+def get_submission(
+    submission_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> SubmissionOut:
+    sub = _owned_submission(submission_id, current, session)  # 404/403 guard
     result = session.exec(
         select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
     ).first()
@@ -553,11 +645,10 @@ def question_submissions(
     subs = session.exec(
         select(Submission).where(Submission.question_id == question_id)
     ).all()
+    results = _results_by_submission(subs, session)
     out = []
     for sub in subs:
-        result = session.exec(
-            select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
-        ).first()
+        result = results.get(sub.id)
         out.append(
             DashboardSubmissionOut(
                 submission_id=sub.id,
