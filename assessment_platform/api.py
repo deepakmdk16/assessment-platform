@@ -11,6 +11,7 @@ the callback is a required TODO before production (see README).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -33,6 +34,8 @@ from .schemas import (
     SubmissionOut,
     TestCaseOut,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -212,6 +215,32 @@ def delete_question(question_id: str, session: Session = Depends(get_session)) -
 # --------------------------------------------------------------------------- #
 
 
+def _trigger_agent(session: Session, question: Question, sub: Submission) -> Submission:
+    """Trigger an agent job for `sub` and persist the outcome.
+
+    Shared by the initial submit and the manual retry: on success sets the new
+    agent_job_id and flips status to "running"; on failure flips to "error" and
+    raises 502 (submission left in "error"). The caller must have already looked
+    up the question.
+    """
+    callback_url = f"{PLATFORM_BASE_URL}/assessments/callback"
+    try:
+        job_id = agent_client.trigger_assessment(question, sub, callback_url)
+    except Exception as exc:  # agent unreachable / rejected the job
+        sub.status = "error"
+        session.add(sub)
+        session.commit()
+        session.refresh(sub)
+        raise HTTPException(status_code=502, detail=f"agent call failed: {exc}") from exc
+
+    sub.agent_job_id = job_id
+    sub.status = "running"
+    session.add(sub)
+    session.commit()
+    session.refresh(sub)
+    return sub
+
+
 @app.post("/submissions", response_model=SubmissionOut, status_code=201)
 def create_submission(
     body: SubmissionCreate, session: Session = Depends(get_session)
@@ -232,21 +261,37 @@ def create_submission(
     session.commit()
     session.refresh(sub)
 
-    callback_url = f"{PLATFORM_BASE_URL}/assessments/callback"
-    try:
-        job_id = agent_client.trigger_assessment(question, sub, callback_url)
-    except Exception as exc:  # agent unreachable / rejected the job
-        sub.status = "error"
-        session.add(sub)
-        session.commit()
-        session.refresh(sub)
-        raise HTTPException(status_code=502, detail=f"agent call failed: {exc}") from exc
+    sub = _trigger_agent(session, question, sub)
+    return _submission_out(sub, None)
 
-    sub.agent_job_id = job_id
-    sub.status = "running"
-    session.add(sub)
-    session.commit()
-    session.refresh(sub)
+
+@app.post("/submissions/{submission_id}/retry", response_model=SubmissionOut)
+def retry_submission(
+    submission_id: str, session: Session = Depends(get_session)
+) -> SubmissionOut:
+    """Re-trigger the agent for a submission stuck in "error" (its prior trigger failed).
+
+    Submissions are immutable; this only re-runs the SAME submission — it does not
+    create a new one. Only allowed from "error"; other states are a 409.
+    """
+    sub = session.get(Submission, submission_id)
+    if sub is None:
+        raise HTTPException(status_code=404, detail=f"no submission with id {submission_id!r}.")
+    if sub.status != "error":
+        raise HTTPException(
+            status_code=409,
+            detail=f"retry only allowed for submissions in status 'error'; this one is {sub.status!r}.",
+        )
+
+    question = session.get(Question, sub.question_id)
+    if question is None:
+        raise HTTPException(
+            status_code=404, detail=f"no question with id {sub.question_id!r}."
+        )
+
+    # Clear the prior failed attempt before re-triggering.
+    sub.agent_job_id = None
+    sub = _trigger_agent(session, question, sub)
     return _submission_out(sub, None)
 
 
@@ -306,7 +351,9 @@ def assessments_callback(
         select(Submission).where(Submission.agent_job_id == job_id)
     ).first()
     if sub is None:
-        # Unknown job: acknowledge (200) so the agent doesn't retry a job we can't match.
+        # Unknown job: acknowledge (200) so the agent doesn't retry a job we can't
+        # match, but log it so the dropped callback is observable, not silent.
+        logger.warning("callback for unknown job_id %r; no matching submission", job_id)
         return {"status": "ignored", "reason": f"no submission for job_id {job_id!r}"}
 
     verdict = str(payload.get("verdict") or "ERROR")

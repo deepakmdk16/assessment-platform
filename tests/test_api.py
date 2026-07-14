@@ -234,3 +234,37 @@ def test_callback_unknown_job_ignored(client) -> None:
 
 def test_callback_missing_job_id_400(client) -> None:
     assert client.post("/assessments/callback", json={"verdict": "PASS"}).status_code == 400
+
+
+def test_retry_from_error_reruns(client, monkeypatch) -> None:
+    client.post("/questions", json=_sample_question())
+
+    # First trigger fails -> submission lands in "error".
+    monkeypatch.setattr(
+        agent_client, "trigger_assessment", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))
+    )
+    resp = client.post(
+        "/submissions",
+        json={"question_id": "sum_of_n", "candidate": "Jane", "language": "python", "code": "x"},
+    )
+    assert resp.status_code == 502
+    sub_id = client.get("/submissions").json()[0]["id"]
+
+    # Agent recovers; retry succeeds with a fresh job_id.
+    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-retry-1")
+    resp = client.post(f"/submissions/{sub_id}/retry")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "running"
+    assert body["agent_job_id"] == "job-retry-1"
+
+
+def test_retry_non_error_returns_409(client, monkeypatch) -> None:
+    # A "running" submission may not be retried.
+    sub_id = _create_running_submission(client, monkeypatch, "job-live")
+    resp = client.post(f"/submissions/{sub_id}/retry")
+    assert resp.status_code == 409
+
+
+def test_retry_unknown_submission_404(client) -> None:
+    assert client.post("/submissions/nope/retry").status_code == 404

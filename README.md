@@ -63,6 +63,7 @@ Tables are created on startup (`SQLModel.metadata.create_all`; no Alembic in v1)
 | POST   | `/submissions`             | Create a submission and trigger an agent job (→ `running`).    |
 | GET    | `/submissions`             | List submissions (each with its result if any).               |
 | GET    | `/submissions/{id}`        | Get a submission + its result.                                |
+| POST   | `/submissions/{id}/retry`  | Re-trigger the agent for a submission stuck in `error` (409 otherwise). |
 | POST   | `/assessments/callback`    | Agent posts the full result here; persisted verbatim.         |
 
 Interactive docs at `/docs` when running.
@@ -79,6 +80,16 @@ Interactive docs at `/docs` when running.
 - **AssessmentResult** — `id`, `submission_id` (FK, unique), `verdict`
   `PASS|FAIL|ERROR`, `score_pct`, `reason`, `full_result` (JSON — the agent's
   entire callback payload verbatim), `received_at`.
+
+### Notes
+
+- **Submissions are immutable.** A genuine re-run (new code, or grading a
+  candidate again) creates a **new** submission. `POST /submissions/{id}/retry`
+  is not a re-run — it only re-triggers a submission whose initial agent call
+  failed (status `error`); any other status returns 409.
+- **Postgres is the confirmed eventual production database.** The swap is
+  URL-only: point `DATABASE_URL` at a `postgresql+...` URL — no code change (the
+  SQLite-specific `check_same_thread` arg is applied only for SQLite URLs).
 
 ## Development
 
