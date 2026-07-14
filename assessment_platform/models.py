@@ -5,6 +5,9 @@ candidate submissions, and the assessment results the agent returns. It never
 computes or overrides a verdict/score itself: `AssessmentResult` is a faithful
 record of what the agent (the deterministic grader) decided, with the agent's
 entire callback payload kept verbatim in `full_result`.
+
+Every table carries timezone-aware UTC `created_at` and `updated_at`; the latter
+auto-bumps on any UPDATE via SQLAlchemy `onupdate` (see `_updated_at`).
 """
 
 from datetime import datetime, timezone
@@ -18,12 +21,22 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _created_at() -> Any:
+    return Field(default_factory=_utcnow)
+
+
+def _updated_at() -> Any:
+    # Auto-bumps to now on every UPDATE, so no write path can forget it.
+    return Field(default_factory=_utcnow, sa_column_kwargs={"onupdate": _utcnow})
+
+
 class Interviewer(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
     password_hash: str
     name: str
-    created_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
 
 
 class Question(SQLModel, table=True):
@@ -37,8 +50,8 @@ class Question(SQLModel, table=True):
     required_complexity: str | None = None
     example_input: str | None = None
     example_output: str | None = None
-    created_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
 
     test_cases: list["QuestionTestCase"] = Relationship(
         back_populates="question",
@@ -54,6 +67,8 @@ class QuestionTestCase(SQLModel, table=True):
     expected: str
     category: str = "correctness"  # "correctness" | "performance"
     weight: float = 1.0
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
 
     question: Question | None = Relationship(back_populates="test_cases")
 
@@ -66,7 +81,8 @@ class Invite(SQLModel, table=True):
     recipients: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     expires_at: datetime | None = None
     status: str = "active"
-    created_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
 
 
 class Submission(SQLModel, table=True):
@@ -81,7 +97,8 @@ class Submission(SQLModel, table=True):
     code: str
     status: str = "pending"  # "pending" | "running" | "done" | "error"
     agent_job_id: str | None = Field(default=None, index=True)
-    created_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
 
 
 class AssessmentResult(SQLModel, table=True):
@@ -92,4 +109,8 @@ class AssessmentResult(SQLModel, table=True):
     reason: str
     # The agent's entire callback payload, stored verbatim (test cases, quality, etc.).
     full_result: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # `received_at` is the domain event (when the agent's callback arrived);
+    # created_at/updated_at are the uniform row-metadata timestamps.
     received_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
