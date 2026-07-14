@@ -70,15 +70,37 @@ deterministic grade.
 4. New endpoints have tests that run **offline** (mock the agent call; no network,
    no real LLM).
 
-## Open security TODOs (before production)
+## Status & next steps
 
-- The internal `/submissions*` routes are currently **un-authed** — put them
-  behind interviewer auth.
-- Candidate/interviewer emails are plain `str` (no `EmailStr` validation yet).
-- Auth is a shared bearer secret; **HMAC body-signing** is the noted hardening
-  step for the agent↔platform calls.
-- Invite emails (send the link to recipients) are not implemented yet — a later
-  slice; recipients are stored but not mailed.
+**Current status (Slice 1 done + web UI, 2026-07-14).** Backend: interviewer
+auth (bcrypt + stateless JWT), question ownership, invites (shareable link
+tokens), the candidate-by-token flow (`GET /invite/{token}` answer-key-stripped
++ `POST /invite/{token}/submit`), owner-scoped dashboard reads, agent-callback
+storage, shared-secret auth on the agent↔platform calls, and uniform
+`created_at`/`updated_at` on every table. Frontend (`web/`, React+Vite+TS):
+login/register, dashboard, add-question, question detail (invites + results),
+and the candidate flow (Monaco editor). **Verified end-to-end** with a live
+agent+platform integration run (register→invite→candidate submit→grade→callback→
+dashboard PASS) and the full offline suite (`pytest` green, ruff+mypy clean;
+`web` build/typecheck/lint/test clean).
+
+**Open items (pick up here):**
+1. **Slice 3 — invites + UX.** Actually *email* the invite link to recipients
+   (they're stored but not sent). Polish the dashboard and the multi-step
+   add-question form.
+2. **Auth the internal `/submissions*` routes** — currently un-authed; put them
+   behind interviewer auth.
+3. **Browser E2E for `web/`** — today the frontend is contract-aligned +
+   unit-tested (vitest), not click-through-tested. Add Playwright.
+4. **Agentic (deferred).** The recommended first agentic feature is an
+   AI **question-authoring assistant** on the add-question screen (drafts
+   constraints + a reference solution + a validated test suite; human approves).
+   See the agent repo's CLAUDE.md "agentic direction" note. Adversarial test-gen
+   and a candidate-feedback agent follow from it.
+5. **Prod hardening.** Alembic migrations (schema is `create_all` today — a fresh
+   DB picks up new columns, but existing DBs need migrations); `EmailStr`
+   validation (emails are plain `str`); **HMAC body-signing** to harden the
+   shared-secret agent↔platform auth.
 
 ## Companion repo
 
