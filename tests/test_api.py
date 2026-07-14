@@ -5,7 +5,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from assessment_platform import agent_client
+import httpx
+
+from assessment_platform import agent_client, config
 
 
 def _sample_question(qid: str = "sum_of_n") -> dict[str, Any]:
@@ -268,3 +270,60 @@ def test_retry_non_error_returns_409(client, monkeypatch) -> None:
 
 def test_retry_unknown_submission_404(client) -> None:
     assert client.post("/submissions/nope/retry").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Shared-secret auth                                                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_callback_requires_token_when_set(client, monkeypatch) -> None:
+    sub_id = _create_running_submission(client, monkeypatch, "job-auth")
+    monkeypatch.setattr(config, "CALLBACK_TOKEN", "s3cret")
+
+    # Missing header -> 401.
+    resp = client.post("/assessments/callback", json=_callback_payload("job-auth"))
+    assert resp.status_code == 401
+
+    # Wrong header -> 401.
+    resp = client.post(
+        "/assessments/callback",
+        json=_callback_payload("job-auth"),
+        headers={"X-Assess-Token": "nope"},
+    )
+    assert resp.status_code == 401
+
+    # Correct header -> 200 and persists as before.
+    resp = client.post(
+        "/assessments/callback",
+        json=_callback_payload("job-auth"),
+        headers={"X-Assess-Token": "s3cret"},
+    )
+    assert resp.status_code == 200
+    sub = client.get(f"/submissions/{sub_id}").json()
+    assert sub["status"] == "done"
+    assert sub["result"]["verdict"] == "PASS"
+
+
+def test_outbound_call_includes_token_when_set(client, monkeypatch) -> None:
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(config, "ASSESS_API_TOKEN", "outbound-secret")
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002, ANN001
+        captured["headers"] = headers
+        return httpx.Response(
+            200,
+            json={"job_id": "job-hdr", "status": "accepted"},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(agent_client.httpx, "post", fake_post)
+
+    resp = client.post(
+        "/submissions",
+        json={"question_id": "sum_of_n", "candidate": "Jane", "language": "python", "code": "x"},
+    )
+    assert resp.status_code == 201
+    assert captured["headers"]["X-Assess-Token"] == "outbound-secret"

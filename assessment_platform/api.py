@@ -18,10 +18,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from sqlmodel import Session, select
 
-from . import agent_client
+from . import agent_client, config
 from .config import PLATFORM_BASE_URL
 from .db import get_session, init_db
 from .models import AssessmentResult, Question, QuestionTestCase, Submission
@@ -323,6 +323,17 @@ def get_submission(submission_id: str, session: Session = Depends(get_session)) 
 # --------------------------------------------------------------------------- #
 
 
+def _require_callback_token(x_assess_token: str | None = Header(default=None)) -> None:
+    """Verify the agent's shared secret on inbound callbacks.
+
+    Enforced only when `CALLBACK_TOKEN` is set (unset => no auth, for dev/tests).
+    Runs as a route dependency so a bad/missing token 401s BEFORE any job_id logic.
+    """
+    expected = config.CALLBACK_TOKEN
+    if expected and x_assess_token != expected:
+        raise HTTPException(status_code=401, detail=f"invalid or missing {config.AUTH_HEADER}.")
+
+
 def _is_error_payload(payload: dict[str, Any], verdict: str) -> bool:
     """An assessment is an ERROR when the code couldn't be graded — a top-level
     agent error, an infra failure, or an explicit ERROR verdict. A `compile_error`
@@ -334,7 +345,7 @@ def _is_error_payload(payload: dict[str, Any], verdict: str) -> bool:
     )
 
 
-@app.post("/assessments/callback")
+@app.post("/assessments/callback", dependencies=[Depends(_require_callback_token)])
 def assessments_callback(
     payload: dict[str, Any], session: Session = Depends(get_session)
 ) -> dict:

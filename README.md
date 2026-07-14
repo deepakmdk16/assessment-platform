@@ -99,14 +99,24 @@ uv run ruff check .  # lint
 uv run mypy          # type-check
 ```
 
-## Security TODO (required before production)
+## Auth (shared secret)
 
-There is **no auth** in v1. Before exposing this publicly you must add, at
-minimum:
+The platform ↔ agent link is protected by a shared-secret bearer token in the
+`X-Assess-Token` header, matching the agent's contract exactly. **Set both in
+production;** each check is enforced only when its env var is set (unset => no
+auth, so dev and the test suite run token-free).
 
-- A shared secret / API key on the inbound `POST /submissions` (who may submit).
-- A shared secret (or signature) on the inbound `POST /assessments/callback` so
-  only the real agent can write results — the callback currently trusts any
-  caller that knows a `job_id`.
+| Env var            | Direction | Effect                                                                                   |
+| ------------------ | --------- | ---------------------------------------------------------------------------------------- |
+| `CALLBACK_TOKEN`   | inbound   | The secret the **agent** sends to `POST /assessments/callback`. When set, callbacks without a matching `X-Assess-Token` header get **401** (checked before any job_id logic). |
+| `ASSESS_API_TOKEN` | outbound  | The secret **we** send when triggering the agent's `POST /assessments`. When set, we add `X-Assess-Token: <ASSESS_API_TOKEN>` to that request; when unset, no header is sent. |
+
+These two must agree with the agent's env: the agent requires `ASSESS_API_TOKEN`
+on its inbound `/assessments` and sends `CALLBACK_TOKEN` on its outbound callback.
+
+Still open before production:
+
+- No auth on the inbound `POST /submissions` yet (who may submit) — add an API
+  key / caller auth there.
 - Candidate `code` is untrusted; the agent sandboxes execution, but treat stored
   code as untrusted data here too.
