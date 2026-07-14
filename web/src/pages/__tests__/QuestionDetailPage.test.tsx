@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { QuestionDetailPage } from '../QuestionDetailPage'
-import { api } from '../../api'
+import { api, ApiError } from '../../api'
 import type { Invite, QuestionOut } from '../../types'
 
 vi.mock('../../api', () => {
@@ -95,5 +95,20 @@ describe('QuestionDetailPage', () => {
     await user.click(await screen.findByRole('button', { name: /revoke/i }))
 
     expect(api.revokeInvite).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a revoke failure near the row and keeps the invite active', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.mocked(api.revokeInvite).mockRejectedValue(new ApiError(500, 'server exploded'))
+
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: /revoke/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('server exploded')
+    // The invite is unchanged (still active, revoke button still present).
+    expect(screen.getByText('active')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /revoke/i })).toBeInTheDocument()
   })
 })

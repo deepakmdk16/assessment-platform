@@ -15,6 +15,7 @@ export function QuestionDetailPage() {
   const [inviteError, setInviteError] = useState<string | null>(null)
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null)
   const [revokingToken, setRevokingToken] = useState<string | null>(null)
+  const [revokeError, setRevokeError] = useState<{ token: string; message: string } | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -51,13 +52,16 @@ export function QuestionDetailPage() {
   async function handleRevoke(token: string) {
     if (!id) return
     if (!window.confirm('Revoke this invite? The candidate link will stop working.')) return
-    setInviteError(null)
+    setRevokeError(null)
     setRevokingToken(token)
     try {
       const updated = await api.revokeInvite(id, token)
       setInvites((prev) => prev.map((inv) => (inv.token === token ? updated : inv)))
     } catch (err) {
-      setInviteError(err instanceof ApiError ? err.message : 'Failed to revoke invite')
+      setRevokeError({
+        token,
+        message: err instanceof ApiError ? err.message : 'Failed to revoke invite',
+      })
     } finally {
       setRevokingToken(null)
     }
@@ -142,6 +146,11 @@ export function QuestionDetailPage() {
                       >
                         {revokingToken === invite.token ? 'Revoking…' : 'Revoke'}
                       </button>
+                    )}
+                    {revokeError?.token === invite.token && (
+                      <p role="alert" className="form-error">
+                        {revokeError.message}
+                      </p>
                     )}
                   </td>
                 </tr>

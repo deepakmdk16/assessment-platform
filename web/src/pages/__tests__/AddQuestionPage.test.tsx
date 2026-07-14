@@ -32,7 +32,10 @@ describe('AddQuestionPage', () => {
     vi.clearAllMocks()
   })
 
-  it('submits the form with basics, one test case, and the worked example', async () => {
+  const next = (user: ReturnType<typeof userEvent.setup>) =>
+    user.click(screen.getByRole('button', { name: /^next$/i }))
+
+  it('walks the wizard and submits basics, one test case, and the worked example', async () => {
     const user = userEvent.setup()
     vi.mocked(api.createQuestion).mockResolvedValue({ id: 'two-sum' } as QuestionOut)
 
@@ -42,23 +45,32 @@ describe('AddQuestionPage', () => {
       </MemoryRouter>,
     )
 
+    // Step 1: Basics
     await user.type(screen.getByLabelText(/id \(slug\)/i), 'two-sum')
     await user.type(screen.getByLabelText(/^title$/i), 'Two Sum')
     await user.type(screen.getByLabelText(/^prompt$/i), 'Return indices of two numbers that add up to target.')
+    await next(user)
 
+    // Step 2: Grading
     await user.type(screen.getByLabelText(/^constraints$/i), '1 <= n <= 1000')
     await user.clear(screen.getByLabelText(/time limit/i))
     await user.type(screen.getByLabelText(/time limit/i), '3')
     await user.clear(screen.getByLabelText(/pass threshold/i))
     await user.type(screen.getByLabelText(/pass threshold/i), '80')
+    await next(user)
 
+    // Step 3: Test cases
     await user.type(screen.getByLabelText(/test case 1 name/i), 'basic')
     await user.type(screen.getByLabelText(/test case 1 stdin/i), '2 7 11 15\n9')
     await user.type(screen.getByLabelText(/test case 1 expected/i), '0 1')
+    await next(user)
 
+    // Step 4: Worked example
     await user.type(screen.getByLabelText(/example input/i), '2 7 11 15\n9')
     await user.type(screen.getByLabelText(/example output/i), '0 1')
+    await next(user)
 
+    // Step 5: Review → create
     await user.click(screen.getByRole('button', { name: /create question/i }))
 
     await waitFor(() => expect(api.createQuestion).toHaveBeenCalledTimes(1))
@@ -84,6 +96,13 @@ describe('AddQuestionPage', () => {
         <AddQuestionPage />
       </MemoryRouter>,
     )
+
+    // Advance to the Test cases step (Basics → Grading → Test cases).
+    await user.type(screen.getByLabelText(/id \(slug\)/i), 'two-sum')
+    await user.type(screen.getByLabelText(/^title$/i), 'Two Sum')
+    await user.type(screen.getByLabelText(/^prompt$/i), 'Prompt text.')
+    await next(user)
+    await next(user)
 
     expect(screen.getAllByLabelText(/test case \d+ name/i)).toHaveLength(1)
 

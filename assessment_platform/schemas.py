@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 Category = Literal["correctness", "performance"]
 
@@ -102,7 +102,7 @@ class SubmissionOut(BaseModel):
 
 
 class RegisterIn(BaseModel):
-    email: str
+    email: EmailStr
     password: str = Field(min_length=1)
     name: str
     # Required only when the server sets REGISTRATION_CODE (gated sign-up).
@@ -116,6 +116,9 @@ class InterviewerOut(BaseModel):
 
 
 class LoginIn(BaseModel):
+    # Plain str on purpose: login is a credential lookup, not a data-entry point.
+    # Validating the format here would only turn a non-match (401) into a 422 and
+    # could lock out any account created before EmailStr was enforced on register.
     email: str
     password: str
 
@@ -131,7 +134,7 @@ class TokenOut(BaseModel):
 
 
 class InviteCreate(BaseModel):
-    recipients: list[str] = Field(default_factory=list)
+    recipients: list[EmailStr] = Field(default_factory=list)
     expires_at: datetime | None = None
 
 
@@ -168,7 +171,7 @@ class InvitePublicOut(BaseModel):
 
 class CandidateSubmitIn(BaseModel):
     candidate_name: str
-    candidate_email: str
+    candidate_email: EmailStr
     language: str
     code: str = Field(min_length=1)
 
