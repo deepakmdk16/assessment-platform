@@ -97,6 +97,27 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
   })
 
+  it('shows an already-submitted message when submit returns 409', async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import('../../api')
+    vi.mocked(api.getInvite).mockResolvedValue(inviteResponse)
+    vi.mocked(api.submitCandidate).mockRejectedValue(
+      new ApiError(409, 'a submission for this email already exists on this invite.'),
+    )
+
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: 'Two Sum' })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    await user.type(screen.getByLabelText(/code editor/i), 'print("hi")')
+    await user.click(screen.getByRole('button', { name: /^submit$/i }))
+
+    expect(await screen.findByRole('heading', { name: /already submitted/i })).toBeInTheDocument()
+  })
+
   it('shows an error for an expired invite', async () => {
     const { ApiError } = await import('../../api')
     vi.mocked(api.getInvite).mockRejectedValue(new ApiError(410, 'Expired'))

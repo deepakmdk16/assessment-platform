@@ -236,6 +236,17 @@ textarea {
   word-break: break-all;
 }
 
+.invite-actions {
+  display: flex;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+button.danger {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
 .invite-form {
   display: flex;
   flex-direction: column;

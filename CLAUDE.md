@@ -85,6 +85,9 @@ branch.
 3. `/code-review` (or a self-review of the diff) has been run.
 4. New endpoints have tests that run **offline** (mock the agent call; no network,
    no real LLM).
+5. **`## Status & next steps` below is updated** to reflect what this slice
+   shipped — mark the finished open item done (or narrow it to what remains) and
+   record the new slice. The roadmap must never lag the code.
 
 ## Status & next steps
 
@@ -126,12 +129,25 @@ ruff+mypy clean):
 - **N+1 fix** — `_results_by_submission` batch-fetches results for the list +
   dashboard reads in one query.
 
+**Slice 3 partial (frontend UX — Slice-2 surfacing, 2026-07-14).** Surfaced the
+Slice-2 backend in `web/`, all offline-tested (`web` typecheck/lint/test clean,
+build green):
+- **Revoke button** on the question-detail invites table (`api.revokeInvite` →
+  `POST …/revoke`); shown only on `active` invites, `confirm()`-guarded, flips
+  the row to `revoked` on success.
+- **Candidate error handling** — submit **409** (email already used) → dedicated
+  "Already submitted" screen; **410**/**404** (invite revoked/expired or question
+  deleted mid-session) → terminal "no longer active" screen; broadened the 410
+  load message to cover revoked *and* expired.
+- Tests: 409 case added to `CandidatePage.test.tsx`; new `QuestionDetailPage.test.tsx`
+  (revoke happy-path + confirm-dismissed).
+
 **Open items (pick up here — each its own session):**
-1. **Frontend UX (`web/`)** — surface the new backend: a **revoke** button on
-   the question-detail invites list, and candidate-facing handling of the new
-   **409** (email already submitted) / **410** (invite revoked/expired) errors.
-   Plus the earlier dashboard + multi-step add-question polish. Run the `npm`
-   build/typecheck/lint/test loop after.
+1. **Frontend UX polish (`web/`)** — the Slice-2 surfacing (revoke, 409/410) is
+   done (Slice 3 above). Remaining: the earlier **dashboard + multi-step
+   add-question polish**, and a nit from review — revoke errors currently reuse
+   the create-invite form's error slot (shows far from the table row). Run the
+   `npm` build/typecheck/lint/test loop after.
 2. **Prod hardening.** **Alembic** migrations (schema is `create_all` today — a
    fresh DB picks up new columns, but existing DBs need migrations); `EmailStr`
    validation (emails are plain `str` — adds the `email-validator` dep);

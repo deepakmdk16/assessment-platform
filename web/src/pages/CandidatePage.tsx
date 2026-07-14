@@ -4,7 +4,15 @@ import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
 import type { InviteGetResponse, Language } from '../types'
 
-type Stage = 'loading' | 'invalid' | 'expired' | 'error' | 'gate' | 'editor' | 'submitted'
+type Stage =
+  | 'loading'
+  | 'invalid'
+  | 'expired'
+  | 'error'
+  | 'gate'
+  | 'editor'
+  | 'submitted'
+  | 'already_submitted'
 
 export function CandidatePage() {
   const { token } = useParams<{ token: string }>()
@@ -54,7 +62,10 @@ export function CandidatePage() {
       })
       setStage('submitted')
     } catch (err) {
-      setSubmitError(err instanceof ApiError ? err.message : 'Failed to submit')
+      if (err instanceof ApiError && err.status === 409) setStage('already_submitted')
+      else if (err instanceof ApiError && (err.status === 410 || err.status === 404))
+        setStage('expired')
+      else setSubmitError(err instanceof ApiError ? err.message : 'Failed to submit')
     } finally {
       setSubmitting(false)
     }
@@ -62,8 +73,20 @@ export function CandidatePage() {
 
   if (stage === 'loading') return <p className="page-loading">Loading…</p>
   if (stage === 'invalid') return <p className="form-error">This invite link is invalid.</p>
-  if (stage === 'expired') return <p className="form-error">This invite link has expired.</p>
+  if (stage === 'expired')
+    return (
+      <p className="form-error">This invite link is no longer active — it may have been revoked or expired.</p>
+    )
   if (stage === 'error') return <p className="form-error">Something went wrong. Please try again later.</p>
+
+  if (stage === 'already_submitted') {
+    return (
+      <div className="page">
+        <h1>Already submitted</h1>
+        <p>A solution has already been submitted for this email address on this assessment.</p>
+      </div>
+    )
+  }
 
   if (stage === 'submitted') {
     return (
