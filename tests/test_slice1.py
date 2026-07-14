@@ -73,6 +73,13 @@ def test_register_duplicate_email_409(anon_client: TestClient) -> None:
 def test_login_bad_credentials_401(anon_client: TestClient) -> None:
     anon_client.post("/auth/register", json={"email": "b@x.io", "password": "pw", "name": "B"})
     assert anon_client.post("/auth/login", json={"email": "b@x.io", "password": "nope"}).status_code == 401
+
+
+def test_register_rejects_invalid_email_422(anon_client: TestClient) -> None:
+    resp = anon_client.post(
+        "/auth/register", json={"email": "not-an-email", "password": "pw", "name": "X"}
+    )
+    assert resp.status_code == 422
     assert anon_client.post("/auth/login", json={"email": "ghost@x.io", "password": "pw"}).status_code == 401
 
 
@@ -140,6 +147,15 @@ def test_create_invite_returns_link(anon_client: TestClient) -> None:
 
     listed = anon_client.get("/questions/sum_of_n/invites", headers=_auth(tok)).json()
     assert len(listed) == 1 and listed[0]["token"] == inv["token"]
+
+
+def test_create_invite_rejects_invalid_recipient_422(anon_client: TestClient) -> None:
+    tok = register_interviewer(anon_client, "iv-bad@x.io")
+    anon_client.post("/questions", json=_sample_question(), headers=_auth(tok))
+    resp = anon_client.post(
+        "/questions/sum_of_n/invites", json={"recipients": ["nope"]}, headers=_auth(tok)
+    )
+    assert resp.status_code == 422
 
 
 def test_candidate_view_hides_test_cases(anon_client: TestClient) -> None:

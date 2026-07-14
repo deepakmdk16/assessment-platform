@@ -302,3 +302,120 @@ button.danger {
     grid-template-columns: 1fr;
   }
 }
+
+/* Dashboard polish */
+.count-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+.question-list li a {
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.question-row-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.question-meta {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+}
+
+.empty-state {
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius);
+}
+
+/* Add-question wizard */
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.5rem;
+}
+
+.wizard-steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+
+.wizard-steps li.current {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.wizard-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.wizard-steps li.current .wizard-step-num {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.wizard-steps li.done .wizard-step-num {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.wizard-nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.review-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1rem;
+  margin: 0;
+}
+
+.review-list dt {
+  color: var(--color-muted);
+}
+
+.review-list dd {
+  margin: 0;
+}
+
+/* Per-row revoke error sits below the actions, not in the create-invite form */
+.invite-actions {
+  flex-wrap: wrap;
+}
+
+.invite-actions .form-error {
+  flex-basis: 100%;
+  margin: 0.25rem 0 0;
+  white-space: normal;
+}

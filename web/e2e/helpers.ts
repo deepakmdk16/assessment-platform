@@ -27,11 +27,16 @@ export async function createQuestion(page: Page): Promise<{ id: string; title: s
   const id = `q-${suffix}`
   const title = `Two Sum ${suffix}`
 
+  // The add-question page is a wizard: Basics → Grading → Test cases → Example → Review.
   await page.goto('/questions/new')
   await page.getByLabel('Id (slug)').fill(id)
   await page.getByLabel('Title').fill(title)
   await page.getByLabel('Prompt').fill('Return indices of the two numbers that add up to target.')
+  await page.getByRole('button', { name: 'Next' }).click() // → Grading
+  await page.getByRole('button', { name: 'Next' }).click() // → Test cases
   await page.getByLabel('Test case 1 name').fill('basic')
+  await page.getByRole('button', { name: 'Next' }).click() // → Example
+  await page.getByRole('button', { name: 'Next' }).click() // → Review
   await page.getByRole('button', { name: 'Create question' }).click()
 
   await expect(page.getByRole('heading', { name: title })).toBeVisible()

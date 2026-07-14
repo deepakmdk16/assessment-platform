@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import type { TestCaseCategory, TestCaseIn } from '../types'
@@ -7,8 +7,13 @@ function emptyTestCase(): TestCaseIn {
   return { name: '', stdin: '', expected: '', category: 'correctness', weight: 1 }
 }
 
+const STEPS = ['Basics', 'Grading', 'Test cases', 'Example', 'Review'] as const
+const LAST_STEP = STEPS.length - 1
+
 export function AddQuestionPage() {
   const navigate = useNavigate()
+
+  const [step, setStep] = useState(0)
 
   const [id, setId] = useState('')
   const [title, setTitle] = useState('')
@@ -39,8 +44,49 @@ export function AddQuestionPage() {
     setTestCases((rows) => rows.filter((_, i) => i !== index))
   }
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault()
+  // Per-step validation (returns the first problem, or null). The wizard hides
+  // later fields, so native `required` can't guard them — this does.
+  function validateStep(s: number): string | null {
+    if (s === 0) {
+      if (!id.trim()) return 'Id is required.'
+      if (!title.trim()) return 'Title is required.'
+      if (!prompt.trim()) return 'Prompt is required.'
+    }
+    if (s === 1) {
+      if (!Number.isFinite(timeLimitS) || timeLimitS < 0) return 'Time limit must be 0 or more.'
+      if (passThreshold < 0 || passThreshold > 100) return 'Pass threshold must be between 0 and 100.'
+    }
+    if (s === 2 && testCases.some((tc) => !tc.name.trim())) {
+      return 'Every test case needs a name.'
+    }
+    return null
+  }
+
+  function goNext() {
+    const problem = validateStep(step)
+    if (problem) {
+      setError(problem)
+      return
+    }
+    setError(null)
+    setStep((s) => Math.min(s + 1, LAST_STEP))
+  }
+
+  function goBack() {
+    setError(null)
+    setStep((s) => Math.max(s - 1, 0))
+  }
+
+  async function handleCreate() {
+    // Safety net: re-validate every step before the create call.
+    for (let s = 0; s < LAST_STEP; s++) {
+      const problem = validateStep(s)
+      if (problem) {
+        setError(problem)
+        setStep(s)
+        return
+      }
+    }
     setError(null)
     setSubmitting(true)
     try {
@@ -67,138 +113,187 @@ export function AddQuestionPage() {
   return (
     <div className="page">
       <h1>Add question</h1>
-      <form className="question-form" onSubmit={handleSubmit}>
+
+      <ol className="wizard-steps">
+        {STEPS.map((label, i) => (
+          <li
+            key={label}
+            className={i === step ? 'current' : i < step ? 'done' : undefined}
+            aria-current={i === step ? 'step' : undefined}
+          >
+            <span className="wizard-step-num">{i + 1}</span>
+            {label}
+          </li>
+        ))}
+      </ol>
+
+      {/* No submit button lives in this form: the Create action is an explicit
+          type="button" onClick below. That avoids a React footgun where clicking
+          "Next" re-renders the same button position into a submit button mid-click
+          and the browser then submits. preventDefault guards stray Enter presses. */}
+      <form className="question-form" onSubmit={(e) => e.preventDefault()}>
         {error && (
           <p role="alert" className="form-error">
             {error}
           </p>
         )}
 
-        <fieldset>
-          <legend>Basics</legend>
-          <label htmlFor="id">Id (slug)</label>
-          <input id="id" value={id} onChange={(e) => setId(e.target.value)} required />
-          <label htmlFor="title">Title</label>
-          <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} required />
-          <label htmlFor="prompt">Prompt</label>
-          <textarea
-            id="prompt"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            required
-          />
-        </fieldset>
+        {step === 0 && (
+          <fieldset>
+            <legend>Basics</legend>
+            <label htmlFor="id">Id (slug)</label>
+            <input id="id" value={id} onChange={(e) => setId(e.target.value)} />
+            <label htmlFor="title">Title</label>
+            <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <label htmlFor="prompt">Prompt</label>
+            <textarea id="prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+          </fieldset>
+        )}
 
-        <fieldset>
-          <legend>Constraints &amp; grading</legend>
-          <label htmlFor="constraints">Constraints</label>
-          <textarea
-            id="constraints"
-            value={constraints}
-            onChange={(e) => setConstraints(e.target.value)}
-          />
-          <label htmlFor="time_limit_s">Time limit (s)</label>
-          <input
-            id="time_limit_s"
-            type="number"
-            min={0}
-            value={timeLimitS}
-            onChange={(e) => setTimeLimitS(Number(e.target.value))}
-            required
-          />
-          <label htmlFor="pass_threshold">Pass threshold (%)</label>
-          <input
-            id="pass_threshold"
-            type="number"
-            min={0}
-            max={100}
-            value={passThreshold}
-            onChange={(e) => setPassThreshold(Number(e.target.value))}
-            required
-          />
-          <label htmlFor="required_complexity">Required complexity</label>
-          <input
-            id="required_complexity"
-            placeholder="e.g. O(n log n)"
-            value={requiredComplexity}
-            onChange={(e) => setRequiredComplexity(e.target.value)}
-          />
-        </fieldset>
+        {step === 1 && (
+          <fieldset>
+            <legend>Constraints &amp; grading</legend>
+            <label htmlFor="constraints">Constraints</label>
+            <textarea
+              id="constraints"
+              value={constraints}
+              onChange={(e) => setConstraints(e.target.value)}
+            />
+            <label htmlFor="time_limit_s">Time limit (s)</label>
+            <input
+              id="time_limit_s"
+              type="number"
+              min={0}
+              value={timeLimitS}
+              onChange={(e) => setTimeLimitS(Number(e.target.value))}
+            />
+            <label htmlFor="pass_threshold">Pass threshold (%)</label>
+            <input
+              id="pass_threshold"
+              type="number"
+              min={0}
+              max={100}
+              value={passThreshold}
+              onChange={(e) => setPassThreshold(Number(e.target.value))}
+            />
+            <label htmlFor="required_complexity">Required complexity</label>
+            <input
+              id="required_complexity"
+              placeholder="e.g. O(n log n)"
+              value={requiredComplexity}
+              onChange={(e) => setRequiredComplexity(e.target.value)}
+            />
+          </fieldset>
+        )}
 
-        <fieldset>
-          <legend>Test cases</legend>
-          {testCases.map((tc, i) => (
-            <div className="test-case-row" key={i}>
-              <input
-                aria-label={`Test case ${i + 1} name`}
-                placeholder="name"
-                value={tc.name}
-                onChange={(e) => updateTestCase(i, { name: e.target.value })}
-                required
-              />
-              <textarea
-                aria-label={`Test case ${i + 1} stdin`}
-                placeholder="stdin"
-                value={tc.stdin}
-                onChange={(e) => updateTestCase(i, { stdin: e.target.value })}
-              />
-              <textarea
-                aria-label={`Test case ${i + 1} expected`}
-                placeholder="expected"
-                value={tc.expected}
-                onChange={(e) => updateTestCase(i, { expected: e.target.value })}
-              />
-              <select
-                aria-label={`Test case ${i + 1} category`}
-                value={tc.category}
-                onChange={(e) =>
-                  updateTestCase(i, { category: e.target.value as TestCaseCategory })
-                }
-              >
-                <option value="correctness">correctness</option>
-                <option value="performance">performance</option>
-              </select>
-              <input
-                aria-label={`Test case ${i + 1} weight`}
-                type="number"
-                min={0}
-                value={tc.weight}
-                onChange={(e) => updateTestCase(i, { weight: Number(e.target.value) })}
-              />
-              <button
-                type="button"
-                className="button-link"
-                onClick={() => removeTestCase(i)}
-                disabled={testCases.length === 1}
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-          <button type="button" onClick={addTestCase}>
-            Add test case
-          </button>
-        </fieldset>
+        {step === 2 && (
+          <fieldset>
+            <legend>Test cases</legend>
+            {testCases.map((tc, i) => (
+              <div className="test-case-row" key={i}>
+                <input
+                  aria-label={`Test case ${i + 1} name`}
+                  placeholder="name"
+                  value={tc.name}
+                  onChange={(e) => updateTestCase(i, { name: e.target.value })}
+                />
+                <textarea
+                  aria-label={`Test case ${i + 1} stdin`}
+                  placeholder="stdin"
+                  value={tc.stdin}
+                  onChange={(e) => updateTestCase(i, { stdin: e.target.value })}
+                />
+                <textarea
+                  aria-label={`Test case ${i + 1} expected`}
+                  placeholder="expected"
+                  value={tc.expected}
+                  onChange={(e) => updateTestCase(i, { expected: e.target.value })}
+                />
+                <select
+                  aria-label={`Test case ${i + 1} category`}
+                  value={tc.category}
+                  onChange={(e) =>
+                    updateTestCase(i, { category: e.target.value as TestCaseCategory })
+                  }
+                >
+                  <option value="correctness">correctness</option>
+                  <option value="performance">performance</option>
+                </select>
+                <input
+                  aria-label={`Test case ${i + 1} weight`}
+                  type="number"
+                  min={0}
+                  value={tc.weight}
+                  onChange={(e) => updateTestCase(i, { weight: Number(e.target.value) })}
+                />
+                <button
+                  type="button"
+                  className="button-link"
+                  onClick={() => removeTestCase(i)}
+                  disabled={testCases.length === 1}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button type="button" onClick={addTestCase}>
+              Add test case
+            </button>
+          </fieldset>
+        )}
 
-        <fieldset>
-          <legend>Worked example</legend>
-          <label htmlFor="example_input">Example input</label>
-          <textarea
-            id="example_input"
-            value={exampleInput}
-            onChange={(e) => setExampleInput(e.target.value)}
-          />
-          <label htmlFor="example_output">Example output</label>
-          <textarea
-            id="example_output"
-            value={exampleOutput}
-            onChange={(e) => setExampleOutput(e.target.value)}
-          />
-        </fieldset>
+        {step === 3 && (
+          <fieldset>
+            <legend>Worked example</legend>
+            <label htmlFor="example_input">Example input</label>
+            <textarea
+              id="example_input"
+              value={exampleInput}
+              onChange={(e) => setExampleInput(e.target.value)}
+            />
+            <label htmlFor="example_output">Example output</label>
+            <textarea
+              id="example_output"
+              value={exampleOutput}
+              onChange={(e) => setExampleOutput(e.target.value)}
+            />
+          </fieldset>
+        )}
 
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Creating…' : 'Create question'}
-        </button>
+        {step === LAST_STEP && (
+          <fieldset>
+            <legend>Review</legend>
+            <dl className="review-list">
+              <dt>Id</dt>
+              <dd>{id}</dd>
+              <dt>Title</dt>
+              <dd>{title}</dd>
+              <dt>Time limit</dt>
+              <dd>{timeLimitS}s</dd>
+              <dt>Pass threshold</dt>
+              <dd>{passThreshold}%</dd>
+              <dt>Test cases</dt>
+              <dd>{testCases.length}</dd>
+            </dl>
+          </fieldset>
+        )}
+
+        <div className="wizard-nav">
+          {step > 0 && (
+            <button type="button" onClick={goBack}>
+              Back
+            </button>
+          )}
+          {step < LAST_STEP ? (
+            <button type="button" onClick={goNext}>
+              Next
+            </button>
+          ) : (
+            <button type="button" onClick={handleCreate} disabled={submitting}>
+              {submitting ? 'Creating…' : 'Create question'}
+            </button>
+          )}
+        </div>
       </form>
     </div>
   )
