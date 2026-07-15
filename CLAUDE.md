@@ -239,6 +239,32 @@ the draft for human review/edit, and stores the approved question via the normal
   saved question stores the ×100 percent; the smoke divided back to a fraction to
   grade. CI still can't run a live LLM, so the mock E2E remains the CI gate.
 
+**Flows tested in Slice 7 (for context).** _Live_ (real agent + real platform, real
+`ANTHROPIC_API_KEY`, callbacks via the `*.local` hostname to dodge the agent's
+`127.0.0.1` SSRF guard): (1) agent draft direct → 200; (2) draft **through the
+platform** → reshaped `QuestionDraftOut`; (3) save drafted question → 201; (4) grade
+drafted question w/ its own reference → **PASS 100%** (threshold corrected to a
+fraction); (5) grade a hand-authored question end-to-end → **PASS 100%**; (6) draft
+503 (no key) surfaced; (7) **raw wizard path** (save drafted question with
+`pass_threshold` left as the wizard's percent) → **agent 400, submission `error`**
+(see the bug below). _Offline pytest_: draft happy/503/422/auth/timeout. _vitest_:
+draft panel pre-fills wizard + warning. _Playwright (mock)_ 4/4: draft→review→save,
+invite→submit→grade PASS, revoke→410, duplicate→409.
+
+**⚠️ Known grade-breaking bug surfaced by the smoke (pre-existing, NOT Phase B —
+affects ALL wizard-created questions).** The add-question wizard holds/sends
+`pass_threshold` as a **0–100 percent** ([AddQuestionPage.tsx](web/src/pages/AddQuestionPage.tsx)
+`handleCreate`, line ~150: `pass_threshold: passThreshold`), but the DB/API and the
+agent use a **0–1 fraction** (`models.py` default `0.9`; the agent rejects anything
+outside `(0, 1]` with a **400** at trigger time → the submission ends `status:
+error`). So **every question created through the UI currently fails grading against
+the real agent.** The mock agent doesn't validate the threshold, so the E2E suite
+stays green and hides it. **Fix (own slice):** convert at the FE boundary — send
+`passThreshold / 100` on save (add + edit) and `×100` on load/display; the Phase-B
+draft route already `×100`s the agent's fraction to match the wizard, so it stays
+consistent. Add a real-agent-shaped test (or a schema validator) so it can't
+regress silently.
+
 **Open items (pick up here — each its own session):**
 1. **Frontend UX polish** — **done (Slice 6):** add-question wizard, dashboard
    polish, and the revoke-error placement nit all shipped.
@@ -267,11 +293,17 @@ the draft for human review/edit, and stores the approved question via the normal
      live-verified in `../AssesmentAgent`.
    - **Phase B — done (Slice 7, 2026-07-15):** platform `agent_client.draft_question`
      + `POST /questions/draft` route + the "Draft with AI" panel on the add-question
-     screen; offline-tested (pytest + vitest) and an offline Playwright spec. See the
-     Slice 7 entry above. **Remaining:** one **live** cross-repo E2E (real agent +
-     `ANTHROPIC_API_KEY`) — deliberately manual, CI can't run a live LLM.
+     screen; offline-tested (pytest + vitest) and an offline Playwright spec.
+     **Live cross-repo smoke DONE** (see the Slice 7 entry): full brief→draft→save→
+     grade→PASS round-trip against the real agent.
    - Follow-ons: adversarial test-gen (agent #4a, already built) and a
      candidate-feedback agent. Spans both repos — a project, not a cleanup item.
+5. **Fix `pass_threshold` unit mismatch (grade-breaking, pre-existing).** The
+   wizard sends a 0–100 percent; the DB/API/agent use a 0–1 fraction, so the agent
+   400s at trigger time and every UI-created question fails grading. The mock E2E
+   hides it. Convert at the FE boundary (`÷100` on save for add+edit, `×100` on
+   display) and add a real-agent-shaped regression test. See the "⚠️ Known
+   grade-breaking bug" note in the Slice 7 status above.
 
 ## Companion repo
 
