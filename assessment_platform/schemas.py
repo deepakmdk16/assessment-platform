@@ -69,6 +69,27 @@ class QuestionOut(BaseModel):
     test_cases: list[TestCaseOut]
 
 
+class QuestionDraftIn(BaseModel):
+    """An interviewer's brief for the AI question-authoring assistant."""
+
+    brief: str = Field(min_length=1)
+    language: str
+    difficulty: str | None = None
+    target_complexity: str | None = None
+
+
+class QuestionDraftOut(BaseModel):
+    """A drafted question, reshaped to feed the create form directly. Nothing is
+    stored here — the interviewer reviews/edits, then submits via POST /questions."""
+
+    question: QuestionCreate
+    warnings: list[str] = Field(default_factory=list)
+    reference_solution: str | None = None
+    reference_language: str | None = None
+    engine: str
+    cost_usd: float | None = None
+
+
 class SubmissionCreate(BaseModel):
     question_id: str
     candidate: str

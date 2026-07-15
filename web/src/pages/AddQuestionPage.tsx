@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
-import type { TestCaseCategory, TestCaseIn } from '../types'
+import { LANGUAGES } from '../types'
+import type { Language, TestCaseCategory, TestCaseIn } from '../types'
 
 function emptyTestCase(): TestCaseIn {
   return { name: '', stdin: '', expected: '', category: 'correctness', weight: 1 }
@@ -31,6 +32,56 @@ export function AddQuestionPage() {
 
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  // "Draft with AI" panel (Basics step). Independent of the wizard's `error` slot
+  // so a draft failure never blocks manual entry.
+  const [draftOpen, setDraftOpen] = useState(false)
+  const [brief, setBrief] = useState('')
+  const [draftLanguage, setDraftLanguage] = useState<Language>('python')
+  const [difficulty, setDifficulty] = useState('')
+  const [targetComplexity, setTargetComplexity] = useState('')
+  const [drafting, setDrafting] = useState(false)
+  const [draftError, setDraftError] = useState<string | null>(null)
+  const [draftWarnings, setDraftWarnings] = useState<string[]>([])
+  const [referenceSolution, setReferenceSolution] = useState<string | null>(null)
+
+  async function handleDraft() {
+    if (!brief.trim()) {
+      setDraftError('Enter a brief to draft from.')
+      return
+    }
+    setDraftError(null)
+    // Clear any prior draft's output so a failed re-draft doesn't leave stale
+    // warnings / reference solution on screen.
+    setDraftWarnings([])
+    setReferenceSolution(null)
+    setDrafting(true)
+    try {
+      const res = await api.draftQuestion({
+        brief,
+        language: draftLanguage,
+        difficulty: difficulty.trim() || undefined,
+        target_complexity: targetComplexity.trim() || undefined,
+      })
+      const q = res.question
+      setId(q.id)
+      setTitle(q.title)
+      setPrompt(q.prompt)
+      setConstraints(q.constraints)
+      setTimeLimitS(q.time_limit_s)
+      setPassThreshold(q.pass_threshold)
+      setRequiredComplexity(q.required_complexity ?? '')
+      setExampleInput(q.example_input ?? '')
+      setExampleOutput(q.example_output ?? '')
+      setTestCases(q.test_cases.length > 0 ? q.test_cases : [emptyTestCase()])
+      setDraftWarnings(res.warnings)
+      setReferenceSolution(res.reference_solution)
+    } catch (err) {
+      setDraftError(err instanceof ApiError ? err.message : 'Failed to draft question')
+    } finally {
+      setDrafting(false)
+    }
+  }
 
   function updateTestCase(index: number, patch: Partial<TestCaseIn>) {
     setTestCases((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)))
@@ -136,6 +187,86 @@ export function AddQuestionPage() {
           <p role="alert" className="form-error">
             {error}
           </p>
+        )}
+
+        {step === 0 && (
+          <fieldset className="draft-panel">
+            <legend>
+              <button
+                type="button"
+                className="button-link"
+                aria-expanded={draftOpen}
+                onClick={() => setDraftOpen((o) => !o)}
+              >
+                {draftOpen ? '▾' : '▸'} Draft with AI
+              </button>
+            </legend>
+            {draftOpen && (
+              <>
+                <p className="draft-help">
+                  Describe the problem; the agent drafts a full question you can review and edit
+                  below before saving.
+                </p>
+                {draftError && (
+                  <p role="alert" className="form-error">
+                    {draftError}
+                  </p>
+                )}
+                <label htmlFor="brief">Brief</label>
+                <textarea
+                  id="brief"
+                  value={brief}
+                  placeholder="e.g. Given N integers, print the length of the longest strictly increasing run."
+                  onChange={(e) => setBrief(e.target.value)}
+                />
+                <label htmlFor="draft_language">Reference language</label>
+                <select
+                  id="draft_language"
+                  value={draftLanguage}
+                  onChange={(e) => setDraftLanguage(e.target.value as Language)}
+                >
+                  {LANGUAGES.map((lang) => (
+                    <option key={lang} value={lang}>
+                      {lang}
+                    </option>
+                  ))}
+                </select>
+                <label htmlFor="difficulty">Difficulty (optional)</label>
+                <input
+                  id="difficulty"
+                  placeholder="e.g. medium"
+                  value={difficulty}
+                  onChange={(e) => setDifficulty(e.target.value)}
+                />
+                <label htmlFor="target_complexity">Target complexity (optional)</label>
+                <input
+                  id="target_complexity"
+                  placeholder="e.g. O(n log n)"
+                  value={targetComplexity}
+                  onChange={(e) => setTargetComplexity(e.target.value)}
+                />
+                <button type="button" onClick={handleDraft} disabled={drafting}>
+                  {drafting ? 'Drafting…' : 'Draft with AI'}
+                </button>
+                {draftWarnings.length > 0 && (
+                  <div role="alert" className="draft-warnings">
+                    <strong>Warnings</strong>
+                    <ul>
+                      {draftWarnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {referenceSolution && (
+                  <details className="draft-reference">
+                    <summary>Reference solution (context only — not saved)</summary>
+                    <pre>{referenceSolution}</pre>
+                  </details>
+                )}
+              </>
+            )}
+          </fieldset>
         )}
 
         {step === 0 && (

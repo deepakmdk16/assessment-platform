@@ -48,6 +48,36 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  if (req.method === 'POST' && req.url === '/questions/draft') {
+    // Deterministic stand-in for the agent's LLM-backed drafter. Returns a small
+    // valid question so the "Draft with AI" browser flow works offline.
+    const question = {
+      id: `drafted-${++jobCounter}`,
+      title: 'Longest increasing run',
+      prompt: 'Read N then N integers; print the length of the longest strictly increasing run.',
+      constraints: '1 <= N <= 1e5',
+      time_limit_s: 2.0,
+      pass_threshold: 0.9,
+      required_complexity: 'O(n)',
+      example: { input: '4\n1 2 1 3\n', output: '2' },
+      test_cases: [
+        { name: 't1', stdin: '4\n1 2 1 3\n', expected: '2', category: 'correctness', weight: 1.0 },
+      ],
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        engine: 'mock-agent',
+        question,
+        warnings: [],
+        reference_solution: 'print("mock reference")',
+        reference_language: 'python',
+        cost_usd: null,
+      }),
+    )
+    return
+  }
+
   if (req.method === 'POST' && req.url === '/assessments') {
     let body = {}
     try {

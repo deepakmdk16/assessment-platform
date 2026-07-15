@@ -327,3 +327,90 @@ def test_outbound_call_includes_token_when_set(client, monkeypatch) -> None:
     )
     assert resp.status_code == 201
     assert captured["headers"]["X-Assess-Token"] == "outbound-secret"
+
+
+# --------------------------------------------------------------------------- #
+# Question authoring assistant (POST /questions/draft)                          #
+# --------------------------------------------------------------------------- #
+
+
+def _draft_payload() -> dict[str, Any]:
+    """The agent's draft response shape (example nested, pass_threshold a fraction)."""
+    return {
+        "engine": "claude-sonnet-4-6",
+        "question": {
+            "id": "longest_run",
+            "title": "Longest increasing run",
+            "prompt": "Read N then N integers; print the longest strictly increasing run.",
+            "constraints": "1 <= N <= 1e5",
+            "time_limit_s": 2.0,
+            "pass_threshold": 0.9,
+            "required_complexity": "O(n)",
+            "example": {"input": "4\n1 2 1 3\n", "output": "2"},
+            "test_cases": [
+                {"name": "t1", "stdin": "4\n1 2 1 3\n", "expected": "2",
+                 "category": "correctness", "weight": 1.0},
+            ],
+        },
+        "warnings": ["Dropped case 'edge': reference timed out."],
+        "reference_solution": "print('ref')",
+        "reference_language": "python",
+        "cost_usd": 0.021,
+    }
+
+
+def _http_error(status: int, detail: Any) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "http://agent/questions/draft")
+    response = httpx.Response(status, json={"detail": detail}, request=request)
+    return httpx.HTTPStatusError("err", request=request, response=response)
+
+
+def test_draft_question_happy_path(client, monkeypatch) -> None:
+    monkeypatch.setattr(agent_client, "draft_question", lambda **k: _draft_payload())
+
+    resp = client.post(
+        "/questions/draft",
+        json={"brief": "Longest increasing run", "language": "python"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    q = body["question"]
+    assert q["id"] == "longest_run"
+    # example flattened, pass_threshold scaled 0.9 -> 90 (wizard percent).
+    assert q["example_input"] == "4\n1 2 1 3\n"
+    assert q["example_output"] == "2"
+    assert q["pass_threshold"] == 90.0
+    assert len(q["test_cases"]) == 1
+    assert body["warnings"] == ["Dropped case 'edge': reference timed out."]
+    assert body["reference_solution"] == "print('ref')"
+
+    # Stateless: nothing was persisted.
+    assert client.get("/questions").json() == []
+
+
+def test_draft_question_offline_503(client, monkeypatch) -> None:
+    def boom(**k: Any) -> dict:
+        raise _http_error(503, "drafting requires a live model.")
+
+    monkeypatch.setattr(agent_client, "draft_question", boom)
+    resp = client.post("/questions/draft", json={"brief": "x", "language": "python"})
+    assert resp.status_code == 503
+    assert "live model" in resp.json()["detail"]
+
+
+def test_draft_question_unusable_422(client, monkeypatch) -> None:
+    warnings_detail = {"warnings": ["The draft produced no correctness inputs."]}
+
+    def boom(**k: Any) -> dict:
+        raise _http_error(422, warnings_detail)
+
+    monkeypatch.setattr(agent_client, "draft_question", boom)
+    resp = client.post("/questions/draft", json={"brief": "x", "language": "python"})
+    assert resp.status_code == 422
+    # The dict detail (with `warnings`) is flattened to a readable string for the UI.
+    assert resp.json()["detail"] == "The draft produced no correctness inputs."
+
+
+def test_draft_question_requires_auth(anon_client) -> None:
+    resp = anon_client.post("/questions/draft", json={"brief": "x", "language": "python"})
+    assert resp.status_code == 401

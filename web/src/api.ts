@@ -2,6 +2,8 @@ import type {
   Invite,
   InviteGetResponse,
   LoginResponse,
+  QuestionDraftIn,
+  QuestionDraftOut,
   QuestionIn,
   QuestionOut,
   SubmissionRow,
@@ -105,6 +107,9 @@ export const api = {
 
   createQuestion: (data: QuestionIn) =>
     request<QuestionOut>('/questions', { method: 'POST', body: data, auth: true }),
+
+  draftQuestion: (data: QuestionDraftIn) =>
+    request<QuestionDraftOut>('/questions/draft', { method: 'POST', body: data, auth: true }),
 
   getQuestion: (id: string) => request<QuestionOut>(`/questions/${id}`, { auth: true }),
 

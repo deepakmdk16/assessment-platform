@@ -196,6 +196,34 @@ into GitHub Actions (open item #3):
 - Verified: `pytest` 42, ruff+mypy clean; `web` typecheck/lint/unit (11) + build
   clean; E2E green (wizard flow updated in `e2e/helpers.ts`).
 
+**Slice 7 done (question-authoring assistant — Phase B, 2026-07-15).** Consumed the
+Agent's Phase-A `POST /questions/draft` (shipped & live-verified in `../AssesmentAgent`
+on 2026-07-15) — open item #4, Phase B. The platform calls the agent to draft, shows
+the draft for human review/edit, and stores the approved question via the normal
+`POST /questions` path (it never grades, executes, or stores an unvalidated question):
+- **Agent call** — new `agent_client.draft_question(brief, language, difficulty,
+  target_complexity)` (auth reuses `X-Assess-Token: $ASSESS_API_TOKEN`), the 3rd
+  agent↔platform call alongside trigger + callback.
+- **Route** — `POST /questions/draft` (bearer-guarded, interviewer-only, **stores
+  nothing**): calls the agent, maps its `question` dict into the create-form shape
+  (flatten `example`→`example_input/output`, scale `pass_threshold` ×100 to the
+  wizard's %), and re-raises the agent's 503 (offline) / 422 (unusable draft) / 400
+  so the UI can show warnings (other transport errors → 502). New schemas
+  `QuestionDraftIn`/`QuestionDraftOut`.
+- **FE** — a collapsible **"Draft with AI" panel** on the Basics step of
+  [AddQuestionPage.tsx](web/src/pages/AddQuestionPage.tsx): brief + language + optional
+  difficulty/target-complexity → `api.draftQuestion` pre-fills the wizard fields
+  (interviewer edits, then Review → Create); warnings render as a `role="alert"`;
+  reference solution shown read-only (**not stored** — no column for it).
+- Verified: `pytest` 46 (+4 draft: happy/503/422/auth), ruff+mypy clean; `web`
+  typecheck/lint/unit (12, +1 draft) + build clean. E2E: new `e2e/draft-with-ai.spec.ts`
+  (draft→review→save, mock agent answers `/questions/draft`) green. NOTE: the
+  pre-existing `interviewer-candidate-flow` PASS-grading spec fails on this machine
+  **independent of this change** (reproduced with the diff stashed) — the timing-
+  sensitive spec flagged in the Slice-5 note; belongs to open item #3's follow-on.
+- Live cross-repo E2E (real agent + `ANTHROPIC_API_KEY`) remains a **manual** step
+  (CI can't run a live LLM).
+
 **Open items (pick up here — each its own session):**
 1. **Frontend UX polish** — **done (Slice 6):** add-question wizard, dashboard
    polish, and the revoke-error placement nit all shipped.
@@ -211,28 +239,24 @@ into GitHub Actions (open item #3):
    (currently no workflow covers them), and make the E2E suite resilient to a
    stale local DB (reset `e2e-platform.db` on start instead of relying on unique
    per-run data).
-4. **Question-authoring assistant (chosen next cross-repo project, 2026-07-14).**
-   An AI assistant on the add-question screen that drafts a full question from an
+4. **Question-authoring assistant (cross-repo project, 2026-07-14).** An AI
+   assistant on the add-question screen that drafts a full question from an
    interviewer's brief (prompt, constraints, a reference solution, and a validated
    test suite) which the interviewer approves/edits before saving.
-   **Decision: the Agent owns the whole draft.** A test case's `expected` is only
-   trustworthy when produced by *executing* the reference solution, and execution
-   lives in the agent — the platform has no executor and must never grow one
-   (keep the boundary: platform stores, agent grades/executes). So the platform
-   does **not** call an LLM here; it calls a new **stateless** agent endpoint
-   `POST /questions/draft` (NL brief + hints → a fully-formed, **validated**
-   `Question` JSON + warnings), shows the draft for human approval/edit, and
-   **stores** the approved result like any other question.
-   - **New cross-repo contract** — a 3rd agent↔platform call alongside the trigger
-     + callback: extend `agent_client.py` with the authoring call; auth reuses
-     `X-Assess-Token: $ASSESS_API_TOKEN`. The platform must **never** store an
-     unvalidated question (the agent validates before returning).
-   - **Sequencing:** Phase A = the agent builds `POST /questions/draft` first
-     (self-contained, in `../AssesmentAgent`, its open item #5). Phase B (this
-     repo) = backend route + add-question "draft with AI" UX consuming it; tests
-     mock the agent (offline), then one live cross-repo E2E.
-   - Adversarial test-gen (agent #4a, already built) and a candidate-feedback
-     agent follow from this. Spans both repos — a project, not a cleanup item.
+   **Decision: the Agent owns the whole draft** (execution lives in the agent; the
+   platform has no executor and never grows one — platform stores, agent
+   grades/executes). The platform calls the stateless agent endpoint
+   `POST /questions/draft`, shows the draft for human approval/edit, and **stores**
+   the approved result like any other question.
+   - **Phase A — done** (agent, 2026-07-15): `POST /questions/draft` built &
+     live-verified in `../AssesmentAgent`.
+   - **Phase B — done (Slice 7, 2026-07-15):** platform `agent_client.draft_question`
+     + `POST /questions/draft` route + the "Draft with AI" panel on the add-question
+     screen; offline-tested (pytest + vitest) and an offline Playwright spec. See the
+     Slice 7 entry above. **Remaining:** one **live** cross-repo E2E (real agent +
+     `ANTHROPIC_API_KEY`) — deliberately manual, CI can't run a live LLM.
+   - Follow-ons: adversarial test-gen (agent #4a, already built) and a
+     candidate-feedback agent. Spans both repos — a project, not a cleanup item.
 
 ## Companion repo
 

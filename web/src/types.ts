@@ -1,12 +1,17 @@
-export type Language =
-  | 'python'
-  | 'javascript'
-  | 'java'
-  | 'cpp'
-  | 'c'
-  | 'go'
-  | 'ruby'
-  | 'rust'
+// Single source of truth for the UI-facing language list (the agent enforces what
+// it actually supports). `Language` is derived so the two never drift.
+export const LANGUAGES = [
+  'python',
+  'javascript',
+  'java',
+  'cpp',
+  'c',
+  'go',
+  'ruby',
+  'rust',
+] as const
+
+export type Language = (typeof LANGUAGES)[number]
 
 export type TestCaseCategory = 'correctness' | 'performance'
 
@@ -39,6 +44,22 @@ export interface QuestionOut extends Omit<QuestionIn, 'test_cases'> {
   test_cases: TestCaseOut[]
   created_at: string
   updated_at: string
+}
+
+export interface QuestionDraftIn {
+  brief: string
+  language: Language
+  difficulty?: string
+  target_complexity?: string
+}
+
+export interface QuestionDraftOut {
+  question: QuestionIn
+  warnings: string[]
+  reference_solution: string | null
+  reference_language: string | null
+  engine: string
+  cost_usd: number | null
 }
 
 export interface User {
