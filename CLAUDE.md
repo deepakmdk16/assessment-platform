@@ -218,8 +218,8 @@ the draft for human review/edit, and stores the approved question via the normal
   difficulty/target-complexity → `api.draftQuestion` pre-fills the wizard fields
   (interviewer edits, then Review → Create); warnings render as a `role="alert"`;
   reference solution shown read-only (**not stored** — no column for it).
-- Verified offline: `pytest` 47 (+5 draft: happy/503/422/auth/timeout), ruff+mypy
-  clean; `web` typecheck/lint/unit (12, +1 draft) + build clean. E2E:
+- Verified offline: `pytest` 48 (draft happy/503/422/auth/timeout + pass_threshold
+  guard), ruff+mypy clean; `web` typecheck/lint/unit (12) + build clean. E2E:
   new `e2e/draft-with-ai.spec.ts` (draft→review→save, mock agent answers
   `/questions/draft`) green; full suite **4/4**.
 - **E2E stale-DB flake root-caused & fixed** (was open item #3's follow-on). The
@@ -251,19 +251,19 @@ fraction); (5) grade a hand-authored question end-to-end → **PASS 100%**; (6) 
 draft panel pre-fills wizard + warning. _Playwright (mock)_ 4/4: draft→review→save,
 invite→submit→grade PASS, revoke→410, duplicate→409.
 
-**⚠️ Known grade-breaking bug surfaced by the smoke (pre-existing, NOT Phase B —
-affects ALL wizard-created questions).** The add-question wizard holds/sends
-`pass_threshold` as a **0–100 percent** ([AddQuestionPage.tsx](web/src/pages/AddQuestionPage.tsx)
-`handleCreate`, line ~150: `pass_threshold: passThreshold`), but the DB/API and the
-agent use a **0–1 fraction** (`models.py` default `0.9`; the agent rejects anything
-outside `(0, 1]` with a **400** at trigger time → the submission ends `status:
-error`). So **every question created through the UI currently fails grading against
-the real agent.** The mock agent doesn't validate the threshold, so the E2E suite
-stays green and hides it. **Fix (own slice):** convert at the FE boundary — send
-`passThreshold / 100` on save (add + edit) and `×100` on load/display; the Phase-B
-draft route already `×100`s the agent's fraction to match the wizard, so it stays
-consistent. Add a real-agent-shaped test (or a schema validator) so it can't
-regress silently.
+**`pass_threshold` unit mismatch — FIXED (Slice 7, 2026-07-15).** The smoke's raw
+path surfaced a grade-breaking, pre-existing bug: the wizard held/sent
+`pass_threshold` as a **0–100 percent** while the DB/API/agent use a **0–1
+fraction**, so the agent 400'd at trigger time (`pass_threshold must be in (0, 1]`)
+and every UI-created question ended `status: error` — hidden by the mock (which
+doesn't validate the threshold). **Fix:** convert at the FE boundary —
+[AddQuestionPage.tsx](web/src/pages/AddQuestionPage.tsx) sends `passThreshold / 100`
+on save and scales `×100` when populating from a draft; the draft route now returns
+the agent's **fraction** as-is (no more `×100`); and `QuestionCreate`/`QuestionUpdate`
+gained a `pass_threshold: Field(gt=0, le=1)` guard so a percent is rejected with a
+**422** at creation instead of failing silently at grade. Verified: new pytest
+guard (percent→422), updated draft/vitest assertions, and a **live re-run of the raw
+path → PASS 100%**.
 
 **Open items (pick up here — each its own session):**
 1. **Frontend UX polish** — **done (Slice 6):** add-question wizard, dashboard
@@ -298,12 +298,11 @@ regress silently.
      grade→PASS round-trip against the real agent.
    - Follow-ons: adversarial test-gen (agent #4a, already built) and a
      candidate-feedback agent. Spans both repos — a project, not a cleanup item.
-5. **Fix `pass_threshold` unit mismatch (grade-breaking, pre-existing).** The
-   wizard sends a 0–100 percent; the DB/API/agent use a 0–1 fraction, so the agent
-   400s at trigger time and every UI-created question fails grading. The mock E2E
-   hides it. Convert at the FE boundary (`÷100` on save for add+edit, `×100` on
-   display) and add a real-agent-shaped regression test. See the "⚠️ Known
-   grade-breaking bug" note in the Slice 7 status above.
+5. **`pass_threshold` unit mismatch — DONE (Slice 7, 2026-07-15).** Fixed at the FE
+   boundary (`÷100` on save, `×100` on load) + a `gt=0, le=1` schema guard (percent →
+   422) + live re-verify. See the "`pass_threshold` unit mismatch — FIXED" note in
+   the Slice 7 status above. (No edit page exists yet; when one is added it must do
+   the same `×100`/`÷100` conversion.)
 
 ## Companion repo
 

@@ -358,8 +358,9 @@ def draft_question(
         prompt=q.get("prompt", ""),
         constraints=q.get("constraints", ""),
         time_limit_s=time_limit_s if time_limit_s is not None else 2.0,
-        # Agent uses a 0..1 fraction; the wizard works in whole-number percent.
-        pass_threshold=(pass_threshold if pass_threshold is not None else 0.9) * 100,
+        # Keep the agent's 0..1 fraction (QuestionCreate stores a fraction); the
+        # wizard scales it to percent for display and back to a fraction on save.
+        pass_threshold=pass_threshold if pass_threshold is not None else 0.9,
         required_complexity=q.get("required_complexity"),
         example_input=example.get("input"),
         example_output=example.get("output"),

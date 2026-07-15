@@ -94,6 +94,18 @@ def test_get_missing_question_404(client) -> None:
     assert client.get("/questions/nope").status_code == 404
 
 
+def test_pass_threshold_must_be_a_fraction(client) -> None:
+    # The agent rejects pass_threshold outside (0, 1] with a 400 at grade time, so
+    # the platform must reject a wizard-style percent (e.g. 90) at creation (422).
+    q = _sample_question()
+    q["pass_threshold"] = 90.0  # a percent, not the required 0..1 fraction
+    assert client.post("/questions", json=q).status_code == 422
+    q["pass_threshold"] = 0.0  # boundary: must be > 0
+    assert client.post("/questions", json=q).status_code == 422
+    q["pass_threshold"] = 0.9  # valid
+    assert client.post("/questions", json=q).status_code == 201
+
+
 def test_create_submission_mocks_agent(client, monkeypatch) -> None:
     client.post("/questions", json=_sample_question())
 
@@ -376,10 +388,10 @@ def test_draft_question_happy_path(client, monkeypatch) -> None:
     body = resp.json()
     q = body["question"]
     assert q["id"] == "longest_run"
-    # example flattened, pass_threshold scaled 0.9 -> 90 (wizard percent).
+    # example flattened; pass_threshold kept as the agent's 0..1 fraction.
     assert q["example_input"] == "4\n1 2 1 3\n"
     assert q["example_output"] == "2"
-    assert q["pass_threshold"] == 90.0
+    assert q["pass_threshold"] == 0.9
     assert len(q["test_cases"]) == 1
     assert body["warnings"] == ["Dropped case 'edge': reference timed out."]
     assert body["reference_solution"] == "print('ref')"

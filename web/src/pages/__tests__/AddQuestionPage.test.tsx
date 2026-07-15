@@ -78,7 +78,8 @@ describe('AddQuestionPage', () => {
     expect(payload.id).toBe('two-sum')
     expect(payload.title).toBe('Two Sum')
     expect(payload.time_limit_s).toBe(3)
-    expect(payload.pass_threshold).toBe(80)
+    // Wizard shows 80%; the API receives the 0..1 fraction.
+    expect(payload.pass_threshold).toBe(0.8)
     expect(payload.test_cases).toHaveLength(1)
     expect(payload.test_cases[0]).toMatchObject({
       name: 'basic',
@@ -98,7 +99,7 @@ describe('AddQuestionPage', () => {
         prompt: 'Print the longest strictly increasing run.',
         constraints: '1 <= n <= 1e5',
         time_limit_s: 2,
-        pass_threshold: 90,
+        pass_threshold: 0.9,
         required_complexity: 'O(n)',
         example_input: '4\n1 2 1 3\n',
         example_output: '2',

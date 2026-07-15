@@ -33,7 +33,9 @@ class QuestionCreate(BaseModel):
     prompt: str
     constraints: str = ""
     time_limit_s: float = 2.0
-    pass_threshold: float = 0.9
+    # Stored as a 0..1 fraction (the agent rejects anything outside (0, 1]). The
+    # wizard works in whole-number percent and converts at the API boundary.
+    pass_threshold: float = Field(default=0.9, gt=0, le=1)
     required_complexity: str | None = None
     example_input: str | None = None
     example_output: str | None = None
@@ -47,7 +49,9 @@ class QuestionUpdate(BaseModel):
     prompt: str
     constraints: str = ""
     time_limit_s: float = 2.0
-    pass_threshold: float = 0.9
+    # Stored as a 0..1 fraction (the agent rejects anything outside (0, 1]). The
+    # wizard works in whole-number percent and converts at the API boundary.
+    pass_threshold: float = Field(default=0.9, gt=0, le=1)
     required_complexity: str | None = None
     example_input: str | None = None
     example_output: str | None = None

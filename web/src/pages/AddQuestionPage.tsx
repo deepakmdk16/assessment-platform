@@ -69,7 +69,8 @@ export function AddQuestionPage() {
       setPrompt(q.prompt)
       setConstraints(q.constraints)
       setTimeLimitS(q.time_limit_s)
-      setPassThreshold(q.pass_threshold)
+      // The API stores a 0..1 fraction; the wizard shows whole-number percent.
+      setPassThreshold(Math.round(q.pass_threshold * 100))
       setRequiredComplexity(q.required_complexity ?? '')
       setExampleInput(q.example_input ?? '')
       setExampleOutput(q.example_output ?? '')
@@ -147,7 +148,8 @@ export function AddQuestionPage() {
         prompt,
         constraints,
         time_limit_s: timeLimitS,
-        pass_threshold: passThreshold,
+        // Wizard holds percent; the API/agent want a 0..1 fraction.
+        pass_threshold: passThreshold / 100,
         required_complexity: requiredComplexity,
         example_input: exampleInput,
         example_output: exampleOutput,
