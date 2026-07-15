@@ -14,7 +14,7 @@ from __future__ import annotations
 import httpx
 
 from . import config
-from .config import AGENT_BASE_URL, AGENT_TIMEOUT_S
+from .config import AGENT_BASE_URL, AGENT_DRAFT_TIMEOUT_S, AGENT_TIMEOUT_S
 from .models import Question, Submission
 
 
@@ -46,6 +46,38 @@ def build_question_payload(question: Question) -> dict:
         "example": example,
         "required_complexity": question.required_complexity,
     }
+
+
+def draft_question(
+    brief: str,
+    language: str,
+    difficulty: str | None = None,
+    target_complexity: str | None = None,
+    base_url: str = AGENT_BASE_URL,
+) -> dict:
+    """Ask the agent to draft a validated question from a brief; return its payload.
+
+    Stateless on both sides: the agent stores nothing and we don't persist here —
+    the caller shows the draft for human approval, then stores via the normal
+    create path. Raises on transport/HTTP error (the route maps the agent's
+    503/422/400 back to the interviewer). This is the only place that talks to the
+    agent's draft endpoint; tests mock it here to run offline.
+    """
+    body = {
+        "brief": brief,
+        "language": language,
+        "difficulty": difficulty,
+        "target_complexity": target_complexity,
+    }
+    headers = {}
+    if config.ASSESS_API_TOKEN:
+        headers[config.AUTH_HEADER] = config.ASSESS_API_TOKEN
+    resp = httpx.post(
+        f"{base_url}/questions/draft", json=body, headers=headers, timeout=AGENT_DRAFT_TIMEOUT_S
+    )
+    resp.raise_for_status()
+    result: dict = resp.json()
+    return result
 
 
 def trigger_assessment(

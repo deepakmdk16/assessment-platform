@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AddQuestionPage } from '../AddQuestionPage'
 import { api } from '../../api'
-import type { QuestionOut } from '../../types'
+import type { QuestionDraftOut, QuestionOut } from '../../types'
 
 const navigateMock = vi.fn()
 
@@ -22,7 +22,7 @@ vi.mock('../../api', () => {
     }
   }
   return {
-    api: { createQuestion: vi.fn() },
+    api: { createQuestion: vi.fn(), draftQuestion: vi.fn() },
     ApiError,
   }
 })
@@ -78,7 +78,8 @@ describe('AddQuestionPage', () => {
     expect(payload.id).toBe('two-sum')
     expect(payload.title).toBe('Two Sum')
     expect(payload.time_limit_s).toBe(3)
-    expect(payload.pass_threshold).toBe(80)
+    // Wizard shows 80%; the API receives the 0..1 fraction.
+    expect(payload.pass_threshold).toBe(0.8)
     expect(payload.test_cases).toHaveLength(1)
     expect(payload.test_cases[0]).toMatchObject({
       name: 'basic',
@@ -87,6 +88,51 @@ describe('AddQuestionPage', () => {
     })
 
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/questions/two-sum'))
+  })
+
+  it('drafts with AI and pre-fills the wizard fields', async () => {
+    const user = userEvent.setup()
+    const draft: QuestionDraftOut = {
+      question: {
+        id: 'longest-run',
+        title: 'Longest increasing run',
+        prompt: 'Print the longest strictly increasing run.',
+        constraints: '1 <= n <= 1e5',
+        time_limit_s: 2,
+        pass_threshold: 0.9,
+        required_complexity: 'O(n)',
+        example_input: '4\n1 2 1 3\n',
+        example_output: '2',
+        test_cases: [
+          { name: 't1', stdin: '4\n1 2 1 3\n', expected: '2', category: 'correctness', weight: 1 },
+        ],
+      },
+      warnings: ['Dropped case edge: reference timed out.'],
+      reference_solution: 'print("ref")',
+      reference_language: 'python',
+      engine: 'claude-sonnet-4-6',
+      cost_usd: 0.02,
+    }
+    vi.mocked(api.draftQuestion).mockResolvedValue(draft)
+
+    render(
+      <MemoryRouter>
+        <AddQuestionPage />
+      </MemoryRouter>,
+    )
+
+    // Expand the collapsed "Draft with AI" panel (only the toggle has aria-expanded).
+    await user.click(screen.getByRole('button', { expanded: false }))
+    await user.type(screen.getByLabelText(/^brief$/i), 'Longest increasing run')
+    await user.click(screen.getByRole('button', { name: /^draft with ai$/i }))
+
+    await waitFor(() => expect(api.draftQuestion).toHaveBeenCalledTimes(1))
+    // Fields populated from the draft.
+    expect(screen.getByLabelText(/id \(slug\)/i)).toHaveValue('longest-run')
+    expect(screen.getByLabelText(/^title$/i)).toHaveValue('Longest increasing run')
+    expect(screen.getByLabelText(/^prompt$/i)).toHaveValue('Print the longest strictly increasing run.')
+    // Warning surfaced.
+    expect(screen.getByText(/reference timed out/i)).toBeInTheDocument()
   })
 
   it('adds and removes test case rows', async () => {

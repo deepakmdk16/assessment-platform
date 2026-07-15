@@ -196,6 +196,75 @@ into GitHub Actions (open item #3):
 - Verified: `pytest` 42, ruff+mypy clean; `web` typecheck/lint/unit (11) + build
   clean; E2E green (wizard flow updated in `e2e/helpers.ts`).
 
+**Slice 7 done (question-authoring assistant — Phase B, 2026-07-15).** Consumed the
+Agent's Phase-A `POST /questions/draft` (shipped & live-verified in `../AssesmentAgent`
+on 2026-07-15) — open item #4, Phase B. The platform calls the agent to draft, shows
+the draft for human review/edit, and stores the approved question via the normal
+`POST /questions` path (it never grades, executes, or stores an unvalidated question):
+- **Agent call** — new `agent_client.draft_question(brief, language, difficulty,
+  target_complexity)` (auth reuses `X-Assess-Token: $ASSESS_API_TOKEN`), the 3rd
+  agent↔platform call alongside trigger + callback.
+- **Route** — `POST /questions/draft` (bearer-guarded, interviewer-only, **stores
+  nothing**): calls the agent, maps its `question` dict into the create-form shape
+  (flatten `example`→`example_input/output`, scale `pass_threshold` ×100 to the
+  wizard's %), and re-raises the agent's 503 (offline) / 422 (unusable draft, dict
+  detail flattened to a string) / 400 so the UI can show warnings (other transport
+  errors → 502). New schemas `QuestionDraftIn`/`QuestionDraftOut`. Drafting is
+  **synchronous** (LLM + reference execution), so it uses a dedicated
+  `AGENT_DRAFT_TIMEOUT_S` (120s default), **not** the 10s trigger timeout — the live
+  smoke caught complex drafts 502-ing on the short one.
+- **FE** — a collapsible **"Draft with AI" panel** on the Basics step of
+  [AddQuestionPage.tsx](web/src/pages/AddQuestionPage.tsx): brief + language + optional
+  difficulty/target-complexity → `api.draftQuestion` pre-fills the wizard fields
+  (interviewer edits, then Review → Create); warnings render as a `role="alert"`;
+  reference solution shown read-only (**not stored** — no column for it).
+- Verified offline: `pytest` 48 (draft happy/503/422/auth/timeout + pass_threshold
+  guard), ruff+mypy clean; `web` typecheck/lint/unit (12) + build clean. E2E:
+  new `e2e/draft-with-ai.spec.ts` (draft→review→save, mock agent answers
+  `/questions/draft`) green; full suite **4/4**.
+- **E2E stale-DB flake root-caused & fixed** (was open item #3's follow-on). The
+  real `e2e-platform.db` lives at the **repo root** (platform-api's cwd) and
+  persists across runs; the mock agent reset its job counter each start, so
+  `mock-job-N` ids collided with old rows and the callback (`.first()` match)
+  graded a stale submission, leaving the current one stuck `running`. Fixed by
+  minting per-process-unique ids in `e2e/mock-agent.mjs`; verified the suite passes
+  twice in a row on an accumulated DB (0 collisions).
+- **Live cross-repo smoke DONE (real agent + `ANTHROPIC_API_KEY`, 2026-07-15)** —
+  drove the platform against a real `../AssesmentAgent`: (a) **full draft
+  round-trip** brief → real Sonnet draft (200, ~$0.012, 11 cases) → platform
+  reshape → save → **grade the drafted question with its own reference → PASS
+  100%**; (b) grade path with a hand-authored question → PASS; (c) confirmed the
+  agent's SSRF guard rejects `127.0.0.1` callbacks (use a hostname). Reconfirmed
+  the pre-existing pass_threshold 0–100 vs 0–1 mismatch (out of scope) — a wizard-
+  saved question stores the ×100 percent; the smoke divided back to a fraction to
+  grade. CI still can't run a live LLM, so the mock E2E remains the CI gate.
+
+**Flows tested in Slice 7 (for context).** _Live_ (real agent + real platform, real
+`ANTHROPIC_API_KEY`, callbacks via the `*.local` hostname to dodge the agent's
+`127.0.0.1` SSRF guard): (1) agent draft direct → 200; (2) draft **through the
+platform** → reshaped `QuestionDraftOut`; (3) save drafted question → 201; (4) grade
+drafted question w/ its own reference → **PASS 100%** (threshold corrected to a
+fraction); (5) grade a hand-authored question end-to-end → **PASS 100%**; (6) draft
+503 (no key) surfaced; (7) **raw wizard path** (save drafted question with
+`pass_threshold` left as the wizard's percent) → **agent 400, submission `error`**
+(see the bug below). _Offline pytest_: draft happy/503/422/auth/timeout. _vitest_:
+draft panel pre-fills wizard + warning. _Playwright (mock)_ 4/4: draft→review→save,
+invite→submit→grade PASS, revoke→410, duplicate→409.
+
+**`pass_threshold` unit mismatch — FIXED (Slice 7, 2026-07-15).** The smoke's raw
+path surfaced a grade-breaking, pre-existing bug: the wizard held/sent
+`pass_threshold` as a **0–100 percent** while the DB/API/agent use a **0–1
+fraction**, so the agent 400'd at trigger time (`pass_threshold must be in (0, 1]`)
+and every UI-created question ended `status: error` — hidden by the mock (which
+doesn't validate the threshold). **Fix:** convert at the FE boundary —
+[AddQuestionPage.tsx](web/src/pages/AddQuestionPage.tsx) sends `passThreshold / 100`
+on save and scales `×100` when populating from a draft; the draft route now returns
+the agent's **fraction** as-is (no more `×100`); and `QuestionCreate`/`QuestionUpdate`
+gained a `pass_threshold: Field(gt=0, le=1)` guard so a percent is rejected with a
+**422** at creation instead of failing silently at grade. Verified: new pytest
+guard (percent→422), updated draft/vitest assertions, and a **live re-run of the raw
+path → PASS 100%**.
+
 **Open items (pick up here — each its own session):**
 1. **Frontend UX polish** — **done (Slice 6):** add-question wizard, dashboard
    polish, and the revoke-error placement nit all shipped.
@@ -211,28 +280,29 @@ into GitHub Actions (open item #3):
    (currently no workflow covers them), and make the E2E suite resilient to a
    stale local DB (reset `e2e-platform.db` on start instead of relying on unique
    per-run data).
-4. **Question-authoring assistant (chosen next cross-repo project, 2026-07-14).**
-   An AI assistant on the add-question screen that drafts a full question from an
+4. **Question-authoring assistant (cross-repo project, 2026-07-14).** An AI
+   assistant on the add-question screen that drafts a full question from an
    interviewer's brief (prompt, constraints, a reference solution, and a validated
    test suite) which the interviewer approves/edits before saving.
-   **Decision: the Agent owns the whole draft.** A test case's `expected` is only
-   trustworthy when produced by *executing* the reference solution, and execution
-   lives in the agent — the platform has no executor and must never grow one
-   (keep the boundary: platform stores, agent grades/executes). So the platform
-   does **not** call an LLM here; it calls a new **stateless** agent endpoint
-   `POST /questions/draft` (NL brief + hints → a fully-formed, **validated**
-   `Question` JSON + warnings), shows the draft for human approval/edit, and
-   **stores** the approved result like any other question.
-   - **New cross-repo contract** — a 3rd agent↔platform call alongside the trigger
-     + callback: extend `agent_client.py` with the authoring call; auth reuses
-     `X-Assess-Token: $ASSESS_API_TOKEN`. The platform must **never** store an
-     unvalidated question (the agent validates before returning).
-   - **Sequencing:** Phase A = the agent builds `POST /questions/draft` first
-     (self-contained, in `../AssesmentAgent`, its open item #5). Phase B (this
-     repo) = backend route + add-question "draft with AI" UX consuming it; tests
-     mock the agent (offline), then one live cross-repo E2E.
-   - Adversarial test-gen (agent #4a, already built) and a candidate-feedback
-     agent follow from this. Spans both repos — a project, not a cleanup item.
+   **Decision: the Agent owns the whole draft** (execution lives in the agent; the
+   platform has no executor and never grows one — platform stores, agent
+   grades/executes). The platform calls the stateless agent endpoint
+   `POST /questions/draft`, shows the draft for human approval/edit, and **stores**
+   the approved result like any other question.
+   - **Phase A — done** (agent, 2026-07-15): `POST /questions/draft` built &
+     live-verified in `../AssesmentAgent`.
+   - **Phase B — done (Slice 7, 2026-07-15):** platform `agent_client.draft_question`
+     + `POST /questions/draft` route + the "Draft with AI" panel on the add-question
+     screen; offline-tested (pytest + vitest) and an offline Playwright spec.
+     **Live cross-repo smoke DONE** (see the Slice 7 entry): full brief→draft→save→
+     grade→PASS round-trip against the real agent.
+   - Follow-ons: adversarial test-gen (agent #4a, already built) and a
+     candidate-feedback agent. Spans both repos — a project, not a cleanup item.
+5. **`pass_threshold` unit mismatch — DONE (Slice 7, 2026-07-15).** Fixed at the FE
+   boundary (`÷100` on save, `×100` on load) + a `gt=0, le=1` schema guard (percent →
+   422) + live re-verify. See the "`pass_threshold` unit mismatch — FIXED" note in
+   the Slice 7 status above. (No edit page exists yet; when one is added it must do
+   the same `×100`/`÷100` conversion.)
 
 ## Companion repo
 

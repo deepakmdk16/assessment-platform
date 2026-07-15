@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
@@ -54,6 +55,8 @@ from .schemas import (
     InvitePublicOut,
     LoginIn,
     QuestionCreate,
+    QuestionDraftIn,
+    QuestionDraftOut,
     QuestionOut,
     QuestionUpdate,
     RegisterIn,
@@ -301,6 +304,76 @@ def create_question(
     session.commit()
     session.refresh(q)
     return _question_out(q)
+
+
+def _draft_error_message(detail: Any) -> str:
+    """Flatten the agent's error detail into a readable string. A 422 detail is a
+    dict carrying `warnings`; join them so the UI shows the reason."""
+    if isinstance(detail, dict):
+        warnings = detail.get("warnings")
+        if warnings:
+            return "; ".join(str(w) for w in warnings)
+        return str(detail)
+    return str(detail)
+
+
+@app.post("/questions/draft", response_model=QuestionDraftOut)
+def draft_question(
+    body: QuestionDraftIn,
+    current: Interviewer = Depends(get_current_interviewer),
+) -> QuestionDraftOut:
+    """Draft a question from a brief via the agent. Stateless: stores NOTHING —
+    the interviewer reviews/edits the returned draft and then saves it through the
+    normal POST /questions path (the platform never stores an unvalidated question).
+    """
+    try:
+        payload = agent_client.draft_question(
+            brief=body.brief,
+            language=body.language,
+            difficulty=body.difficulty,
+            target_complexity=body.target_complexity,
+        )
+    except httpx.HTTPStatusError as exc:
+        # Surface the agent's own status/reason (503 offline, 422 unusable draft,
+        # 400 bad language) as a readable string. The 422 detail is a dict carrying
+        # `warnings`; flatten it so the UI shows the reason, not "[object Object]".
+        status = exc.response.status_code
+        try:
+            detail = exc.response.json().get("detail", exc.response.text)
+        except ValueError:
+            detail = exc.response.text
+        raise HTTPException(status_code=status, detail=_draft_error_message(detail)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"agent unreachable: {exc}") from exc
+
+    q = payload.get("question") or {}
+    example = q.get("example") or {}
+    # The agent should send these, but guard explicit nulls so a stray one is a
+    # usable draft, not a 500 (`.get(k, default)` only defaults an absent key).
+    pass_threshold = q.get("pass_threshold")
+    time_limit_s = q.get("time_limit_s")
+    question = QuestionCreate(
+        id=q.get("id", ""),
+        title=q.get("title", ""),
+        prompt=q.get("prompt", ""),
+        constraints=q.get("constraints", ""),
+        time_limit_s=time_limit_s if time_limit_s is not None else 2.0,
+        # Keep the agent's 0..1 fraction (QuestionCreate stores a fraction); the
+        # wizard scales it to percent for display and back to a fraction on save.
+        pass_threshold=pass_threshold if pass_threshold is not None else 0.9,
+        required_complexity=q.get("required_complexity"),
+        example_input=example.get("input"),
+        example_output=example.get("output"),
+        test_cases=q.get("test_cases", []),
+    )
+    return QuestionDraftOut(
+        question=question,
+        warnings=payload.get("warnings", []),
+        reference_solution=payload.get("reference_solution"),
+        reference_language=payload.get("reference_language"),
+        engine=payload.get("engine", ""),
+        cost_usd=payload.get("cost_usd"),
+    )
 
 
 @app.get("/questions", response_model=list[QuestionOut])

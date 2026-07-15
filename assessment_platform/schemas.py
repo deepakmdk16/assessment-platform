@@ -33,7 +33,9 @@ class QuestionCreate(BaseModel):
     prompt: str
     constraints: str = ""
     time_limit_s: float = 2.0
-    pass_threshold: float = 0.9
+    # Stored as a 0..1 fraction (the agent rejects anything outside (0, 1]). The
+    # wizard works in whole-number percent and converts at the API boundary.
+    pass_threshold: float = Field(default=0.9, gt=0, le=1)
     required_complexity: str | None = None
     example_input: str | None = None
     example_output: str | None = None
@@ -47,7 +49,9 @@ class QuestionUpdate(BaseModel):
     prompt: str
     constraints: str = ""
     time_limit_s: float = 2.0
-    pass_threshold: float = 0.9
+    # Stored as a 0..1 fraction (the agent rejects anything outside (0, 1]). The
+    # wizard works in whole-number percent and converts at the API boundary.
+    pass_threshold: float = Field(default=0.9, gt=0, le=1)
     required_complexity: str | None = None
     example_input: str | None = None
     example_output: str | None = None
@@ -67,6 +71,27 @@ class QuestionOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     test_cases: list[TestCaseOut]
+
+
+class QuestionDraftIn(BaseModel):
+    """An interviewer's brief for the AI question-authoring assistant."""
+
+    brief: str = Field(min_length=1)
+    language: str
+    difficulty: str | None = None
+    target_complexity: str | None = None
+
+
+class QuestionDraftOut(BaseModel):
+    """A drafted question, reshaped to feed the create form directly. Nothing is
+    stored here — the interviewer reviews/edits, then submits via POST /questions."""
+
+    question: QuestionCreate
+    warnings: list[str] = Field(default_factory=list)
+    reference_solution: str | None = None
+    reference_language: str | None = None
+    engine: str
+    cost_usd: float | None = None
 
 
 class SubmissionCreate(BaseModel):
