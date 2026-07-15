@@ -27,6 +27,12 @@ PLATFORM_BASE_URL = os.getenv("PLATFORM_BASE_URL", "http://127.0.0.1:9000")
 # returns 202 immediately, so this only needs to cover the accept, not the grade.
 AGENT_TIMEOUT_S = float(os.getenv("AGENT_TIMEOUT_S", "10.0"))
 
+# Timeout (seconds) for the SYNCHRONOUS question-draft call. Unlike triggering a
+# job, drafting runs an LLM + executes the reference inline before responding, so
+# it needs a much longer budget than AGENT_TIMEOUT_S (a complex draft takes tens
+# of seconds).
+AGENT_DRAFT_TIMEOUT_S = float(os.getenv("AGENT_DRAFT_TIMEOUT_S", "120.0"))
+
 # Shared-secret auth, matching the agent's contract exactly. Both sides use the
 # `X-Assess-Token` header; enforcement is per-token and only active when the
 # relevant env var is set (unset => no auth, for dev/tests).

@@ -14,7 +14,7 @@ from __future__ import annotations
 import httpx
 
 from . import config
-from .config import AGENT_BASE_URL, AGENT_TIMEOUT_S
+from .config import AGENT_BASE_URL, AGENT_DRAFT_TIMEOUT_S, AGENT_TIMEOUT_S
 from .models import Question, Submission
 
 
@@ -73,7 +73,7 @@ def draft_question(
     if config.ASSESS_API_TOKEN:
         headers[config.AUTH_HEADER] = config.ASSESS_API_TOKEN
     resp = httpx.post(
-        f"{base_url}/questions/draft", json=body, headers=headers, timeout=AGENT_TIMEOUT_S
+        f"{base_url}/questions/draft", json=body, headers=headers, timeout=AGENT_DRAFT_TIMEOUT_S
     )
     resp.raise_for_status()
     result: dict = resp.json()

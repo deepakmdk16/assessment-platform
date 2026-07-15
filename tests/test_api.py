@@ -414,3 +414,23 @@ def test_draft_question_unusable_422(client, monkeypatch) -> None:
 def test_draft_question_requires_auth(anon_client) -> None:
     resp = anon_client.post("/questions/draft", json={"brief": "x", "language": "python"})
     assert resp.status_code == 401
+
+
+def test_draft_uses_the_longer_draft_timeout(client, monkeypatch) -> None:
+    # Drafting is synchronous (LLM + reference execution), so it must use the long
+    # AGENT_DRAFT_TIMEOUT_S, not the short trigger timeout — else complex drafts 502.
+    captured: dict[str, Any] = {}
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002, ANN001
+        captured["timeout"] = timeout
+        return httpx.Response(
+            200,
+            json={"engine": "x", "question": _draft_payload()["question"], "warnings": []},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(agent_client.httpx, "post", fake_post)
+    resp = client.post("/questions/draft", json={"brief": "x", "language": "python"})
+    assert resp.status_code == 200
+    assert captured["timeout"] == config.AGENT_DRAFT_TIMEOUT_S
+    assert config.AGENT_DRAFT_TIMEOUT_S > config.AGENT_TIMEOUT_S

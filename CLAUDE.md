@@ -207,22 +207,37 @@ the draft for human review/edit, and stores the approved question via the normal
 - **Route** — `POST /questions/draft` (bearer-guarded, interviewer-only, **stores
   nothing**): calls the agent, maps its `question` dict into the create-form shape
   (flatten `example`→`example_input/output`, scale `pass_threshold` ×100 to the
-  wizard's %), and re-raises the agent's 503 (offline) / 422 (unusable draft) / 400
-  so the UI can show warnings (other transport errors → 502). New schemas
-  `QuestionDraftIn`/`QuestionDraftOut`.
+  wizard's %), and re-raises the agent's 503 (offline) / 422 (unusable draft, dict
+  detail flattened to a string) / 400 so the UI can show warnings (other transport
+  errors → 502). New schemas `QuestionDraftIn`/`QuestionDraftOut`. Drafting is
+  **synchronous** (LLM + reference execution), so it uses a dedicated
+  `AGENT_DRAFT_TIMEOUT_S` (120s default), **not** the 10s trigger timeout — the live
+  smoke caught complex drafts 502-ing on the short one.
 - **FE** — a collapsible **"Draft with AI" panel** on the Basics step of
   [AddQuestionPage.tsx](web/src/pages/AddQuestionPage.tsx): brief + language + optional
   difficulty/target-complexity → `api.draftQuestion` pre-fills the wizard fields
   (interviewer edits, then Review → Create); warnings render as a `role="alert"`;
   reference solution shown read-only (**not stored** — no column for it).
-- Verified: `pytest` 46 (+4 draft: happy/503/422/auth), ruff+mypy clean; `web`
-  typecheck/lint/unit (12, +1 draft) + build clean. E2E: new `e2e/draft-with-ai.spec.ts`
-  (draft→review→save, mock agent answers `/questions/draft`) green. NOTE: the
-  pre-existing `interviewer-candidate-flow` PASS-grading spec fails on this machine
-  **independent of this change** (reproduced with the diff stashed) — the timing-
-  sensitive spec flagged in the Slice-5 note; belongs to open item #3's follow-on.
-- Live cross-repo E2E (real agent + `ANTHROPIC_API_KEY`) remains a **manual** step
-  (CI can't run a live LLM).
+- Verified offline: `pytest` 47 (+5 draft: happy/503/422/auth/timeout), ruff+mypy
+  clean; `web` typecheck/lint/unit (12, +1 draft) + build clean. E2E:
+  new `e2e/draft-with-ai.spec.ts` (draft→review→save, mock agent answers
+  `/questions/draft`) green; full suite **4/4**.
+- **E2E stale-DB flake root-caused & fixed** (was open item #3's follow-on). The
+  real `e2e-platform.db` lives at the **repo root** (platform-api's cwd) and
+  persists across runs; the mock agent reset its job counter each start, so
+  `mock-job-N` ids collided with old rows and the callback (`.first()` match)
+  graded a stale submission, leaving the current one stuck `running`. Fixed by
+  minting per-process-unique ids in `e2e/mock-agent.mjs`; verified the suite passes
+  twice in a row on an accumulated DB (0 collisions).
+- **Live cross-repo smoke DONE (real agent + `ANTHROPIC_API_KEY`, 2026-07-15)** —
+  drove the platform against a real `../AssesmentAgent`: (a) **full draft
+  round-trip** brief → real Sonnet draft (200, ~$0.012, 11 cases) → platform
+  reshape → save → **grade the drafted question with its own reference → PASS
+  100%**; (b) grade path with a hand-authored question → PASS; (c) confirmed the
+  agent's SSRF guard rejects `127.0.0.1` callbacks (use a hostname). Reconfirmed
+  the pre-existing pass_threshold 0–100 vs 0–1 mismatch (out of scope) — a wizard-
+  saved question stores the ×100 percent; the smoke divided back to a fraction to
+  grade. CI still can't run a live LLM, so the mock E2E remains the CI gate.
 
 **Open items (pick up here — each its own session):**
 1. **Frontend UX polish** — **done (Slice 6):** add-question wizard, dashboard
