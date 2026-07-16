@@ -29,6 +29,6 @@ test('revoking an invite blocks the candidate link (410)', async ({ page, browse
   const context = await browser.newContext()
   const candidatePage = await context.newPage()
   await candidatePage.goto(inviteUrl)
-  await expect(candidatePage.getByText('no longer active')).toBeVisible()
+  await expect(candidatePage.getByRole('heading', { name: 'No longer active' })).toBeVisible()
   await context.close()
 })

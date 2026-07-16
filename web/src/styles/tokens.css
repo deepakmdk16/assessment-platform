@@ -1,0 +1,101 @@
+/* =========================================================================
+   Design tokens — the single source of truth for the whole UI.
+   To re-theme the app, change values HERE. Components reference these via
+   var(--token) and never hard-code color/space/type. (See CONVENTIONS.md.)
+   ========================================================================= */
+
+:root {
+  /* Surfaces & lines */
+  --color-bg: #f5f6f8;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f3f6;
+  --color-surface-3: #e9edf2;
+  --color-border: #e3e7ec;
+  --color-border-strong: #d2d8e0;
+
+  /* Text */
+  --color-text: #131720;
+  --color-heading: #0a0e16;
+  --color-muted: #5c6675;
+  --color-faint: #8b95a4;
+
+  /* Brand / actions */
+  --color-ink: #1b2130;          /* graphite primary button */
+  --color-ink-hover: #0d1220;
+  --color-accent: #2f6bff;       /* cobalt — used sparingly */
+  --color-accent-soft: #e9f0ff;
+  --color-accent-ink: #1e57e6;
+
+  /* Semantic */
+  --color-good: #12a150;
+  --color-good-soft: #e3f5ea;
+  --color-warn: #c2710c;
+  --color-warn-soft: #fbf0dd;
+  --color-bad: #d83a3f;
+  --color-bad-soft: #fdecec;
+
+  /* Difficulty (semantic, reused for verdict/status) */
+  --color-easy: #12a150;
+  --color-medium: #c2710c;
+  --color-hard: #d83a3f;
+
+  /* Dark left rail (constant across light/dark app themes) */
+  --rail: #10131b;
+  --rail-2: #171b26;
+  --rail-border: #232838;
+  --rail-text: #c4ccd8;
+  --rail-muted: #7c8595;
+
+  /* Shape */
+  --radius-sm: 7px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(10, 14, 22, 0.06);
+  --shadow: 0 2px 8px rgba(10, 14, 22, 0.08), 0 1px 2px rgba(10, 14, 22, 0.05);
+  --shadow-lg: 0 16px 40px rgba(10, 14, 22, 0.16);
+
+  /* Type */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* Layout */
+  --sidebar-w: 240px;
+  --content-max: 1300px;
+}
+
+/* Dark theme — OS preference */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0b0e14;
+    --color-surface: #12161f;
+    --color-surface-2: #161b26;
+    --color-surface-3: #1c2230;
+    --color-border: #232a37;
+    --color-border-strong: #303948;
+    --color-text: #dbe2ec;
+    --color-heading: #f2f5fa;
+    --color-muted: #8b95a6;
+    --color-faint: #66707f;
+
+    --color-ink: #e7ebf2;
+    --color-ink-hover: #ffffff;
+    --color-accent: #5b8bff;
+    --color-accent-soft: #17233f;
+    --color-accent-ink: #6f9aff;
+
+    --color-good: #3ecf7f; --color-good-soft: #14271d;
+    --color-warn: #e0a13c; --color-warn-soft: #2a2113;
+    --color-bad: #f06a6f; --color-bad-soft: #2a1618;
+    --color-easy: #3ecf7f; --color-medium: #e0a13c; --color-hard: #f06a6f;
+
+    --rail: #0a0d13; --rail-2: #10141d; --rail-border: #1e2431;
+    --rail-text: #b7c0ce; --rail-muted: #6b7484;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.6);
+  }
+}

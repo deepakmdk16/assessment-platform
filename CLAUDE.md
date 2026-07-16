@@ -16,6 +16,9 @@ deterministic grade.
 - **Backend:** `assessment_platform/` — FastAPI + SQLModel (SQLite dev,
   Postgres-ready via `DATABASE_URL`).
 - **Frontend:** `web/` — React + Vite + TypeScript (interviewer + candidate UIs).
+  Styling is **token-driven**: all appearance lives in `web/src/styles/` (a restyle
+  edits CSS, never `.tsx`). No inline `style=` / hex in components — enforced by
+  `npm run lint`. See CONVENTIONS.md → "Styling".
 
 ## Stack & how to run
 
@@ -265,7 +268,48 @@ gained a `pass_threshold: Field(gt=0, le=1)` guard so a percent is rejected with
 guard (percent→422), updated draft/vitest assertions, and a **live re-run of the raw
 path → PASS 100%**.
 
+**Slice 8 done (full UI redesign — frontend only, 2026-07-16).** Ground-up visual
+overhaul to a "developer console" look (dark left rail, graphite primary buttons,
+one cobalt accent, green Submit, semantic chips), signed off from an HTML mockup
+first. **No backend/agent changes.**
+- **Token-driven CSS architecture** — all appearance in `web/src/styles/`
+  (`tokens.css` = the re-theme file; `base.css`; `components.css`); `index.css` only
+  `@import`s them. A restyle edits CSS, never `.tsx`. Enforced by `npm run lint`
+  (ESLint bans inline `style=`; `scripts/check-no-hex.mjs` bans hex in `.tsx`).
+  Documented in [CONVENTIONS.md](CONVENTIONS.md) → "Styling" (+ CLAUDE.md pointer).
+- **App shell** — dark left rail (`components/Sidebar.tsx`) + topbar breadcrumb/logout
+  (`AppLayout.tsx`); interviewer pages use it, candidate/auth stay full-screen.
+- **Pages** — dashboard → **problem-list table**; question detail → **two-column**
+  (problem + invite/grading side panel); add-question → **stepper + Draft-with-AI
+  card + roomier test-case cards** (Input/Expected side-by-side); candidate →
+  **LeetCode-style IDE** (Run coming-soon, green Submit); **new**
+  `SubmissionDetailPage` (clickable rows → problem + candidate code + AI summary +
+  best-effort per-test table, via the existing `GET /submissions/{id}`);
+  login/register/gate → auth cards. Light + dark themes.
+- **UX cleanups** — hid the internal slug id (dashboard + detail); candidate gate no
+  longer reveals the question title before Start; new `web/src/badges.ts` chip helper.
+- Removed orphaned `NavBar.tsx`. Verified: `pytest` untouched; `web`
+  typecheck/lint(+guards)/unit (12) + build clean; **E2E 4/4** (helper + one spec
+  assertion updated for new heading/notice text). On branch `slice8-ui-overhaul`.
+- **Known limits / follow-ups (all need BACKEND, deferred):** dashboard table has no
+  Difficulty/Status/invite-count columns (no such fields/counts in the API yet);
+  submission-detail per-test-case table is a placeholder until the callback's
+  `full_result` shape is wired; the candidate **Run** button is UI-only (needs a
+  stateless agent "run-against-sample" path).
+
 **Open items (pick up here — each its own session):**
+0. **NEXT SESSION — backend-focused (user's plan, 2026-07-16).** The UI redesign
+   (Slice 8) is done & frontend-only. The user paused here to resume with **backend
+   work**: (a) **invite email actually reaching the candidate** — the wiring exists
+   (`email_client.send_invite_emails`) but only logs the link without SMTP; verify /
+   configure SMTP so the candidate receives it (see "The one thing not wired" note
+   below and README SMTP_* env). (b) **"new cards" (features) + new backend APIs** —
+   the user will specify; likely candidates: real per-test-case results on the
+   submission-detail page (finalise the `full_result` contract + expose it), a
+   question **difficulty/status** field to fill the dashboard columns, and a Run
+   endpoint. (c) **strengthen existing features with more robust test cases**
+   (backend pytest + `web` unit/E2E). Keep the Slice-8 styling contract: new UI
+   goes through tokens/semantic classes, no inline styles/hex.
 1. **Frontend UX polish** — **done (Slice 6):** add-question wizard, dashboard
    polish, and the revoke-error placement nit all shipped.
 2. **Prod hardening.** EmailStr + Alembic **done (Slice 6).** Remaining:

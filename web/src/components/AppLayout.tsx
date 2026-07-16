@@ -1,11 +1,35 @@
 import type { ReactNode } from 'react'
-import { NavBar } from './NavBar'
+import { useLocation } from 'react-router-dom'
+import { Sidebar } from './Sidebar'
+import { useAuth } from '../auth/AuthContext'
+
+function crumbFor(pathname: string): string {
+  if (pathname === '/dashboard') return 'Questions'
+  if (pathname === '/questions/new') return 'New question'
+  if (pathname.startsWith('/questions/')) return 'Question'
+  return ''
+}
 
 export function AppLayout({ children }: { children: ReactNode }) {
+  const { logout } = useAuth()
+  const { pathname } = useLocation()
+
   return (
-    <>
-      <NavBar />
-      <main>{children}</main>
-    </>
+    <div className="app">
+      <Sidebar />
+      <div className="main">
+        <header className="topbar">
+          <div className="crumb">
+            Workspace <span>/</span> <b>{crumbFor(pathname)}</b>
+          </div>
+          <div className="topbar-user">
+            <button type="button" className="btn ghost sm" onClick={logout}>
+              Log out
+            </button>
+          </div>
+        </header>
+        <div className="content">{children}</div>
+      </div>
+    </div>
   )
 }

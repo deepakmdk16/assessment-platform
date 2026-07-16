@@ -27,6 +27,9 @@ export function CandidatePage() {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  const [consoleTab, setConsoleTab] = useState<'testcase' | 'result'>('testcase')
+  const [runNote, setRunNote] = useState<string | null>(null)
+
   useEffect(() => {
     if (!token) return
     api
@@ -46,6 +49,13 @@ export function CandidatePage() {
   function handleGateSubmit(e: FormEvent) {
     e.preventDefault()
     setStage('editor')
+  }
+
+  function handleRun() {
+    setConsoleTab('result')
+    setRunNote(
+      'Running against the sample is coming soon. Use Submit to grade your solution against the full test suite.',
+    )
   }
 
   async function handleSubmitCode(e: FormEvent) {
@@ -72,87 +82,132 @@ export function CandidatePage() {
   }
 
   if (stage === 'loading') return <p className="page-loading">Loading…</p>
-  if (stage === 'invalid') return <p className="form-error">This invite link is invalid.</p>
+  if (stage === 'invalid')
+    return (
+      <CandidateNotice title="Invalid link" body="This invite link doesn’t exist or has been removed." />
+    )
   if (stage === 'expired')
     return (
-      <p className="form-error">This invite link is no longer active — it may have been revoked or expired.</p>
+      <CandidateNotice
+        title="No longer active"
+        body="This invite link is no longer active — it may have been revoked or expired."
+      />
     )
-  if (stage === 'error') return <p className="form-error">Something went wrong. Please try again later.</p>
-
-  if (stage === 'already_submitted') {
+  if (stage === 'error')
+    return <CandidateNotice title="Something went wrong" body="Please try again later." />
+  if (stage === 'already_submitted')
     return (
-      <div className="page">
-        <h1>Already submitted</h1>
-        <p>A solution has already been submitted for this email address on this assessment.</p>
-      </div>
+      <CandidateNotice
+        title="Already submitted"
+        body="A solution has already been submitted for this email address on this assessment."
+      />
     )
-  }
-
-  if (stage === 'submitted') {
+  if (stage === 'submitted')
     return (
-      <div className="page">
-        <h1>Submitted</h1>
-        <p>Thanks, {candidateName}! Your solution has been submitted successfully.</p>
-      </div>
+      <CandidateNotice
+        title="Submitted ✓"
+        body={`Thanks, ${candidateName}! Your solution has been submitted and is being graded.`}
+      />
     )
-  }
 
   if (stage === 'gate') {
     return (
-      <div className="auth-page">
-        <form className="auth-form" onSubmit={handleGateSubmit}>
-          <h1>{invite?.question.title}</h1>
-          <p>Enter your details to begin the assessment.</p>
-          <label htmlFor="candidate_name">Name</label>
-          <input
-            id="candidate_name"
-            value={candidateName}
-            onChange={(e) => setCandidateName(e.target.value)}
-            required
-          />
-          <label htmlFor="candidate_email">Email</label>
-          <input
-            id="candidate_email"
-            type="email"
-            value={candidateEmail}
-            onChange={(e) => setCandidateEmail(e.target.value)}
-            required
-          />
-          <button type="submit">Start</button>
+      <div className="auth">
+        <form className="auth-card" onSubmit={handleGateSubmit}>
+          <span className="auth-eyebrow">Invitation</span>
+          <h1>Coding assessment</h1>
+          <p className="auth-lead">
+            You’ve been invited to a timed coding assessment. Enter your details to begin — you’ll
+            see the problem and a code editor on the next screen.
+          </p>
+          <div className="stack">
+            <div className="field">
+              <label htmlFor="candidate_name">Name</label>
+              <input
+                id="candidate_name"
+                value={candidateName}
+                onChange={(e) => setCandidateName(e.target.value)}
+                required
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="candidate_email">Email</label>
+              <input
+                id="candidate_email"
+                type="email"
+                value={candidateEmail}
+                onChange={(e) => setCandidateEmail(e.target.value)}
+                required
+              />
+            </div>
+            <button type="submit" className="btn submit block">
+              Start assessment
+            </button>
+          </div>
         </form>
       </div>
     )
   }
 
   // stage === 'editor'
+  const q = invite?.question
+  const hasExample = Boolean(q?.example_input || q?.example_output)
   return (
-    <div className="candidate-split">
-      <section className="candidate-prompt">
-        <h1>{invite?.question.title}</h1>
-        <h2>Prompt</h2>
-        <p className="pre-text">{invite?.question.prompt}</p>
-        <h2>Constraints</h2>
-        <p className="pre-text">{invite?.question.constraints}</p>
-        <h2>Example</h2>
-        <pre>{invite?.question.example_input}</pre>
-        <pre>{invite?.question.example_output}</pre>
-        <p>Time limit: {invite?.question.time_limit_s}s</p>
-      </section>
+    <div className="ide">
+      <header className="ide-top">
+        <span className="ide-mark" aria-hidden="true" />
+        <span className="ide-title">{q?.title}</span>
+        <span className="chip chip-neutral">Time limit {q?.time_limit_s}s</span>
+      </header>
 
-      <section className="candidate-editor">
-        <form className="editor-form" onSubmit={handleSubmitCode}>
-          <label htmlFor="language">Language</label>
-          <select
-            id="language"
-            value={language}
-            onChange={(e) => setLanguage(e.target.value as Language)}
-          >
-            {invite?.languages.map((lang) => (
-              <option key={lang} value={lang}>
-                {lang}
-              </option>
-            ))}
-          </select>
+      <div className="ide-split">
+        <section className="panel">
+          <div className="tabs">
+            <span className="tab on">Description</span>
+          </div>
+          <div className="panel-body prose">
+            <p className="pre-text">{q?.prompt}</p>
+            {q?.constraints && (
+              <>
+                <h3>Constraints</h3>
+                <p className="pre-text">{q.constraints}</p>
+              </>
+            )}
+            {hasExample && (
+              <div className="example-block">
+                <h3>Example</h3>
+                {q?.example_input && (
+                  <div className="io">
+                    <span className="io-label">Input</span>
+                    <pre className="code">{q.example_input}</pre>
+                  </div>
+                )}
+                {q?.example_output && (
+                  <div className="io">
+                    <span className="io-label">Output</span>
+                    <pre className="code">{q.example_output}</pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="editor-head">
+            <select
+              aria-label="Language"
+              className="lang-select"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value as Language)}
+            >
+              {invite?.languages.map((lang) => (
+                <option key={lang} value={lang}>
+                  {lang}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div className="editor-wrapper">
             <Editor
@@ -161,19 +216,71 @@ export function CandidatePage() {
               value={code}
               onChange={(value) => setCode(value ?? '')}
               theme="vs-dark"
+              options={{ minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }}
             />
           </div>
 
-          {submitError && (
-            <p role="alert" className="form-error">
-              {submitError}
-            </p>
-          )}
-          <button type="submit" disabled={submitting}>
-            {submitting ? 'Submitting…' : 'Submit'}
-          </button>
-        </form>
-      </section>
+          <div className="console">
+            <div className="tabs">
+              <button
+                type="button"
+                className={consoleTab === 'testcase' ? 'tab on' : 'tab'}
+                onClick={() => setConsoleTab('testcase')}
+              >
+                Testcase
+              </button>
+              <button
+                type="button"
+                className={consoleTab === 'result' ? 'tab on' : 'tab'}
+                onClick={() => setConsoleTab('result')}
+              >
+                Result
+              </button>
+            </div>
+            <div className="console-body">
+              {consoleTab === 'testcase' ? (
+                hasExample ? (
+                  <>
+                    <span className="io-label">Input</span>
+                    <pre className="code">{q?.example_input}</pre>
+                    <span className="io-label">Expected</span>
+                    <pre className="code">{q?.example_output}</pre>
+                  </>
+                ) : (
+                  <p className="muted">No sample test case provided for this problem.</p>
+                )
+              ) : (
+                <p className="muted">{runNote ?? 'Run your code to see output here.'}</p>
+              )}
+            </div>
+          </div>
+
+          <form className="actionbar" onSubmit={handleSubmitCode}>
+            {submitError && (
+              <p role="alert" className="form-error">
+                {submitError}
+              </p>
+            )}
+            <button type="button" className="btn sec" onClick={handleRun}>
+              Run
+            </button>
+            <button type="submit" className="btn submit" disabled={submitting}>
+              {submitting ? 'Submitting…' : 'Submit'}
+            </button>
+          </form>
+        </section>
+      </div>
+    </div>
+  )
+}
+
+function CandidateNotice({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="auth">
+      <div className="auth-card notice-card">
+        <h1>{title}</h1>
+        <p className="muted">{body}</p>
+      </div>
     </div>
   )
 }
