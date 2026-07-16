@@ -47,3 +47,24 @@ behavior; this covers what a reviewer can verify in a diff.
 - Keep dependencies lean; prefer hand-rolled styling over a heavy UI kit.
 - The candidate UI must never expect fields the public API doesn't send
   (no test cases / expected outputs).
+
+### Styling — a restyle must not touch `.tsx`
+
+All appearance lives in CSS so the whole app can be re-themed by editing
+stylesheets alone. Concretely:
+
+- **Tokens are the single source of truth.** Colour/space/type/radius/shadow are
+  CSS custom properties in `src/styles/tokens.css` (light + dark). A re-theme edits
+  that one file. Components reference `var(--token)` — never a raw colour.
+- **Semantic classes in JSX, visuals in CSS.** Components carry meaningful class
+  names (`.btn`, `.card`, `.chip.chip-good`, `.sidebar`, `.tbl`); every visual rule
+  lives in `src/styles/components.css` keyed off them. Conditional variants go
+  through a tiny helper (e.g. `badges.ts`), not inline logic.
+- **No inline `style={}` and no hex/rgb literals in `.tsx`.** Both are enforced by
+  `npm run lint` (an ESLint `no-restricted-syntax` rule for `style`, plus
+  `scripts/check-no-hex.mjs`). Put the value in a token/class instead.
+- CSS layout: `styles/tokens.css` (theme) → `styles/base.css` (reset) →
+  `styles/components.css` (components); `index.css` only `@import`s them.
+- Exception: a redesign that changes DOM/structure (not just looks) will touch
+  JSX — that's expected. Re-skins (colour, density, component looks, themes) stay
+  CSS-only.

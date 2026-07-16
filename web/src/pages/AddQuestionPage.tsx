@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { LANGUAGES } from '../types'
@@ -164,27 +164,34 @@ export function AddQuestionPage() {
   }
 
   return (
-    <div className="page">
-      <h1>Add question</h1>
+    <div className="wizard">
+      <div className="page-head">
+        <div>
+          <h1>New question</h1>
+          <div className="sub">Draft with AI or author by hand — review every step before it's saved.</div>
+        </div>
+      </div>
 
-      <ol className="wizard-steps">
+      <div className="stepper">
         {STEPS.map((label, i) => (
-          <li
-            key={label}
-            className={i === step ? 'current' : i < step ? 'done' : undefined}
-            aria-current={i === step ? 'step' : undefined}
-          >
-            <span className="wizard-step-num">{i + 1}</span>
-            {label}
-          </li>
+          <Fragment key={label}>
+            {i > 0 && <div className={i <= step ? 'step-bar done' : 'step-bar'} />}
+            <div
+              className={i === step ? 'step on' : i < step ? 'step done' : 'step'}
+              aria-current={i === step ? 'step' : undefined}
+            >
+              <span className="dot">{i < step ? '✓' : i + 1}</span>
+              {label}
+            </div>
+          </Fragment>
         ))}
-      </ol>
+      </div>
 
       {/* No submit button lives in this form: the Create action is an explicit
           type="button" onClick below. That avoids a React footgun where clicking
           "Next" re-renders the same button position into a submit button mid-click
           and the browser then submits. preventDefault guards stray Enter presses. */}
-      <form className="question-form" onSubmit={(e) => e.preventDefault()}>
+      <form className="stack" onSubmit={(e) => e.preventDefault()}>
         {error && (
           <p role="alert" className="form-error">
             {error}
@@ -192,62 +199,77 @@ export function AddQuestionPage() {
         )}
 
         {step === 0 && (
-          <fieldset className="draft-panel">
-            <legend>
-              <button
-                type="button"
-                className="button-link"
-                aria-expanded={draftOpen}
-                onClick={() => setDraftOpen((o) => !o)}
-              >
-                {draftOpen ? '▾' : '▸'} Draft with AI
-              </button>
-            </legend>
+          <div className="draft-card">
+            <button
+              type="button"
+              className="draft-toggle"
+              aria-expanded={draftOpen}
+              onClick={() => setDraftOpen((o) => !o)}
+            >
+              <span className="draft-hd">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" />
+                </svg>
+                Draft with AI
+              </span>
+              <span className="draft-caret">{draftOpen ? '▾' : '▸'}</span>
+            </button>
             {draftOpen && (
-              <>
-                <p className="draft-help">
-                  Describe the problem; the agent drafts a full question you can review and edit
-                  below before saving.
+              <div className="stack draft-body">
+                <p className="draft-hint">
+                  Describe the problem; the agent drafts a full question — prompt, constraints, a
+                  reference solution and a validated test suite — you can review and edit below
+                  before saving.
                 </p>
                 {draftError && (
                   <p role="alert" className="form-error">
                     {draftError}
                   </p>
                 )}
-                <label htmlFor="brief">Brief</label>
-                <textarea
-                  id="brief"
-                  value={brief}
-                  placeholder="e.g. Given N integers, print the length of the longest strictly increasing run."
-                  onChange={(e) => setBrief(e.target.value)}
-                />
-                <label htmlFor="draft_language">Reference language</label>
-                <select
-                  id="draft_language"
-                  value={draftLanguage}
-                  onChange={(e) => setDraftLanguage(e.target.value as Language)}
-                >
-                  {LANGUAGES.map((lang) => (
-                    <option key={lang} value={lang}>
-                      {lang}
-                    </option>
-                  ))}
-                </select>
-                <label htmlFor="difficulty">Difficulty (optional)</label>
-                <input
-                  id="difficulty"
-                  placeholder="e.g. medium"
-                  value={difficulty}
-                  onChange={(e) => setDifficulty(e.target.value)}
-                />
-                <label htmlFor="target_complexity">Target complexity (optional)</label>
-                <input
-                  id="target_complexity"
-                  placeholder="e.g. O(n log n)"
-                  value={targetComplexity}
-                  onChange={(e) => setTargetComplexity(e.target.value)}
-                />
-                <button type="button" onClick={handleDraft} disabled={drafting}>
+                <div className="field">
+                  <label htmlFor="brief">Brief</label>
+                  <textarea
+                    id="brief"
+                    value={brief}
+                    placeholder="e.g. Given N integers, print the length of the longest strictly increasing run."
+                    onChange={(e) => setBrief(e.target.value)}
+                  />
+                </div>
+                <div className="grid2">
+                  <div className="field">
+                    <label htmlFor="draft_language">Reference language</label>
+                    <select
+                      id="draft_language"
+                      value={draftLanguage}
+                      onChange={(e) => setDraftLanguage(e.target.value as Language)}
+                    >
+                      {LANGUAGES.map((lang) => (
+                        <option key={lang} value={lang}>
+                          {lang}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="difficulty">Difficulty (optional)</label>
+                    <input
+                      id="difficulty"
+                      placeholder="e.g. medium"
+                      value={difficulty}
+                      onChange={(e) => setDifficulty(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="field">
+                  <label htmlFor="target_complexity">Target complexity (optional)</label>
+                  <input
+                    id="target_complexity"
+                    placeholder="e.g. O(n log n)"
+                    value={targetComplexity}
+                    onChange={(e) => setTargetComplexity(e.target.value)}
+                  />
+                </div>
+                <button type="button" className="btn accent" onClick={handleDraft} disabled={drafting}>
                   {drafting ? 'Drafting…' : 'Draft with AI'}
                 </button>
                 {draftWarnings.length > 0 && (
@@ -263,139 +285,180 @@ export function AddQuestionPage() {
                 {referenceSolution && (
                   <details className="draft-reference">
                     <summary>Reference solution (context only — not saved)</summary>
-                    <pre>{referenceSolution}</pre>
+                    <pre className="code">{referenceSolution}</pre>
                   </details>
                 )}
-              </>
+              </div>
             )}
-          </fieldset>
+          </div>
         )}
 
         {step === 0 && (
-          <fieldset>
-            <legend>Basics</legend>
-            <label htmlFor="id">Id (slug)</label>
-            <input id="id" value={id} onChange={(e) => setId(e.target.value)} />
-            <label htmlFor="title">Title</label>
-            <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
-            <label htmlFor="prompt">Prompt</label>
-            <textarea id="prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-          </fieldset>
+          <div className="card pad">
+            <div className="card-title">Basics</div>
+            <div className="stack">
+              <div className="grid2">
+                <div className="field">
+                  <label htmlFor="id">Id (slug)</label>
+                  <input id="id" className="mono" value={id} onChange={(e) => setId(e.target.value)} />
+                </div>
+                <div className="field">
+                  <label htmlFor="title">Title</label>
+                  <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
+                </div>
+              </div>
+              <div className="field">
+                <label htmlFor="prompt">Prompt</label>
+                <textarea id="prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+              </div>
+            </div>
+          </div>
         )}
 
         {step === 1 && (
-          <fieldset>
-            <legend>Constraints &amp; grading</legend>
-            <label htmlFor="constraints">Constraints</label>
-            <textarea
-              id="constraints"
-              value={constraints}
-              onChange={(e) => setConstraints(e.target.value)}
-            />
-            <label htmlFor="time_limit_s">Time limit (s)</label>
-            <input
-              id="time_limit_s"
-              type="number"
-              min={0}
-              value={timeLimitS}
-              onChange={(e) => setTimeLimitS(Number(e.target.value))}
-            />
-            <label htmlFor="pass_threshold">Pass threshold (%)</label>
-            <input
-              id="pass_threshold"
-              type="number"
-              min={0}
-              max={100}
-              value={passThreshold}
-              onChange={(e) => setPassThreshold(Number(e.target.value))}
-            />
-            <label htmlFor="required_complexity">Required complexity</label>
-            <input
-              id="required_complexity"
-              placeholder="e.g. O(n log n)"
-              value={requiredComplexity}
-              onChange={(e) => setRequiredComplexity(e.target.value)}
-            />
-          </fieldset>
+          <div className="card pad">
+            <div className="card-title">Constraints &amp; grading</div>
+            <div className="stack">
+              <div className="field">
+                <label htmlFor="constraints">Constraints</label>
+                <textarea
+                  id="constraints"
+                  value={constraints}
+                  onChange={(e) => setConstraints(e.target.value)}
+                />
+              </div>
+              <div className="grid2">
+                <div className="field">
+                  <label htmlFor="time_limit_s">Time limit (s)</label>
+                  <input
+                    id="time_limit_s"
+                    type="number"
+                    min={0}
+                    value={timeLimitS}
+                    onChange={(e) => setTimeLimitS(Number(e.target.value))}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="pass_threshold">Pass threshold (%)</label>
+                  <input
+                    id="pass_threshold"
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={passThreshold}
+                    onChange={(e) => setPassThreshold(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+              <div className="field">
+                <label htmlFor="required_complexity">Required complexity</label>
+                <input
+                  id="required_complexity"
+                  placeholder="e.g. O(n log n)"
+                  value={requiredComplexity}
+                  onChange={(e) => setRequiredComplexity(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
         )}
 
         {step === 2 && (
-          <fieldset>
-            <legend>Test cases</legend>
+          <div className="card pad">
+            <div className="card-title">Test cases</div>
             {testCases.map((tc, i) => (
-              <div className="test-case-row" key={i}>
-                <input
-                  aria-label={`Test case ${i + 1} name`}
-                  placeholder="name"
-                  value={tc.name}
-                  onChange={(e) => updateTestCase(i, { name: e.target.value })}
-                />
-                <textarea
-                  aria-label={`Test case ${i + 1} stdin`}
-                  placeholder="stdin"
-                  value={tc.stdin}
-                  onChange={(e) => updateTestCase(i, { stdin: e.target.value })}
-                />
-                <textarea
-                  aria-label={`Test case ${i + 1} expected`}
-                  placeholder="expected"
-                  value={tc.expected}
-                  onChange={(e) => updateTestCase(i, { expected: e.target.value })}
-                />
-                <select
-                  aria-label={`Test case ${i + 1} category`}
-                  value={tc.category}
-                  onChange={(e) =>
-                    updateTestCase(i, { category: e.target.value as TestCaseCategory })
-                  }
-                >
-                  <option value="correctness">correctness</option>
-                  <option value="performance">performance</option>
-                </select>
-                <input
-                  aria-label={`Test case ${i + 1} weight`}
-                  type="number"
-                  min={0}
-                  value={tc.weight}
-                  onChange={(e) => updateTestCase(i, { weight: Number(e.target.value) })}
-                />
-                <button
-                  type="button"
-                  className="button-link"
-                  onClick={() => removeTestCase(i)}
-                  disabled={testCases.length === 1}
-                >
-                  Remove
-                </button>
+              <div className="tc-card" key={i}>
+                <div className="tc-head">
+                  <input
+                    className="tc-name"
+                    aria-label={`Test case ${i + 1} name`}
+                    placeholder="Case name"
+                    value={tc.name}
+                    onChange={(e) => updateTestCase(i, { name: e.target.value })}
+                  />
+                  <select
+                    aria-label={`Test case ${i + 1} category`}
+                    value={tc.category}
+                    onChange={(e) => updateTestCase(i, { category: e.target.value as TestCaseCategory })}
+                  >
+                    <option value="correctness">correctness</option>
+                    <option value="performance">performance</option>
+                  </select>
+                  <label className="tc-num">
+                    Weight
+                    <input
+                      className="tc-weight"
+                      aria-label={`Test case ${i + 1} weight`}
+                      type="number"
+                      min={0}
+                      value={tc.weight}
+                      onChange={(e) => updateTestCase(i, { weight: Number(e.target.value) })}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-link"
+                    onClick={() => removeTestCase(i)}
+                    disabled={testCases.length === 1}
+                  >
+                    Remove
+                  </button>
+                </div>
+                <div className="tc-io">
+                  <div>
+                    <label>Input (stdin)</label>
+                    <textarea
+                      aria-label={`Test case ${i + 1} stdin`}
+                      placeholder="stdin passed to the program"
+                      value={tc.stdin}
+                      onChange={(e) => updateTestCase(i, { stdin: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label>Expected output</label>
+                    <textarea
+                      aria-label={`Test case ${i + 1} expected`}
+                      placeholder="exact expected stdout"
+                      value={tc.expected}
+                      onChange={(e) => updateTestCase(i, { expected: e.target.value })}
+                    />
+                  </div>
+                </div>
               </div>
             ))}
-            <button type="button" onClick={addTestCase}>
+            <button type="button" className="btn sec" onClick={addTestCase}>
               Add test case
             </button>
-          </fieldset>
+          </div>
         )}
 
         {step === 3 && (
-          <fieldset>
-            <legend>Worked example</legend>
-            <label htmlFor="example_input">Example input</label>
-            <textarea
-              id="example_input"
-              value={exampleInput}
-              onChange={(e) => setExampleInput(e.target.value)}
-            />
-            <label htmlFor="example_output">Example output</label>
-            <textarea
-              id="example_output"
-              value={exampleOutput}
-              onChange={(e) => setExampleOutput(e.target.value)}
-            />
-          </fieldset>
+          <div className="card pad">
+            <div className="card-title">Worked example</div>
+            <div className="stack">
+              <div className="field">
+                <label htmlFor="example_input">Example input</label>
+                <textarea
+                  id="example_input"
+                  value={exampleInput}
+                  onChange={(e) => setExampleInput(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="example_output">Example output</label>
+                <textarea
+                  id="example_output"
+                  value={exampleOutput}
+                  onChange={(e) => setExampleOutput(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
         )}
 
         {step === LAST_STEP && (
-          <fieldset>
-            <legend>Review</legend>
+          <div className="card pad">
+            <div className="card-title">Review</div>
             <dl className="review-list">
               <dt>Id</dt>
               <dd>{id}</dd>
@@ -408,21 +471,21 @@ export function AddQuestionPage() {
               <dt>Test cases</dt>
               <dd>{testCases.length}</dd>
             </dl>
-          </fieldset>
+          </div>
         )}
 
         <div className="wizard-nav">
           {step > 0 && (
-            <button type="button" onClick={goBack}>
+            <button type="button" className="btn sec" onClick={goBack}>
               Back
             </button>
           )}
           {step < LAST_STEP ? (
-            <button type="button" onClick={goNext}>
+            <button type="button" className="btn" onClick={goNext}>
               Next
             </button>
           ) : (
-            <button type="button" onClick={handleCreate} disabled={submitting}>
+            <button type="button" className="btn" onClick={handleCreate} disabled={submitting}>
               {submitting ? 'Creating…' : 'Create question'}
             </button>
           )}

@@ -113,3 +113,23 @@ export interface SubmissionRow {
   score_pct?: number
   created_at: string
 }
+
+export interface SubmissionResult {
+  verdict: string
+  score_pct: number
+  reason: string
+  full_result: Record<string, unknown>
+  received_at: string
+}
+
+export interface SubmissionDetail {
+  id: string
+  question_id: string
+  candidate: string
+  language: Language
+  code: string
+  status: string
+  agent_job_id: string | null
+  created_at: string
+  result: SubmissionResult | null
+}

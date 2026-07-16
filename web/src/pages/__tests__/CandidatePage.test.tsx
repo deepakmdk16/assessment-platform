@@ -74,7 +74,7 @@ describe('CandidatePage', () => {
     renderCandidatePage()
 
     // Gate
-    expect(await screen.findByRole('heading', { name: 'Two Sum' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
     await user.click(screen.getByRole('button', { name: /start/i }))
@@ -107,7 +107,7 @@ describe('CandidatePage', () => {
 
     renderCandidatePage()
 
-    expect(await screen.findByRole('heading', { name: 'Two Sum' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
     await user.click(screen.getByRole('button', { name: /start/i }))

@@ -23,6 +23,16 @@ export default tseslint.config(
         'warn',
         { allowConstantExport: true },
       ],
+      // Styling stays in CSS, not TSX (see CONVENTIONS.md): no inline `style`.
+      // Appearance belongs in styles/, keyed off a semantic class name.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "JSXAttribute[name.name='style']",
+          message:
+            'No inline styles — put appearance in styles/*.css keyed off a semantic class (see CONVENTIONS.md).',
+        },
+      ],
     },
   },
 )

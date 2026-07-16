@@ -17,7 +17,7 @@ export async function registerInterviewer(page: Page): Promise<{ email: string; 
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: 'Create account' }).click()
 
-  await expect(page.getByRole('heading', { name: 'My questions' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Questions' })).toBeVisible()
   return { email, password }
 }
 

@@ -6,6 +6,7 @@ import type {
   QuestionDraftOut,
   QuestionIn,
   QuestionOut,
+  SubmissionDetail,
   SubmissionRow,
   SubmitResponse,
   User,
@@ -140,6 +141,9 @@ export const api = {
 
   listSubmissions: (questionId: string) =>
     request<SubmissionRow[]>(`/questions/${questionId}/submissions`, { auth: true }),
+
+  getSubmission: (submissionId: string) =>
+    request<SubmissionDetail>(`/submissions/${submissionId}`, { auth: true }),
 
   getInvite: (token: string) => request<InviteGetResponse>(`/invite/${token}`),
 
