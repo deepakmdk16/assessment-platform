@@ -30,8 +30,10 @@ AGENT_TIMEOUT_S = float(os.getenv("AGENT_TIMEOUT_S", "10.0"))
 # Timeout (seconds) for the SYNCHRONOUS question-draft call. Unlike triggering a
 # job, drafting runs an LLM + executes the reference inline before responding, so
 # it needs a much longer budget than AGENT_TIMEOUT_S (a complex draft takes tens
-# of seconds).
-AGENT_DRAFT_TIMEOUT_S = float(os.getenv("AGENT_DRAFT_TIMEOUT_S", "120.0"))
+# of seconds). The agent also re-drafts internally when the first attempt is
+# unusable (ASSESS_DRAFT_ATTEMPTS, default 2), so this must cover *all* of its
+# attempts — otherwise we'd time out on a draft that was about to succeed.
+AGENT_DRAFT_TIMEOUT_S = float(os.getenv("AGENT_DRAFT_TIMEOUT_S", "240.0"))
 
 # Timeout (seconds) for the SYNCHRONOUS candidate run calls (`/run`, `/run/tests`).
 # These compile and execute code inline before responding, so they need more than

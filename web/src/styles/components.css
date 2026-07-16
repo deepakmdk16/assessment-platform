@@ -418,6 +418,17 @@ textarea {
   margin: 0.25rem 0;
 }
 
+/* .form-error also wraps a block (message + reason + a retry button), not just
+   a bare string — keep the stacking tight in that case. */
+.form-error p {
+  margin: 0;
+}
+
+.form-error p + p,
+.form-error p + button {
+  margin-top: 0.4rem;
+}
+
 /* Non-blocking counterpart to .form-error: the action succeeded, but something
    about it needs attention (e.g. the invite exists, the email didn't send). */
 .form-warning {

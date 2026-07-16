@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AddQuestionPage } from '../AddQuestionPage'
-import { api } from '../../api'
+import { api, ApiError } from '../../api'
 import type { QuestionDraftOut, QuestionOut } from '../../types'
 
 const navigateMock = vi.fn()
@@ -90,30 +90,31 @@ describe('AddQuestionPage', () => {
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/questions/two-sum'))
   })
 
+  const draftFixture = (): QuestionDraftOut => ({
+    question: {
+      id: 'longest-run',
+      title: 'Longest increasing run',
+      prompt: 'Print the longest strictly increasing run.',
+      constraints: '1 <= n <= 1e5',
+      time_limit_s: 2,
+      pass_threshold: 0.9,
+      required_complexity: 'O(n)',
+      example_input: '4\n1 2 1 3\n',
+      example_output: '2',
+      test_cases: [
+        { name: 't1', stdin: '4\n1 2 1 3\n', expected: '2', category: 'correctness', weight: 1 },
+      ],
+    },
+    warnings: ['Dropped case edge: reference timed out.'],
+    reference_solution: 'print("ref")',
+    reference_language: 'python',
+    engine: 'claude-sonnet-4-6',
+    cost_usd: 0.02,
+  })
+
   it('drafts with AI and pre-fills the wizard fields', async () => {
     const user = userEvent.setup()
-    const draft: QuestionDraftOut = {
-      question: {
-        id: 'longest-run',
-        title: 'Longest increasing run',
-        prompt: 'Print the longest strictly increasing run.',
-        constraints: '1 <= n <= 1e5',
-        time_limit_s: 2,
-        pass_threshold: 0.9,
-        required_complexity: 'O(n)',
-        example_input: '4\n1 2 1 3\n',
-        example_output: '2',
-        test_cases: [
-          { name: 't1', stdin: '4\n1 2 1 3\n', expected: '2', category: 'correctness', weight: 1 },
-        ],
-      },
-      warnings: ['Dropped case edge: reference timed out.'],
-      reference_solution: 'print("ref")',
-      reference_language: 'python',
-      engine: 'claude-sonnet-4-6',
-      cost_usd: 0.02,
-    }
-    vi.mocked(api.draftQuestion).mockResolvedValue(draft)
+    vi.mocked(api.draftQuestion).mockResolvedValue(draftFixture())
 
     render(
       <MemoryRouter>
@@ -133,6 +134,61 @@ describe('AddQuestionPage', () => {
     expect(screen.getByLabelText(/^prompt$/i)).toHaveValue('Print the longest strictly increasing run.')
     // Warning surfaced.
     expect(screen.getByText(/reference timed out/i)).toBeInTheDocument()
+  })
+
+  /** Open the Draft panel and attempt a draft. */
+  async function attemptDraft(user: ReturnType<typeof userEvent.setup>) {
+    render(
+      <MemoryRouter>
+        <AddQuestionPage />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByRole('button', { expanded: false }))
+    await user.type(screen.getByLabelText(/^brief$/i), 'Longest increasing run')
+    await user.click(screen.getByRole('button', { name: /^draft with ai$/i }))
+  }
+
+  it('offers a retry when drafting fails for a reason a retry could fix', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.draftQuestion).mockRejectedValue(new ApiError(502, 'agent unreachable'))
+
+    await attemptDraft(user)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/couldn’t reach the ai drafting service/i)
+
+    // Retrying actually re-calls the API — the dead end is gone.
+    vi.mocked(api.draftQuestion).mockResolvedValue(draftFixture())
+    await user.click(screen.getByRole('button', { name: /try again/i }))
+    await waitFor(() => expect(api.draftQuestion).toHaveBeenCalledTimes(2))
+    expect(screen.getByLabelText(/id \(slug\)/i)).toHaveValue('longest-run')
+  })
+
+  it('does not offer a retry when the server has no model key (503)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.draftQuestion).mockRejectedValue(new ApiError(503, 'needs a live model'))
+
+    await attemptDraft(user)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/no model api key/i)
+    // Retrying can't fix config, so don't invite the interviewer to try.
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument()
+  })
+
+  it('explains an unusable draft (422) and shows the agent’s reason', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.draftQuestion).mockRejectedValue(
+      new ApiError(422, 'Reference solution failed to compile: missing header'),
+    )
+
+    await attemptDraft(user)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/couldn’t turn this brief into a working question/i)
+    expect(alert).toHaveTextContent(/failed to compile/i)
+    // A different brief might work, so a retry is still offered.
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
   })
 
   it('adds and removes test case rows', async () => {
