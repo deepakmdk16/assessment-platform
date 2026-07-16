@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
-import type { Invite, QuestionOut, SubmissionRow } from '../types'
+import type { Invite, InviteDelivery, QuestionOut, SubmissionRow } from '../types'
 
 export function QuestionDetailPage() {
   const navigate = useNavigate()
@@ -18,6 +18,9 @@ export function QuestionDetailPage() {
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null)
   const [revokingToken, setRevokingToken] = useState<string | null>(null)
   const [revokeError, setRevokeError] = useState<{ token: string; message: string } | null>(null)
+  // Emailing is best-effort, so a created invite may still not have reached
+  // anyone. Surface that rather than letting the interviewer assume delivery.
+  const [undelivered, setUndelivered] = useState<InviteDelivery[]>([])
 
   useEffect(() => {
     if (!id) return
@@ -33,17 +36,21 @@ export function QuestionDetailPage() {
     e.preventDefault()
     if (!id) return
     setInviteError(null)
+    setUndelivered([])
+    const recipientList = recipients
+      .split(/[,\n]/)
+      .map((r) => r.trim())
+      .filter(Boolean)
+    if (recipientList.length === 0) {
+      setInviteError('Enter at least one candidate email — the link only works for these addresses.')
+      return
+    }
     setCreatingInvite(true)
     try {
-      const recipientList = recipients
-        .split(/[,\n]/)
-        .map((r) => r.trim())
-        .filter(Boolean)
-      const invite = await api.createInvite(id, {
-        recipients: recipientList.length > 0 ? recipientList : undefined,
-      })
+      const invite = await api.createInvite(id, { recipients: recipientList })
       setInvites((prev) => [invite, ...prev])
       setRecipients('')
+      setUndelivered(invite.deliveries.filter((d) => !d.sent))
     } catch (err) {
       setInviteError(err instanceof ApiError ? err.message : 'Failed to generate invite')
     } finally {
@@ -229,7 +236,7 @@ export function QuestionDetailPage() {
             <h3>Invite a candidate</h3>
             <form className="stack" onSubmit={handleCreateInvite}>
               <div className="field">
-                <label htmlFor="recipients">Candidate emails (optional)</label>
+                <label htmlFor="recipients">Candidate emails</label>
                 <textarea
                   id="recipients"
                   value={recipients}
@@ -242,12 +249,23 @@ export function QuestionDetailPage() {
                   {inviteError}
                 </p>
               )}
+              {undelivered.length > 0 && (
+                <div role="alert" className="form-warning">
+                  <p>
+                    The invite was created, but the email couldn’t be sent to{' '}
+                    {undelivered.map((d) => d.recipient).join(', ')}. Copy the link from the table
+                    and send it another way.
+                  </p>
+                  <p className="cellsub">{undelivered[0].error}</p>
+                </div>
+              )}
               <button type="submit" className="btn accent block" disabled={creatingInvite}>
                 {creatingInvite ? 'Generating…' : 'Generate coding test'}
               </button>
             </form>
             <p className="invite-hint muted">
-              The link is emailed to each candidate. You can also copy it from the table.
+              The link is emailed to each candidate and only works for these addresses. You can also
+              copy it from the table.
             </p>
           </div>
 

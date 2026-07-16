@@ -46,13 +46,16 @@ from .models import (
 from .ratelimit import client_ip, limiter
 from .schemas import (
     CandidateQuestionView,
+    CandidateStartIn,
     CandidateSubmitIn,
     CandidateSubmitOut,
     DashboardSubmissionOut,
     InterviewerOut,
     InviteCreate,
+    InviteDeliveryOut,
     InviteOut,
     InvitePublicOut,
+    InviteStatusOut,
     LoginIn,
     QuestionCreate,
     QuestionDraftIn,
@@ -166,7 +169,7 @@ def _invite_url(token: str) -> str:
     return f"{config.FRONTEND_BASE_URL}/t/{token}"
 
 
-def _invite_out(inv: Invite) -> InviteOut:
+def _invite_out(inv: Invite, deliveries: list[email_client.Delivery] | None = None) -> InviteOut:
     return InviteOut(
         token=inv.token,
         url=_invite_url(inv.token),
@@ -174,7 +177,16 @@ def _invite_out(inv: Invite) -> InviteOut:
         recipients=inv.recipients,
         expires_at=inv.expires_at,
         status=inv.status,
+        deliveries=[
+            InviteDeliveryOut(recipient=d.recipient, sent=d.sent, error=d.error)
+            for d in (deliveries or [])
+        ],
     )
+
+
+def _normalize_email(email: str) -> str:
+    """Canonical form for comparing/storing candidate emails (case-insensitive)."""
+    return email.strip().lower()
 
 
 def _is_expired(expires_at: datetime | None) -> bool:
@@ -460,15 +472,20 @@ def create_invite(
         token=secrets.token_urlsafe(32),
         question_id=question_id,
         created_by=current.id,
-        recipients=body.recipients,
+        # Normalize on the way in so the start/submit checks can compare directly.
+        recipients=[_normalize_email(r) for r in body.recipients],
         expires_at=body.expires_at,
     )
     session.add(invite)
     session.commit()
     session.refresh(invite)
-    # Best-effort email of the link to recipients (no-op/logs when SMTP unset).
-    email_client.send_invite_emails(invite.recipients, _invite_url(invite.token), question.title)
-    return _invite_out(invite)
+    # Emailing the link is best-effort — a send failure must not undo an invite
+    # that already exists — but the per-recipient outcome rides back on the
+    # response so the interviewer sees a failure instead of assuming delivery.
+    deliveries = email_client.send_invite_emails(
+        invite.recipients, _invite_url(invite.token), question.title
+    )
+    return _invite_out(invite, deliveries)
 
 
 @app.get("/questions/{question_id}/invites", response_model=list[InviteOut])
@@ -522,9 +539,38 @@ def _load_invite_or_error(token: str, session: Session) -> Invite:
     return invite
 
 
-@app.get("/invite/{token}", response_model=InvitePublicOut)
-def get_invite(token: str, session: Session = Depends(get_session)) -> InvitePublicOut:
-    invite = _load_invite_or_error(token, session)
+def _check_invited(invite: Invite, email: str) -> None:
+    """403 unless `email` is one of the invite's recipients (case-insensitive).
+
+    This binds a link to the people it was sent to: forwarding it to someone else
+    no longer gets them into the assessment. It is an identity *claim*, not proof
+    — anyone holding the link who knows an invited address could still type it —
+    so it stops accidental sharing, not deliberate impersonation. Per-recipient
+    tokens or an emailed OTP would be the stronger form.
+    """
+    if email not in {_normalize_email(r) for r in invite.recipients}:
+        raise HTTPException(
+            status_code=403,
+            detail="this assessment was not sent to that email address.",
+        )
+
+
+def _check_not_already_submitted(invite: Invite, email: str, session: Session) -> None:
+    """409 if `email` already submitted on this invite (one attempt per candidate)."""
+    already = session.exec(
+        select(Submission).where(
+            Submission.invite_id == invite.id,
+            Submission.candidate_email == email,
+        )
+    ).first()
+    if already is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="your assessment has already been recorded for this email address.",
+        )
+
+
+def _candidate_question_view(invite: Invite, session: Session) -> InvitePublicOut:
     q = session.get(Question, invite.question_id)
     if q is None:  # question deleted after the invite was issued
         raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
@@ -542,6 +588,42 @@ def get_invite(token: str, session: Session = Depends(get_session)) -> InvitePub
     )
 
 
+@app.get("/invite/{token}", response_model=InviteStatusOut)
+def get_invite(token: str, session: Session = Depends(get_session)) -> InviteStatusOut:
+    """Liveness probe for the link: 404 if unknown, 410 if revoked/expired.
+
+    Returns no question data on purpose. The problem is only handed out by
+    `POST /invite/{token}/start`, once the caller has identified as an invited
+    recipient — otherwise the email check below would be decorative, since anyone
+    with the link could just read the question straight off this endpoint.
+    """
+    _load_invite_or_error(token, session)
+    return InviteStatusOut(status="active")
+
+
+@app.post("/invite/{token}/start", response_model=InvitePublicOut)
+def start_invite(
+    token: str,
+    body: CandidateStartIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> InvitePublicOut:
+    """Identify as an invited recipient and receive the question.
+
+    Rate-limited because it is an oracle: without a limit it would let a link
+    holder enumerate which addresses were invited (403 vs 200) or which have
+    already finished (409).
+    """
+    limiter.check(
+        "start", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
+    invite = _load_invite_or_error(token, session)
+    email = _normalize_email(body.candidate_email)
+    _check_invited(invite, email)
+    _check_not_already_submitted(invite, email, session)
+    return _candidate_question_view(invite, session)
+
+
 @app.post("/invite/{token}/submit", response_model=CandidateSubmitOut, status_code=201)
 def candidate_submit(
     token: str,
@@ -557,20 +639,11 @@ def candidate_submit(
     if question is None:
         raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
 
-    # One submission per email address per invite (decision A). Case-insensitive
-    # so "A@x.com" and "a@x.com" count as the same candidate.
-    email = body.candidate_email.strip().lower()
-    already = session.exec(
-        select(Submission).where(
-            Submission.invite_id == invite.id,
-            Submission.candidate_email == email,
-        )
-    ).first()
-    if already is not None:
-        raise HTTPException(
-            status_code=409,
-            detail="a submission for this email already exists on this invite.",
-        )
+    # Re-check both gates here, not just in /start: the start screen is only UI,
+    # so a caller can POST straight to this route and skip it.
+    email = _normalize_email(body.candidate_email)
+    _check_invited(invite, email)
+    _check_not_already_submitted(invite, email, session)
 
     sub = Submission(
         id=uuid.uuid4().hex,

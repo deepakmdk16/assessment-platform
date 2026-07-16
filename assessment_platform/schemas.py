@@ -159,8 +159,19 @@ class TokenOut(BaseModel):
 
 
 class InviteCreate(BaseModel):
-    recipients: list[EmailStr] = Field(default_factory=list)
+    # At least one recipient is required: the link is bound to the emails listed
+    # here (a candidate must identify as one of them to start), so an invite with
+    # no recipients would be a link nobody could ever use.
+    recipients: list[EmailStr] = Field(min_length=1)
     expires_at: datetime | None = None
+
+
+class InviteDeliveryOut(BaseModel):
+    """Per-recipient outcome of the invite email send."""
+
+    recipient: str
+    sent: bool
+    error: str | None = None
 
 
 class InviteOut(BaseModel):
@@ -170,6 +181,9 @@ class InviteOut(BaseModel):
     recipients: list[str]
     expires_at: datetime | None
     status: str
+    # Populated only on the create response — delivery outcomes aren't stored, so
+    # reads (list/revoke) return an empty list rather than a stale one.
+    deliveries: list[InviteDeliveryOut] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -187,6 +201,19 @@ class CandidateQuestionView(BaseModel):
     example_input: str | None
     example_output: str | None
     time_limit_s: float
+
+
+class InviteStatusOut(BaseModel):
+    """The unauthenticated probe for `GET /invite/{token}`: says only whether the
+    link is live. Deliberately carries no question data — the candidate must
+    identify as an invited recipient via `POST /invite/{token}/start` first, so
+    holding the link alone never reveals the problem."""
+
+    status: str
+
+
+class CandidateStartIn(BaseModel):
+    candidate_email: EmailStr
 
 
 class InvitePublicOut(BaseModel):

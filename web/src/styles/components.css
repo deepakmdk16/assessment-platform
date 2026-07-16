@@ -418,6 +418,26 @@ textarea {
   margin: 0.25rem 0;
 }
 
+/* Non-blocking counterpart to .form-error: the action succeeded, but something
+   about it needs attention (e.g. the invite exists, the email didn't send). */
+.form-warning {
+  color: var(--color-warn);
+  background: var(--color-warn-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9rem;
+  margin: 0.25rem 0;
+}
+
+.form-warning p {
+  margin: 0;
+}
+
+.form-warning p + p {
+  margin-top: 0.35rem;
+}
+
 /* ----------------------------------------------------------------- cards */
 .card {
   background: var(--color-surface);

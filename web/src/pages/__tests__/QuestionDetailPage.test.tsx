@@ -20,6 +20,7 @@ vi.mock('../../api', () => {
       listInvites: vi.fn(),
       listSubmissions: vi.fn(),
       revokeInvite: vi.fn(),
+      createInvite: vi.fn(),
     },
     ApiError,
   }
@@ -47,6 +48,7 @@ const activeInvite: Invite = {
   recipients: ['candidate@example.com'],
   expires_at: null,
   status: 'active',
+  deliveries: [],
 }
 
 function renderPage() {
@@ -110,5 +112,52 @@ describe('QuestionDetailPage', () => {
     // The invite is unchanged (still active, revoke button still present).
     expect(screen.getByText('active')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /revoke/i })).toBeInTheDocument()
+  })
+
+  it('refuses to create an invite with no recipients', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: /generate coding test/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/at least one candidate email/i)
+    expect(api.createInvite).not.toHaveBeenCalled()
+  })
+
+  it('warns when the invite was created but the email did not send', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.createInvite).mockResolvedValue({
+      ...activeInvite,
+      token: 'tok999',
+      deliveries: [
+        { recipient: 'candidate@example.com', sent: false, error: 'SMTP connection refused' },
+      ],
+    })
+
+    renderPage()
+
+    await user.type(await screen.findByLabelText(/candidate emails/i), 'candidate@example.com')
+    await user.click(screen.getByRole('button', { name: /generate coding test/i }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/couldn’t be sent to candidate@example.com/i)
+    expect(alert).toHaveTextContent('SMTP connection refused')
+  })
+
+  it('shows no delivery warning when every email sent', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.createInvite).mockResolvedValue({
+      ...activeInvite,
+      token: 'tok998',
+      deliveries: [{ recipient: 'candidate@example.com', sent: true, error: null }],
+    })
+
+    renderPage()
+
+    await user.type(await screen.findByLabelText(/candidate emails/i), 'candidate@example.com')
+    await user.click(screen.getByRole('button', { name: /generate coding test/i }))
+
+    await waitFor(() => expect(api.createInvite).toHaveBeenCalled())
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

@@ -75,6 +75,13 @@ export interface LoginResponse {
 
 export type InviteStatus = string
 
+/** Per-recipient outcome of the invite email. Returned only on create. */
+export interface InviteDelivery {
+  recipient: string
+  sent: boolean
+  error: string | null
+}
+
 export interface Invite {
   token: string
   url: string
@@ -82,6 +89,7 @@ export interface Invite {
   recipients: string[]
   expires_at: string | null
   status: InviteStatus
+  deliveries: InviteDelivery[]
 }
 
 export interface InviteQuestionPublic {
@@ -93,7 +101,15 @@ export interface InviteQuestionPublic {
   time_limit_s: number
 }
 
-export interface InviteGetResponse {
+/** `GET /invite/{token}` — a liveness probe only. The question deliberately isn't
+ *  here: it's handed out by `POST /invite/{token}/start` once the candidate has
+ *  identified as an invited recipient. */
+export interface InviteStatusResponse {
+  status: string
+}
+
+/** `POST /invite/{token}/start` — the question, released after the email check. */
+export interface InviteStartResponse {
   question: InviteQuestionPublic
   languages: Language[]
 }

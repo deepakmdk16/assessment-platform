@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
-import type { InviteGetResponse, Language } from '../types'
+import type { InviteStartResponse, Language } from '../types'
 
 type Stage =
   | 'loading'
@@ -17,10 +17,12 @@ type Stage =
 export function CandidatePage() {
   const { token } = useParams<{ token: string }>()
   const [stage, setStage] = useState<Stage>('loading')
-  const [invite, setInvite] = useState<InviteGetResponse | null>(null)
+  const [invite, setInvite] = useState<InviteStartResponse | null>(null)
 
   const [candidateName, setCandidateName] = useState('')
   const [candidateEmail, setCandidateEmail] = useState('')
+  const [gateError, setGateError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
 
   const [language, setLanguage] = useState<Language | ''>('')
   const [code, setCode] = useState('')
@@ -30,15 +32,13 @@ export function CandidatePage() {
   const [consoleTab, setConsoleTab] = useState<'testcase' | 'result'>('testcase')
   const [runNote, setRunNote] = useState<string | null>(null)
 
+  // Probe the link only — the question isn't served until the gate below proves
+  // the visitor is one of the invited recipients.
   useEffect(() => {
     if (!token) return
     api
       .getInvite(token)
-      .then((data) => {
-        setInvite(data)
-        setLanguage(data.languages[0] ?? '')
-        setStage('gate')
-      })
+      .then(() => setStage('gate'))
       .catch((err) => {
         if (err instanceof ApiError && err.status === 404) setStage('invalid')
         else if (err instanceof ApiError && err.status === 410) setStage('expired')
@@ -46,9 +46,33 @@ export function CandidatePage() {
       })
   }, [token])
 
-  function handleGateSubmit(e: FormEvent) {
+  async function handleGateSubmit(e: FormEvent) {
     e.preventDefault()
-    setStage('editor')
+    if (!token) return
+    setGateError(null)
+    setStarting(true)
+    try {
+      const data = await api.startInvite(token, candidateEmail)
+      setInvite(data)
+      setLanguage(data.languages[0] ?? '')
+      setStage('editor')
+    } catch (err) {
+      if (!(err instanceof ApiError)) {
+        setGateError('Something went wrong. Please try again.')
+      } else if (err.status === 403) {
+        setGateError(
+          'This assessment wasn’t sent to that email address. Please use the address your invite was sent to.',
+        )
+      } else if (err.status === 409) {
+        setStage('already_submitted')
+      } else if (err.status === 410 || err.status === 404) {
+        setStage('expired')
+      } else {
+        setGateError(err.message)
+      }
+    } finally {
+      setStarting(false)
+    }
   }
 
   function handleRun() {
@@ -98,8 +122,8 @@ export function CandidatePage() {
   if (stage === 'already_submitted')
     return (
       <CandidateNotice
-        title="Already submitted"
-        body="A solution has already been submitted for this email address on this assessment."
+        title="Assessment already recorded"
+        body="Your assessment has already been recorded for this email address. You can’t take it a second time — please contact your interviewer if you think this is a mistake."
       />
     )
   if (stage === 'submitted')
@@ -118,9 +142,15 @@ export function CandidatePage() {
           <h1>Coding assessment</h1>
           <p className="auth-lead">
             You’ve been invited to a timed coding assessment. Enter your details to begin — you’ll
-            see the problem and a code editor on the next screen.
+            see the problem and a code editor on the next screen. Use the email address your invite
+            was sent to.
           </p>
           <div className="stack">
+            {gateError && (
+              <p role="alert" className="form-error">
+                {gateError}
+              </p>
+            )}
             <div className="field">
               <label htmlFor="candidate_name">Name</label>
               <input
@@ -140,8 +170,8 @@ export function CandidatePage() {
                 required
               />
             </div>
-            <button type="submit" className="btn submit block">
-              Start assessment
+            <button type="submit" className="btn submit block" disabled={starting}>
+              {starting ? 'Starting…' : 'Start assessment'}
             </button>
           </div>
         </form>
