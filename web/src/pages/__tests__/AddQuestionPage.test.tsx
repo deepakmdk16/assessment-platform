@@ -87,7 +87,12 @@ describe('AddQuestionPage', () => {
       weight: 1,
     })
 
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/questions/two-sum'))
+    // `justCreated` makes the question page offer the invite dialog once.
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith('/questions/two-sum', {
+        state: { justCreated: true },
+      }),
+    )
   })
 
   const draftFixture = (): QuestionDraftOut => ({

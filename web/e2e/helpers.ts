@@ -44,13 +44,21 @@ export async function createQuestion(page: Page): Promise<{ id: string; title: s
 }
 
 /**
- * Generate an invite from the (already open) question detail page; returns its
+ * Send an invite from the (already open) question detail page; returns its
  * candidate URL. `recipients` is required — the link is bound to those addresses,
  * and only they can start the assessment.
+ *
+ * The email field lives in a dialog. Arriving straight from the wizard it's
+ * already open (the post-create nudge); otherwise click through to it.
  */
 export async function createInvite(page: Page, recipients: string[]): Promise<string> {
-  await page.getByLabel('Candidate emails').fill(recipients.join('\n'))
-  await page.getByRole('button', { name: 'Generate coding test' }).click()
+  const dialog = page.getByRole('dialog')
+  if (!(await dialog.isVisible())) {
+    await page.getByRole('button', { name: 'Send invite' }).click()
+  }
+  await dialog.getByLabel('Candidate emails').fill(recipients.join(', '))
+  await dialog.getByRole('button', { name: 'Send invite' }).click()
+  await expect(dialog).toBeHidden()
   const urlCell = page.locator('td.invite-url').first()
   await expect(urlCell).toBeVisible()
   const url = (await urlCell.textContent())?.trim()

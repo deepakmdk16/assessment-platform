@@ -3,6 +3,11 @@
 All settings have dev-friendly defaults so the service runs with zero config.
 `DATABASE_URL` is a full SQLAlchemy URL so swapping SQLite for Postgres later is
 only an env change (no code change).
+
+A `.env` file at the repo root is loaded if present, so secrets (SMTP password,
+JWT_SECRET, agent tokens) live in one gitignored file rather than your shell
+history. Real environment variables take precedence, so a deployment that sets
+them properly is unaffected. See `.env.example`; never commit `.env` itself.
 """
 
 from __future__ import annotations
@@ -11,7 +16,12 @@ import logging
 import os
 import secrets
 
+from dotenv import load_dotenv
+
 logger = logging.getLogger(__name__)
+
+# override=False: anything already exported in the environment wins over the file.
+load_dotenv(override=False)
 
 # SQLAlchemy URL. Default: local SQLite file. Set to a postgresql+psycopg URL in prod.
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./platform.db")

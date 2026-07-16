@@ -202,7 +202,9 @@ export function AddQuestionPage() {
         example_output: exampleOutput,
         test_cases: testCases,
       })
-      navigate(`/questions/${created.id}`)
+      // `justCreated` opens the invite dialog once, as a nudge — inviting is
+      // optional, so it offers "Skip for now" rather than blocking the page.
+      navigate(`/questions/${created.id}`, { state: { justCreated: true } })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create question')
     } finally {

@@ -313,6 +313,15 @@ robustness the user flagged.
   only UI). **Caveat, by decision:** this is an identity *claim*, not proof — someone
   who knows an invited address can still type it. Per-recipient tokens or an emailed
   OTP are the stronger form; chosen deliberately for speed.
+- **Slice 9 — inviting is a deliberate, optional action (user call, 2026-07-16).**
+  Creating a question never required an invite, but the email box sat on the page
+  implying otherwise. It now lives in a **dialog** behind "Send invite": arriving from
+  the wizard opens it once as a nudge (dismiss reads **"Skip for now"**, one-shot —
+  re-opening by hand reads "Cancel"), emails are comma- or newline-separated, and a
+  successful send closes the dialog and confirms who it went to. **No email → no
+  invite link** (the 422 stands): a link naming nobody is one nobody could open, so
+  the binding holds everywhere. Secrets now load from a gitignored **`.env`**
+  (`.env.example` is the template; real env vars still win).
 - **Slice 9 — invite email actually reports itself.** `send_invite_emails` now sends
   per recipient (one bad address no longer costs the others their invite) and returns
   a `Delivery` each; `InviteOut.deliveries[]` carries it on create and the UI warns

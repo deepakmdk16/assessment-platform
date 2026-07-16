@@ -7,6 +7,40 @@ import {
   submitAsCandidate,
 } from './helpers'
 
+test('creating a question needs no invite — the nudge can be skipped', async ({ page }) => {
+  await registerInterviewer(page)
+  await createQuestion(page)
+
+  // Landing from the wizard, the invite dialog offers itself but never blocks.
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Skip for now' }).click()
+  await expect(dialog).toBeHidden()
+
+  // The question exists with no invite, and the email field is out of the way.
+  await expect(page.getByRole('heading', { name: 'Submissions' })).toBeVisible()
+  await expect(page.getByLabel('Candidate emails')).toBeHidden()
+
+  // It's still one click away when they want it, and cancelling creates nothing.
+  await page.getByRole('button', { name: 'Send invite' }).click()
+  await expect(dialog.getByLabel('Candidate emails')).toBeVisible()
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.locator('td.invite-url')).toHaveCount(0)
+})
+
+test('an invite is not created without an email address', async ({ page }) => {
+  await registerInterviewer(page)
+  await createQuestion(page)
+
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('button', { name: 'Send invite' }).click()
+
+  await expect(dialog.getByRole('alert')).toContainText('at least one candidate email')
+  await expect(dialog).toBeVisible() // still open, nothing created
+  await expect(page.locator('td.invite-url')).toHaveCount(0)
+})
+
 test('a candidate who already submitted is turned away at the gate', async ({ page, browser }) => {
   await registerInterviewer(page)
   await createQuestion(page)

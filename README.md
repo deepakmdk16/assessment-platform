@@ -56,6 +56,16 @@ Tables are created on startup (`SQLModel.metadata.create_all`; no Alembic in v1)
 | `FRONTEND_BASE_URL` | `http://127.0.0.1:5173`        | Frontend origin; candidate invite links are `{FRONTEND_BASE_URL}/t/{token}`. |
 | `RUN_RATE_LIMIT_MAX` | `60`                          | Candidate Run / Run-against-tests per `RATE_LIMIT_WINDOW_S`. These are free agent compute, and run-tests is a pass/fail oracle — don't disable in prod. `0` disables. |
 
+#### Where secrets live
+
+Config is read from the environment, and a **`.env` at the repo root is loaded if
+present** (real env vars take precedence, so deployments are unaffected). `.env` is
+gitignored; [`.env.example`](.env.example) is the template:
+
+```bash
+cp .env.example .env   # then fill in — never commit .env
+```
+
 #### Sending invite emails (SMTP)
 
 **With `SMTP_HOST` unset the platform does not send anything** — it logs the invite
@@ -73,9 +83,11 @@ the UI warns when a send failed, so a silent non-delivery isn't possible.
 | `SMTP_FROM`     | `no-reply@assessment.local` | From address. Must be one your provider allows. |
 | `SMTP_USE_TLS`  | `true`                     | STARTTLS. `false` only for a local test relay. |
 
-Gmail works for testing (`smtp.gmail.com`, port 587, an **app password** — not your
-account password), but it rate-limits and mail often lands in spam without SPF/DKIM
-on your domain. For real candidates use a transactional provider (SES, Postmark,
+Gmail works for testing: enable 2-Step Verification, then create an **app password**
+(Google Account → Security → App passwords) — your normal account password will not
+work, and `SMTP_FROM` must equal `SMTP_USER` because Gmail rewrites `From` to the
+authenticated account. It rate-limits and mail often lands in spam without SPF/DKIM
+on your domain, so for real candidates use a transactional provider (SES, Postmark,
 Resend) with a verified sending domain.
 
 ## Endpoints
