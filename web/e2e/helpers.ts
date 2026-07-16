@@ -43,9 +43,22 @@ export async function createQuestion(page: Page): Promise<{ id: string; title: s
   return { id, title }
 }
 
-/** Generate an invite from the (already open) question detail page; returns its candidate URL. */
-export async function createInvite(page: Page): Promise<string> {
-  await page.getByRole('button', { name: 'Generate coding test' }).click()
+/**
+ * Send an invite from the (already open) question detail page; returns its
+ * candidate URL. `recipients` is required — the link is bound to those addresses,
+ * and only they can start the assessment.
+ *
+ * The email field lives in a dialog. Arriving straight from the wizard it's
+ * already open (the post-create nudge); otherwise click through to it.
+ */
+export async function createInvite(page: Page, recipients: string[]): Promise<string> {
+  const dialog = page.getByRole('dialog')
+  if (!(await dialog.isVisible())) {
+    await page.getByRole('button', { name: 'Send invite' }).click()
+  }
+  await dialog.getByLabel('Candidate emails').fill(recipients.join(', '))
+  await dialog.getByRole('button', { name: 'Send invite' }).click()
+  await expect(dialog).toBeHidden()
   const urlCell = page.locator('td.invite-url').first()
   await expect(urlCell).toBeVisible()
   const url = (await urlCell.textContent())?.trim()
@@ -54,11 +67,11 @@ export async function createInvite(page: Page): Promise<string> {
 }
 
 /**
- * Drive a candidate through gate → editor → submit in a fresh (unauthenticated)
- * context. The caller owns the returned context and must close it. Code must be
- * non-empty — the submit schema enforces `min_length=1`.
+ * Open the invite link in a fresh (unauthenticated) context and submit the gate
+ * form. Stops there — the caller asserts what the gate did (let them through, or
+ * refused them). The caller owns the returned context and must close it.
  */
-export async function submitAsCandidate(
+export async function startAsCandidate(
   browser: Browser,
   inviteUrl: string,
   candidate: { name: string; email: string },
@@ -70,6 +83,20 @@ export async function submitAsCandidate(
   await page.getByLabel('Name').fill(candidate.name)
   await page.getByLabel('Email').fill(candidate.email)
   await page.getByRole('button', { name: 'Start' }).click()
+  return { context, page }
+}
+
+/**
+ * Drive a candidate through gate → editor → submit. Assumes the gate lets this
+ * candidate through (i.e. they're an invited recipient who hasn't submitted).
+ * Code must be non-empty — the submit schema enforces `min_length=1`.
+ */
+export async function submitAsCandidate(
+  browser: Browser,
+  inviteUrl: string,
+  candidate: { name: string; email: string },
+): Promise<{ context: BrowserContext; page: Page }> {
+  const { context, page } = await startAsCandidate(browser, inviteUrl, candidate)
 
   // Monaco's editable surface is an invisible EditContext div; click the visible
   // editor body to focus it, then type so `code` is non-empty (schema min_length=1).

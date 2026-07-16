@@ -418,12 +418,88 @@ textarea {
   margin: 0.25rem 0;
 }
 
+/* .form-error also wraps a block (message + reason + a retry button), not just
+   a bare string — keep the stacking tight in that case. */
+.form-error p {
+  margin: 0;
+}
+
+.form-error p + p,
+.form-error p + button {
+  margin-top: 0.4rem;
+}
+
+/* Confirmation that an action landed (e.g. the invite was emailed). */
+.form-success {
+  color: var(--color-good);
+  background: var(--color-good-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9rem;
+  margin: 0 0 0.8rem;
+}
+
+/* Non-blocking counterpart to .form-error: the action succeeded, but something
+   about it needs attention (e.g. the invite exists, the email didn't send). */
+.form-warning {
+  color: var(--color-warn);
+  background: var(--color-warn-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9rem;
+  margin: 0.25rem 0;
+}
+
+.form-warning p {
+  margin: 0;
+}
+
+.form-warning p + p {
+  margin-top: 0.35rem;
+}
+
 /* ----------------------------------------------------------------- cards */
 .card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
+}
+
+/* ---------------------------------------------------------------- modal
+   Native <dialog>: the browser gives us focus trapping, Esc-to-close and the
+   backdrop, so we only style the surface. */
+.modal {
+  width: min(30rem, calc(100vw - 2rem));
+  padding: 1.4rem 1.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-lg);
+}
+
+.modal::backdrop {
+  background: rgba(10, 14, 22, 0.45);
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.modal .muted {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.3rem;
 }
 
 .pad {
@@ -644,6 +720,19 @@ textarea {
 
 .kv:last-child {
   border-bottom: none;
+}
+
+/* Lay a few .kv pairs out inline (report header stats) rather than stacked. */
+.kv-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.5rem;
+  margin: 0.25rem 0 1rem;
+}
+
+.kv-row .kv {
+  border-bottom: none;
+  gap: 0.5rem;
 }
 
 .kv .k {
@@ -1071,6 +1160,43 @@ button.tab:hover {
   font-size: 0.85rem;
 }
 
+/* Headline of the run-against-tests result ("3 of 5 test cases passed"). */
+.run-summary {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin: 0 0 0.6rem;
+}
+
+.run-summary.good {
+  color: var(--color-good);
+}
+
+/* One row per test case: label, status chip, timing. Deliberately carries no
+   input/expected — the candidate sees pass/fail only. */
+.test-strip {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.test-strip li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+.test-strip-name {
+  flex: 1;
+  font-weight: 500;
+}
+
 .console-body pre {
   margin: 0.25rem 0 0.75rem;
 }
@@ -1100,6 +1226,29 @@ button.tab:hover {
 
 .ide-review h3 {
   margin: 0 0 0.5rem;
+}
+
+/* Strengths / weaknesses lists in the report card. */
+.bullets {
+  margin: 0 0 1rem;
+  padding-left: 1.1rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.bullets li {
+  margin-bottom: 0.3rem;
+}
+
+/* A code block living inside a table cell: keep long I/O from stretching the
+   column, and let the table itself scroll (.tbl-wrap) instead of the page. */
+.cell-pre {
+  margin: 0;
+  max-width: 22ch;
+  max-height: 7rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .ide-review .card + h3,

@@ -3,6 +3,11 @@
 All settings have dev-friendly defaults so the service runs with zero config.
 `DATABASE_URL` is a full SQLAlchemy URL so swapping SQLite for Postgres later is
 only an env change (no code change).
+
+A `.env` file at the repo root is loaded if present, so secrets (SMTP password,
+JWT_SECRET, agent tokens) live in one gitignored file rather than your shell
+history. Real environment variables take precedence, so a deployment that sets
+them properly is unaffected. See `.env.example`; never commit `.env` itself.
 """
 
 from __future__ import annotations
@@ -11,7 +16,12 @@ import logging
 import os
 import secrets
 
+from dotenv import load_dotenv
+
 logger = logging.getLogger(__name__)
+
+# override=False: anything already exported in the environment wins over the file.
+load_dotenv(override=False)
 
 # SQLAlchemy URL. Default: local SQLite file. Set to a postgresql+psycopg URL in prod.
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./platform.db")
@@ -30,8 +40,16 @@ AGENT_TIMEOUT_S = float(os.getenv("AGENT_TIMEOUT_S", "10.0"))
 # Timeout (seconds) for the SYNCHRONOUS question-draft call. Unlike triggering a
 # job, drafting runs an LLM + executes the reference inline before responding, so
 # it needs a much longer budget than AGENT_TIMEOUT_S (a complex draft takes tens
-# of seconds).
-AGENT_DRAFT_TIMEOUT_S = float(os.getenv("AGENT_DRAFT_TIMEOUT_S", "120.0"))
+# of seconds). The agent also re-drafts internally when the first attempt is
+# unusable (ASSESS_DRAFT_ATTEMPTS, default 2), so this must cover *all* of its
+# attempts — otherwise we'd time out on a draft that was about to succeed.
+AGENT_DRAFT_TIMEOUT_S = float(os.getenv("AGENT_DRAFT_TIMEOUT_S", "240.0"))
+
+# Timeout (seconds) for the SYNCHRONOUS candidate run calls (`/run`, `/run/tests`).
+# These compile and execute code inline before responding, so they need more than
+# the 10s accept budget — but far less than a draft (no LLM). The agent bounds each
+# execution with its own per-case time limit; this is the outer transport budget.
+AGENT_RUN_TIMEOUT_S = float(os.getenv("AGENT_RUN_TIMEOUT_S", "60.0"))
 
 # Shared-secret auth, matching the agent's contract exactly. Both sides use the
 # `X-Assess-Token` header; enforcement is per-token and only active when the
@@ -88,6 +106,11 @@ SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
 RATE_LIMIT_WINDOW_S = int(os.getenv("RATE_LIMIT_WINDOW_S", "60"))
 LOGIN_RATE_LIMIT_MAX = int(os.getenv("LOGIN_RATE_LIMIT_MAX", "10"))
 SUBMIT_RATE_LIMIT_MAX = int(os.getenv("SUBMIT_RATE_LIMIT_MAX", "20"))
+# Candidate Run / Run-against-tests. Higher than submit (a candidate iterates
+# many times in a sitting) but still capped: these execute untrusted code on the
+# agent for free, and run-tests is a pass/fail oracle — unlimited, it would let
+# someone reverse-engineer the test suite one guess at a time.
+RUN_RATE_LIMIT_MAX = int(os.getenv("RUN_RATE_LIMIT_MAX", "60"))
 
 # Languages offered to candidates (UI-facing; the agent enforces what it supports).
 SUPPORTED_LANGUAGES = [

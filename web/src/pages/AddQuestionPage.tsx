@@ -8,6 +8,53 @@ function emptyTestCase(): TestCaseIn {
   return { name: '', stdin: '', expected: '', category: 'correctness', weight: 1 }
 }
 
+interface DraftFailure {
+  message: string
+  /** Whether trying the same brief again could plausibly work. */
+  canRetry: boolean
+  /** The agent's own reason, when it's worth showing under the summary. */
+  detail?: string
+}
+
+/**
+ * Turn a draft failure into something an interviewer can act on.
+ *
+ * Drafting is an LLM call, so some failures are luck (retry) and some are not
+ * (fix the config, or rewrite the brief). Saying which is the difference between
+ * a useful message and a dead end.
+ */
+function describeDraftFailure(err: unknown): DraftFailure {
+  if (!(err instanceof ApiError)) {
+    return { message: 'Couldn’t draft the question. Check your connection and try again.', canRetry: true }
+  }
+  switch (err.status) {
+    case 503:
+      return {
+        message:
+          'AI drafting isn’t available: the server has no model API key configured. This needs an admin — retrying won’t help.',
+        canRetry: false,
+      }
+    case 422:
+      return {
+        message:
+          'The AI couldn’t turn this brief into a working question, even after retrying. Try making the brief more specific about the input format and what to compute — or write the question yourself below.',
+        canRetry: true,
+        detail: err.message,
+      }
+    case 429:
+      return { message: 'Too many drafting requests right now. Wait a moment and try again.', canRetry: true }
+    case 502:
+      return {
+        message: 'Couldn’t reach the AI drafting service. It may be restarting — try again in a moment.',
+        canRetry: true,
+      }
+    case 400:
+      return { message: err.message, canRetry: false }
+    default:
+      return { message: err.message || 'Couldn’t draft the question.', canRetry: true }
+  }
+}
+
 const STEPS = ['Basics', 'Grading', 'Test cases', 'Example', 'Review'] as const
 const LAST_STEP = STEPS.length - 1
 
@@ -41,13 +88,13 @@ export function AddQuestionPage() {
   const [difficulty, setDifficulty] = useState('')
   const [targetComplexity, setTargetComplexity] = useState('')
   const [drafting, setDrafting] = useState(false)
-  const [draftError, setDraftError] = useState<string | null>(null)
+  const [draftError, setDraftError] = useState<DraftFailure | null>(null)
   const [draftWarnings, setDraftWarnings] = useState<string[]>([])
   const [referenceSolution, setReferenceSolution] = useState<string | null>(null)
 
   async function handleDraft() {
     if (!brief.trim()) {
-      setDraftError('Enter a brief to draft from.')
+      setDraftError({ message: 'Enter a brief to draft from.', canRetry: false })
       return
     }
     setDraftError(null)
@@ -78,7 +125,7 @@ export function AddQuestionPage() {
       setDraftWarnings(res.warnings)
       setReferenceSolution(res.reference_solution)
     } catch (err) {
-      setDraftError(err instanceof ApiError ? err.message : 'Failed to draft question')
+      setDraftError(describeDraftFailure(err))
     } finally {
       setDrafting(false)
     }
@@ -155,7 +202,9 @@ export function AddQuestionPage() {
         example_output: exampleOutput,
         test_cases: testCases,
       })
-      navigate(`/questions/${created.id}`)
+      // `justCreated` opens the invite dialog once, as a nudge — inviting is
+      // optional, so it offers "Skip for now" rather than blocking the page.
+      navigate(`/questions/${created.id}`, { state: { justCreated: true } })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create question')
     } finally {
@@ -222,9 +271,20 @@ export function AddQuestionPage() {
                   before saving.
                 </p>
                 {draftError && (
-                  <p role="alert" className="form-error">
-                    {draftError}
-                  </p>
+                  <div role="alert" className="form-error">
+                    <p>{draftError.message}</p>
+                    {draftError.detail && <p className="cellsub">{draftError.detail}</p>}
+                    {draftError.canRetry && (
+                      <button
+                        type="button"
+                        className="btn sec sm"
+                        onClick={handleDraft}
+                        disabled={drafting}
+                      >
+                        {drafting ? 'Retrying…' : 'Try again'}
+                      </button>
+                    )}
+                  </div>
                 )}
                 <div className="field">
                   <label htmlFor="brief">Brief</label>

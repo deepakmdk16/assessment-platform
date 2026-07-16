@@ -127,9 +127,14 @@ def test_question_ownership_isolation(anon_client: TestClient) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _make_invite(client: TestClient, token: str, expires_at: str | None = None) -> dict:
+def _make_invite(
+    client: TestClient,
+    token: str,
+    expires_at: str | None = None,
+    recipients: list[str] | None = None,
+) -> dict:
     client.post("/questions", json=_sample_question(), headers=_auth(token))
-    body: dict[str, Any] = {"recipients": ["cand@x.io"]}
+    body: dict[str, Any] = {"recipients": recipients or ["cand@x.io"]}
     if expires_at is not None:
         body["expires_at"] = expires_at
     resp = client.post("/questions/sum_of_n/invites", json=body, headers=_auth(token))
@@ -158,12 +163,24 @@ def test_create_invite_rejects_invalid_recipient_422(anon_client: TestClient) ->
     assert resp.status_code == 422
 
 
+def test_invite_probe_reveals_no_question(anon_client: TestClient) -> None:
+    """The bare link says only that it's live — the question is behind /start."""
+    tok = register_interviewer(anon_client, "iv-probe@x.io")
+    inv = _make_invite(anon_client, tok)
+
+    resp = anon_client.get(f"/invite/{inv['token']}")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "active"}
+
+
 def test_candidate_view_hides_test_cases(anon_client: TestClient) -> None:
     tok = register_interviewer(anon_client, "iv2@x.io")
     inv = _make_invite(anon_client, tok)
 
-    # PUBLIC — no bearer.
-    resp = anon_client.get(f"/invite/{inv['token']}")
+    # PUBLIC — no bearer, but must identify as an invited recipient.
+    resp = anon_client.post(
+        f"/invite/{inv['token']}/start", json={"candidate_email": "cand@x.io"}
+    )
     assert resp.status_code == 200
     data = resp.json()
 
@@ -191,7 +208,7 @@ def test_candidate_view_unknown_token_404(anon_client: TestClient) -> None:
 
 def test_candidate_submit_triggers_agent(anon_client: TestClient, monkeypatch) -> None:
     tok = register_interviewer(anon_client, "iv3@x.io")
-    inv = _make_invite(anon_client, tok)
+    inv = _make_invite(anon_client, tok, recipients=["jane@x.io"])
 
     monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-cand")
 
@@ -222,7 +239,7 @@ def test_candidate_submit_triggers_agent(anon_client: TestClient, monkeypatch) -
 def test_expired_invite_410(anon_client: TestClient, monkeypatch) -> None:
     tok = register_interviewer(anon_client, "iv4@x.io")
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    inv = _make_invite(anon_client, tok, expires_at=past)
+    inv = _make_invite(anon_client, tok, expires_at=past, recipients=["x@x.io"])
 
     assert anon_client.get(f"/invite/{inv['token']}").status_code == 410
 
@@ -242,7 +259,7 @@ def test_expired_invite_410(anon_client: TestClient, monkeypatch) -> None:
 def test_dashboard_submissions_owner_scoped(anon_client: TestClient, monkeypatch) -> None:
     tok_a = register_interviewer(anon_client, "dash-a@x.io")
     tok_b = register_interviewer(anon_client, "dash-b@x.io")
-    inv = _make_invite(anon_client, tok_a)
+    inv = _make_invite(anon_client, tok_a, recipients=["c@x.io"])
 
     monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-d")
     anon_client.post(

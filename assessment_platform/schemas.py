@@ -159,8 +159,19 @@ class TokenOut(BaseModel):
 
 
 class InviteCreate(BaseModel):
-    recipients: list[EmailStr] = Field(default_factory=list)
+    # At least one recipient is required: the link is bound to the emails listed
+    # here (a candidate must identify as one of them to start), so an invite with
+    # no recipients would be a link nobody could ever use.
+    recipients: list[EmailStr] = Field(min_length=1)
     expires_at: datetime | None = None
+
+
+class InviteDeliveryOut(BaseModel):
+    """Per-recipient outcome of the invite email send."""
+
+    recipient: str
+    sent: bool
+    error: str | None = None
 
 
 class InviteOut(BaseModel):
@@ -170,6 +181,9 @@ class InviteOut(BaseModel):
     recipients: list[str]
     expires_at: datetime | None
     status: str
+    # Populated only on the create response — delivery outcomes aren't stored, so
+    # reads (list/revoke) return an empty list rather than a stale one.
+    deliveries: list[InviteDeliveryOut] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -189,6 +203,19 @@ class CandidateQuestionView(BaseModel):
     time_limit_s: float
 
 
+class InviteStatusOut(BaseModel):
+    """The unauthenticated probe for `GET /invite/{token}`: says only whether the
+    link is live. Deliberately carries no question data — the candidate must
+    identify as an invited recipient via `POST /invite/{token}/start` first, so
+    holding the link alone never reveals the problem."""
+
+    status: str
+
+
+class CandidateStartIn(BaseModel):
+    candidate_email: EmailStr
+
+
 class InvitePublicOut(BaseModel):
     question: CandidateQuestionView
     languages: list[str]
@@ -204,6 +231,53 @@ class CandidateSubmitIn(BaseModel):
 class CandidateSubmitOut(BaseModel):
     submission_id: str
     status: str
+
+
+class CandidateRunIn(BaseModel):
+    """Run the candidate's code against input they typed themselves."""
+
+    candidate_email: EmailStr
+    language: str
+    code: str = Field(min_length=1)
+    stdin: str = ""
+
+
+class CandidateRunOut(BaseModel):
+    """What the program did. Safe to show: it's the candidate's own code fed
+    their own input, so nothing here derives from the question's test cases."""
+
+    stdout: str
+    stderr: str | None = None
+    duration_s: float
+    timed_out: bool
+    compile_error: str | None = None
+
+
+class CandidateRunTestsIn(BaseModel):
+    candidate_email: EmailStr
+    language: str
+    code: str = Field(min_length=1)
+
+
+class CandidateTestOutcomeOut(BaseModel):
+    """One test case as the CANDIDATE is allowed to see it.
+
+    Pass/fail and timing — nothing else. No stdin, no expected, no actual, and
+    no case *name*: a name like "handles_duplicates" is itself a hint about the
+    answer key. Cases are identified positionally ("Test 1"), like HackerRank.
+    """
+
+    index: int
+    category: Category
+    status: str  # "PASS" | "FAIL" | "TLE"
+    duration_s: float
+
+
+class CandidateRunTestsOut(BaseModel):
+    total: int
+    passed: int
+    compile_error: str | None = None
+    test_cases: list[CandidateTestOutcomeOut] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #

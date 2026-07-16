@@ -72,7 +72,7 @@ def test_candidate_submit_rate_limited(anon_client: TestClient, monkeypatch) -> 
     monkeypatch.setattr(config, "SUBMIT_RATE_LIMIT_MAX", 1)
     monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
     tok = register_interviewer(anon_client, "rl2@x.io")
-    inv = _make_invite(anon_client, tok)
+    inv = _make_invite(anon_client, tok, recipients=["a@x.io", "b@x.io"])
 
     assert _submit(anon_client, inv["token"], "a@x.io").status_code == 201
     # Different email, but over the per-window submit cap -> 429 (checked first).
@@ -87,7 +87,7 @@ def test_candidate_submit_rate_limited(anon_client: TestClient, monkeypatch) -> 
 def test_revoke_invite_blocks_candidate(anon_client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
     tok = register_interviewer(anon_client, "rv@x.io")
-    inv = _make_invite(anon_client, tok)
+    inv = _make_invite(anon_client, tok, recipients=["c@x.io"])
 
     resp = anon_client.post(
         f"/questions/sum_of_n/invites/{inv['token']}/revoke", headers=_auth(tok)
@@ -112,7 +112,7 @@ def test_revoke_invite_owner_scoped(anon_client: TestClient) -> None:
 def test_one_submission_per_email(anon_client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
     tok = register_interviewer(anon_client, "1p@x.io")
-    inv = _make_invite(anon_client, tok)
+    inv = _make_invite(anon_client, tok, recipients=["jane@x.io", "john@x.io"])
 
     assert _submit(anon_client, inv["token"], "jane@x.io").status_code == 201
     # Same email (case-insensitive) -> 409.
@@ -129,8 +129,9 @@ def test_one_submission_per_email(anon_client: TestClient, monkeypatch) -> None:
 def test_create_invite_emails_recipients(anon_client: TestClient, monkeypatch) -> None:
     sent: dict[str, object] = {}
 
-    def _fake_send(recipients: list[str], url: str, title: str) -> None:
+    def _fake_send(recipients: list[str], url: str, title: str) -> list[email_client.Delivery]:
         sent["recipients"], sent["url"], sent["title"] = recipients, url, title
+        return [email_client.Delivery(r, sent=True) for r in recipients]
 
     monkeypatch.setattr(email_client, "send_invite_emails", _fake_send)
     tok = register_interviewer(anon_client, "mail@x.io")

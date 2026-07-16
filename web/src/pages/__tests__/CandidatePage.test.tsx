@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CandidatePage } from '../CandidatePage'
 import { api } from '../../api'
-import type { InviteGetResponse } from '../../types'
+import type { InviteStartResponse } from '../../types'
 
 vi.mock('../../api', () => {
   class ApiError extends Error {
@@ -15,7 +15,13 @@ vi.mock('../../api', () => {
     }
   }
   return {
-    api: { getInvite: vi.fn(), submitCandidate: vi.fn() },
+    api: {
+      getInvite: vi.fn(),
+      startInvite: vi.fn(),
+      submitCandidate: vi.fn(),
+      runCandidate: vi.fn(),
+      runCandidateTests: vi.fn(),
+    },
     ApiError,
   }
 })
@@ -36,7 +42,7 @@ vi.mock('@monaco-editor/react', () => ({
   ),
 }))
 
-const inviteResponse: InviteGetResponse = {
+const startResponse: InviteStartResponse = {
   question: {
     title: 'Two Sum',
     prompt: 'Find two numbers that add up to target.',
@@ -65,7 +71,8 @@ describe('CandidatePage', () => {
 
   it('walks the candidate through gate -> editor -> submitted', async () => {
     const user = userEvent.setup()
-    vi.mocked(api.getInvite).mockResolvedValue(inviteResponse)
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
     vi.mocked(api.submitCandidate).mockResolvedValue({
       submission_id: 'sub1',
       status: 'received',
@@ -78,6 +85,10 @@ describe('CandidatePage', () => {
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
     await user.click(screen.getByRole('button', { name: /start/i }))
+
+    await waitFor(() => {
+      expect(api.startInvite).toHaveBeenCalledWith('tok123', 'jane@example.com')
+    })
 
     // Editor split view
     expect(await screen.findByText(/find two numbers/i)).toBeInTheDocument()
@@ -97,12 +108,45 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
   })
 
-  it('shows an already-submitted message when submit returns 409', async () => {
+  it('does not reveal the question until the gate is passed', async () => {
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    // The problem title/prompt must not be on the gate screen — it only arrives
+    // with the /start response, after the email has been checked.
+    expect(screen.queryByText(/two sum/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/find two numbers/i)).not.toBeInTheDocument()
+  })
+
+  it('turns away an uninvited email at the gate with no question data', async () => {
     const user = userEvent.setup()
     const { ApiError } = await import('../../api')
-    vi.mocked(api.getInvite).mockResolvedValue(inviteResponse)
-    vi.mocked(api.submitCandidate).mockRejectedValue(
-      new ApiError(409, 'a submission for this email already exists on this invite.'),
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockRejectedValue(
+      new ApiError(403, 'this assessment was not sent to that email address.'),
+    )
+
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Mallory')
+    await user.type(screen.getByLabelText(/^email$/i), 'mallory@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/wasn’t sent to that email/i)
+    // Still on the gate; no problem leaked.
+    expect(screen.queryByText(/find two numbers/i)).not.toBeInTheDocument()
+  })
+
+  it('shows "already recorded" when start returns 409', async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import('../../api')
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockRejectedValue(
+      new ApiError(409, 'your assessment has already been recorded for this email address.'),
     )
 
     renderCandidatePage()
@@ -112,10 +156,138 @@ describe('CandidatePage', () => {
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
     await user.click(screen.getByRole('button', { name: /start/i }))
 
-    await user.type(screen.getByLabelText(/code editor/i), 'print("hi")')
+    // Turned away before ever seeing the editor.
+    expect(
+      await screen.findByRole('heading', { name: /already recorded/i }),
+    ).toBeInTheDocument()
+    expect(screen.queryByLabelText(/code editor/i)).not.toBeInTheDocument()
+  })
+
+  it('shows an already-recorded message when submit returns 409', async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import('../../api')
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.submitCandidate).mockRejectedValue(
+      new ApiError(409, 'your assessment has already been recorded for this email address.'),
+    )
+
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    await user.type(await screen.findByLabelText(/code editor/i), 'print("hi")')
     await user.click(screen.getByRole('button', { name: /^submit$/i }))
 
-    expect(await screen.findByRole('heading', { name: /already submitted/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /already recorded/i })).toBeInTheDocument()
+  })
+
+  /** Gate → editor, ready to exercise the in-editor actions. */
+  async function reachEditor(user: ReturnType<typeof userEvent.setup>) {
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    renderCandidatePage()
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+    await user.type(await screen.findByLabelText(/code editor/i), 'print("hi")')
+  }
+
+  it('runs the code against the candidate’s own stdin and shows the output', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.runCandidate).mockResolvedValue({
+      stdout: '42',
+      stderr: null,
+      duration_s: 0.03,
+      timed_out: false,
+      compile_error: null,
+    })
+
+    await reachEditor(user)
+    await user.type(screen.getByLabelText(/your input/i), '21')
+    await user.click(screen.getByRole('button', { name: /^run$/i }))
+
+    await waitFor(() => {
+      expect(api.runCandidate).toHaveBeenCalledWith('tok123', {
+        candidate_email: 'jane@example.com',
+        language: 'python',
+        code: 'print("hi")',
+        stdin: '21',
+      })
+    })
+    expect(await screen.findByText('42')).toBeInTheDocument()
+  })
+
+  it('shows a compile error from Run rather than an empty console', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.runCandidate).mockResolvedValue({
+      stdout: '',
+      stderr: null,
+      duration_s: 0,
+      timed_out: false,
+      compile_error: "line 1: expected ';'",
+    })
+
+    await reachEditor(user)
+    await user.click(screen.getByRole('button', { name: /^run$/i }))
+
+    expect(await screen.findByText(/expected ';'/)).toBeInTheDocument()
+  })
+
+  it('reports pass/fail per test case without revealing the cases', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.runCandidateTests).mockResolvedValue({
+      total: 3,
+      passed: 2,
+      compile_error: null,
+      test_cases: [
+        { index: 1, category: 'correctness', status: 'PASS', duration_s: 0.01 },
+        { index: 2, category: 'correctness', status: 'FAIL', duration_s: 0.01 },
+        { index: 3, category: 'performance', status: 'TLE', duration_s: 2 },
+      ],
+    })
+
+    await reachEditor(user)
+    await user.click(screen.getByRole('button', { name: /run against test cases/i }))
+
+    expect(await screen.findByText(/2 of 3 test cases passed/i)).toBeInTheDocument()
+    expect(screen.getByText('Test 1')).toBeInTheDocument()
+    expect(screen.getByText('PASS')).toBeInTheDocument()
+    expect(screen.getByText('FAIL')).toBeInTheDocument()
+    expect(screen.getByText('TLE')).toBeInTheDocument()
+  })
+
+  it('does not submit when only running', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.runCandidateTests).mockResolvedValue({
+      total: 1,
+      passed: 1,
+      compile_error: null,
+      test_cases: [{ index: 1, category: 'correctness', status: 'PASS', duration_s: 0.01 }],
+    })
+
+    await reachEditor(user)
+    await user.click(screen.getByRole('button', { name: /run against test cases/i }))
+    await screen.findByText(/1 of 1 test cases passed/i)
+
+    // Running is a rehearsal — the attempt is only spent on Submit.
+    expect(api.submitCandidate).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a rate-limit on Run without losing the candidate’s code', async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import('../../api')
+    vi.mocked(api.runCandidate).mockRejectedValue(new ApiError(429, 'too many requests'))
+
+    await reachEditor(user)
+    await user.click(screen.getByRole('button', { name: /^run$/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/too many runs/i)
+    expect(screen.getByLabelText(/code editor/i)).toHaveValue('print("hi")')
   })
 
   it('shows an error for an expired invite', async () => {

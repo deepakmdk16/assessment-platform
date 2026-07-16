@@ -3,30 +3,17 @@ import { Link, useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
-import type { QuestionOut, SubmissionDetail } from '../types'
+import type { QuestionOut, ResultTestCase, SubmissionDetail } from '../types'
 
-/** Best-effort: pull a per-test-case array out of the agent's stored full_result.
- *  Backend shape is finalised in the next pass; until then we render whatever is
- *  present and fall back to a placeholder. */
-function extractCases(full: Record<string, unknown> | undefined): Record<string, unknown>[] | null {
-  if (!full) return null
-  for (const key of ['test_results', 'tests', 'results', 'cases', 'checks']) {
-    const v = full[key]
-    if (Array.isArray(v) && v.length > 0) return v as Record<string, unknown>[]
-  }
-  return null
-}
-
-function str(v: unknown): string {
-  if (v == null) return ''
-  return typeof v === 'string' ? v : JSON.stringify(v)
-}
-
+/** The interviewer's report card. Unlike the candidate view this deliberately
+ *  shows everything — inputs, expected vs actual, the answer key — because the
+ *  whole point is judging the submission. */
 export function SubmissionDetailPage() {
   const { id } = useParams<{ id: string }>()
   const [sub, setSub] = useState<SubmissionDetail | null>(null)
   const [question, setQuestion] = useState<QuestionOut | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [tab, setTab] = useState<'report' | 'tests'>('report')
 
   useEffect(() => {
     if (!id) return
@@ -43,7 +30,9 @@ export function SubmissionDetailPage() {
   if (!sub) return <p className="page-loading">Loading…</p>
 
   const result = sub.result
-  const cases = extractCases(result?.full_result)
+  const full = result?.full_result
+  const cases = full?.test_cases ?? []
+  const quality = full?.quality
 
   return (
     <div className="ide">
@@ -56,8 +45,14 @@ export function SubmissionDetailPage() {
           <span className="muted">
             {sub.candidate} · {sub.language}
           </span>
-          {result && <span className={badgeClass(result.verdict)}>{result.verdict}</span>}
-          {result && <span className="score">{result.score_pct}%</span>}
+          {result ? (
+            <>
+              <span className={badgeClass(result.verdict)}>{result.verdict}</span>
+              <span className="score">{result.score_pct}%</span>
+            </>
+          ) : (
+            <span className={badgeClass(sub.status)}>{sub.status}</span>
+          )}
         </div>
       </header>
 
@@ -116,49 +111,230 @@ export function SubmissionDetailPage() {
           </div>
 
           <div className="ide-review">
-            <h3>AI summary</h3>
-            <p className="review-summary">
-              {result?.reason || str(result?.full_result?.summary) || 'No summary available yet.'}
-            </p>
+            <div className="tabs">
+              <button
+                type="button"
+                className={tab === 'report' ? 'tab on' : 'tab'}
+                onClick={() => setTab('report')}
+              >
+                Report
+              </button>
+              <button
+                type="button"
+                className={tab === 'tests' ? 'tab on' : 'tab'}
+                onClick={() => setTab('tests')}
+              >
+                Test cases{cases.length > 0 && <span className="count">{cases.length}</span>}
+              </button>
+            </div>
 
-            <h3>Test cases</h3>
-            {cases ? (
-              <div className="card tbl-wrap">
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th>Case</th>
-                      <th>Result</th>
-                      <th>Output</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cases.map((c, i) => {
-                      const passed = c.passed ?? c.ok ?? c.status
-                      const label =
-                        passed === true || String(passed).toLowerCase() === 'pass' ? 'pass' : 'fail'
-                      return (
-                        <tr key={i}>
-                          <td>{str(c.name ?? c.id ?? `Case ${i + 1}`)}</td>
-                          <td>
-                            <span className={badgeClass(label)}>{label}</span>
-                          </td>
-                          <td className="mono-cell">{str(c.output ?? c.actual ?? c.stdout)}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+            {!result ? (
+              <PendingNotice status={sub.status} />
+            ) : tab === 'report' ? (
+              <ReportTab
+                reason={result.reason}
+                compileError={full?.compile_error ?? null}
+                infraError={full?.infra_error ?? null}
+                agentError={full?.error ?? null}
+                pointsEarned={full?.points_earned}
+                pointsTotal={full?.points_total}
+                passThresholdPct={full?.pass_threshold_pct}
+                quality={quality ?? null}
+              />
             ) : (
-              <p className="muted">
-                Per-test-case output isn’t wired yet — it lands in the next (backend) pass. Verdict
-                and score above come from the agent’s stored result.
-              </p>
+              <TestsTab cases={cases} />
             )}
           </div>
         </section>
       </div>
+    </div>
+  )
+}
+
+function PendingNotice({ status }: { status: string }) {
+  const body =
+    status === 'error'
+      ? 'The agent could not be reached for this submission, so it was never graded. Retry it from the submissions list.'
+      : 'This submission hasn’t been graded yet. The report appears once the agent calls back.'
+  return <p className="muted">{body}</p>
+}
+
+function ReportTab({
+  reason,
+  compileError,
+  infraError,
+  agentError,
+  pointsEarned,
+  pointsTotal,
+  passThresholdPct,
+  quality,
+}: {
+  reason: string
+  compileError: string | null
+  infraError: string | null
+  agentError: string | null
+  pointsEarned?: number
+  pointsTotal?: number
+  passThresholdPct?: number
+  quality: import('../types').ResultQuality | null
+}) {
+  return (
+    <>
+      <h3>Verdict</h3>
+      <p className="review-summary">{reason}</p>
+
+      {(pointsEarned != null || passThresholdPct != null) && (
+        <div className="kv-row">
+          {pointsEarned != null && pointsTotal != null && (
+            <div className="kv">
+              <span className="k">Points</span>
+              <span className="num">
+                {pointsEarned}/{pointsTotal}
+              </span>
+            </div>
+          )}
+          {passThresholdPct != null && (
+            <div className="kv">
+              <span className="k">Threshold</span>
+              <span className="num">{passThresholdPct}%</span>
+            </div>
+          )}
+          {quality?.time_complexity && (
+            <div className="kv">
+              <span className="k">Complexity</span>
+              <span className="mono">{quality.time_complexity}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {compileError && (
+        <div className="form-error">
+          <strong>Did not compile</strong>
+          <pre className="code">{compileError}</pre>
+        </div>
+      )}
+      {infraError && (
+        <div className="form-error">
+          <strong>Could not evaluate</strong>
+          <pre className="code">{infraError}</pre>
+        </div>
+      )}
+      {agentError && (
+        <div className="form-error">
+          <strong>Agent error</strong>
+          <pre className="code">{agentError}</pre>
+        </div>
+      )}
+
+      {quality ? (
+        <>
+          <h3>AI summary</h3>
+          <p className="review-summary">{quality.summary}</p>
+
+          {quality.strengths.length > 0 && (
+            <>
+              <h3>Strengths</h3>
+              <ul className="bullets">
+                {quality.strengths.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {quality.weaknesses.length > 0 && (
+            <>
+              <h3>Weaknesses</h3>
+              <ul className="bullets">
+                {quality.weaknesses.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {quality.criteria.length > 0 && (
+            <>
+              <h3>Criteria</h3>
+              <div className="card tbl-wrap">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Criterion</th>
+                      <th>Score</th>
+                      <th>Comment</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {quality.criteria.map((c) => (
+                      <tr key={c.name}>
+                        <td className="t-title">{c.name}</td>
+                        <td className="score">{c.score}</td>
+                        <td>{c.comment}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          <p className="cellsub">
+            Quality is advisory — it never affects the verdict or score. Engine: {quality.engine}.
+          </p>
+        </>
+      ) : (
+        <p className="muted">
+          No AI summary for this submission — the judge is skipped when the code doesn’t run.
+        </p>
+      )}
+    </>
+  )
+}
+
+function TestsTab({ cases }: { cases: ResultTestCase[] }) {
+  if (cases.length === 0) {
+    return <p className="muted">No test cases ran for this submission.</p>
+  }
+  return (
+    <div className="card tbl-wrap">
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>Case</th>
+            <th>Result</th>
+            <th>Time</th>
+            <th>Input</th>
+            <th>Expected</th>
+            <th>Actual</th>
+          </tr>
+        </thead>
+        <tbody>
+          {cases.map((c) => (
+            <tr key={c.name}>
+              <td>
+                <div className="t-title">{c.name}</div>
+                <div className="cellsub">
+                  {c.category} · weight {c.weight}
+                </div>
+              </td>
+              <td>
+                <span className={badgeClass(c.status)}>{c.status}</span>
+              </td>
+              <td className="score">{c.duration_s}s</td>
+              <td>
+                <pre className="code cell-pre">{c.input}</pre>
+              </td>
+              <td>
+                <pre className="code cell-pre">{c.expected}</pre>
+              </td>
+              <td>
+                <pre className="code cell-pre">{c.error ? c.error : c.actual}</pre>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

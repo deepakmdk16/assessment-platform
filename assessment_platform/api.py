@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -46,13 +46,21 @@ from .models import (
 from .ratelimit import client_ip, limiter
 from .schemas import (
     CandidateQuestionView,
+    CandidateRunIn,
+    CandidateRunOut,
+    CandidateRunTestsIn,
+    CandidateRunTestsOut,
+    CandidateStartIn,
     CandidateSubmitIn,
     CandidateSubmitOut,
+    CandidateTestOutcomeOut,
     DashboardSubmissionOut,
     InterviewerOut,
     InviteCreate,
+    InviteDeliveryOut,
     InviteOut,
     InvitePublicOut,
+    InviteStatusOut,
     LoginIn,
     QuestionCreate,
     QuestionDraftIn,
@@ -166,7 +174,7 @@ def _invite_url(token: str) -> str:
     return f"{config.FRONTEND_BASE_URL}/t/{token}"
 
 
-def _invite_out(inv: Invite) -> InviteOut:
+def _invite_out(inv: Invite, deliveries: list[email_client.Delivery] | None = None) -> InviteOut:
     return InviteOut(
         token=inv.token,
         url=_invite_url(inv.token),
@@ -174,7 +182,16 @@ def _invite_out(inv: Invite) -> InviteOut:
         recipients=inv.recipients,
         expires_at=inv.expires_at,
         status=inv.status,
+        deliveries=[
+            InviteDeliveryOut(recipient=d.recipient, sent=d.sent, error=d.error)
+            for d in (deliveries or [])
+        ],
     )
+
+
+def _normalize_email(email: str) -> str:
+    """Canonical form for comparing/storing candidate emails (case-insensitive)."""
+    return email.strip().lower()
 
 
 def _is_expired(expires_at: datetime | None) -> bool:
@@ -306,14 +323,20 @@ def create_question(
     return _question_out(q)
 
 
-def _draft_error_message(detail: Any) -> str:
-    """Flatten the agent's error detail into a readable string. A 422 detail is a
-    dict carrying `warnings`; join them so the UI shows the reason."""
+def _agent_detail(exc: httpx.HTTPStatusError) -> str:
+    """The agent's own error reason, flattened to a readable string.
+
+    A draft 422's detail is a dict carrying `warnings`; join them so the UI shows
+    the reason rather than "[object Object]".
+    """
+    try:
+        detail: Any = exc.response.json().get("detail", exc.response.text)
+    except ValueError:
+        detail = exc.response.text
     if isinstance(detail, dict):
         warnings = detail.get("warnings")
         if warnings:
             return "; ".join(str(w) for w in warnings)
-        return str(detail)
     return str(detail)
 
 
@@ -335,14 +358,10 @@ def draft_question(
         )
     except httpx.HTTPStatusError as exc:
         # Surface the agent's own status/reason (503 offline, 422 unusable draft,
-        # 400 bad language) as a readable string. The 422 detail is a dict carrying
-        # `warnings`; flatten it so the UI shows the reason, not "[object Object]".
-        status = exc.response.status_code
-        try:
-            detail = exc.response.json().get("detail", exc.response.text)
-        except ValueError:
-            detail = exc.response.text
-        raise HTTPException(status_code=status, detail=_draft_error_message(detail)) from exc
+        # 400 bad language) so the UI can show what actually went wrong.
+        raise HTTPException(
+            status_code=exc.response.status_code, detail=_agent_detail(exc)
+        ) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"agent unreachable: {exc}") from exc
 
@@ -460,15 +479,20 @@ def create_invite(
         token=secrets.token_urlsafe(32),
         question_id=question_id,
         created_by=current.id,
-        recipients=body.recipients,
+        # Normalize on the way in so the start/submit checks can compare directly.
+        recipients=[_normalize_email(r) for r in body.recipients],
         expires_at=body.expires_at,
     )
     session.add(invite)
     session.commit()
     session.refresh(invite)
-    # Best-effort email of the link to recipients (no-op/logs when SMTP unset).
-    email_client.send_invite_emails(invite.recipients, _invite_url(invite.token), question.title)
-    return _invite_out(invite)
+    # Emailing the link is best-effort — a send failure must not undo an invite
+    # that already exists — but the per-recipient outcome rides back on the
+    # response so the interviewer sees a failure instead of assuming delivery.
+    deliveries = email_client.send_invite_emails(
+        invite.recipients, _invite_url(invite.token), question.title
+    )
+    return _invite_out(invite, deliveries)
 
 
 @app.get("/questions/{question_id}/invites", response_model=list[InviteOut])
@@ -522,9 +546,38 @@ def _load_invite_or_error(token: str, session: Session) -> Invite:
     return invite
 
 
-@app.get("/invite/{token}", response_model=InvitePublicOut)
-def get_invite(token: str, session: Session = Depends(get_session)) -> InvitePublicOut:
-    invite = _load_invite_or_error(token, session)
+def _check_invited(invite: Invite, email: str) -> None:
+    """403 unless `email` is one of the invite's recipients (case-insensitive).
+
+    This binds a link to the people it was sent to: forwarding it to someone else
+    no longer gets them into the assessment. It is an identity *claim*, not proof
+    — anyone holding the link who knows an invited address could still type it —
+    so it stops accidental sharing, not deliberate impersonation. Per-recipient
+    tokens or an emailed OTP would be the stronger form.
+    """
+    if email not in {_normalize_email(r) for r in invite.recipients}:
+        raise HTTPException(
+            status_code=403,
+            detail="this assessment was not sent to that email address.",
+        )
+
+
+def _check_not_already_submitted(invite: Invite, email: str, session: Session) -> None:
+    """409 if `email` already submitted on this invite (one attempt per candidate)."""
+    already = session.exec(
+        select(Submission).where(
+            Submission.invite_id == invite.id,
+            Submission.candidate_email == email,
+        )
+    ).first()
+    if already is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="your assessment has already been recorded for this email address.",
+        )
+
+
+def _candidate_question_view(invite: Invite, session: Session) -> InvitePublicOut:
     q = session.get(Question, invite.question_id)
     if q is None:  # question deleted after the invite was issued
         raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
@@ -539,6 +592,146 @@ def get_invite(token: str, session: Session = Depends(get_session)) -> InvitePub
             time_limit_s=q.time_limit_s,
         ),
         languages=config.SUPPORTED_LANGUAGES,
+    )
+
+
+@app.get("/invite/{token}", response_model=InviteStatusOut)
+def get_invite(token: str, session: Session = Depends(get_session)) -> InviteStatusOut:
+    """Liveness probe for the link: 404 if unknown, 410 if revoked/expired.
+
+    Returns no question data on purpose. The problem is only handed out by
+    `POST /invite/{token}/start`, once the caller has identified as an invited
+    recipient — otherwise the email check below would be decorative, since anyone
+    with the link could just read the question straight off this endpoint.
+    """
+    _load_invite_or_error(token, session)
+    return InviteStatusOut(status="active")
+
+
+@app.post("/invite/{token}/start", response_model=InvitePublicOut)
+def start_invite(
+    token: str,
+    body: CandidateStartIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> InvitePublicOut:
+    """Identify as an invited recipient and receive the question.
+
+    Rate-limited because it is an oracle: without a limit it would let a link
+    holder enumerate which addresses were invited (403 vs 200) or which have
+    already finished (409).
+    """
+    limiter.check(
+        "start", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
+    invite = _load_invite_or_error(token, session)
+    email = _normalize_email(body.candidate_email)
+    _check_invited(invite, email)
+    _check_not_already_submitted(invite, email, session)
+    return _candidate_question_view(invite, session)
+
+
+def _load_invite_for_candidate(token: str, email: str, session: Session) -> tuple[Invite, Question]:
+    """Shared guard for the candidate's in-editor actions (run / run-tests).
+
+    Same gates as /start: the link must be live, the caller must be an invited
+    recipient, and they must not have submitted already. Without this, anyone
+    holding the link could burn agent compute for free.
+    """
+    invite = _load_invite_or_error(token, session)
+    _check_invited(invite, email)
+    _check_not_already_submitted(invite, email, session)
+    question = session.get(Question, invite.question_id)
+    if question is None:
+        raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
+    return invite, question
+
+
+def _agent_run_call(what: str, call: Callable[[], dict]) -> dict:
+    """Invoke a synchronous agent run call, mapping its failures to ours."""
+    try:
+        return call()
+    except httpx.HTTPStatusError as exc:
+        # The agent rejected the request (e.g. unsupported language) — pass its
+        # reason through as a 400 rather than a blank 502.
+        if exc.response.status_code == 400:
+            raise HTTPException(status_code=400, detail=_agent_detail(exc)) from exc
+        raise HTTPException(status_code=502, detail=f"{what} failed: {exc}") from exc
+    except Exception as exc:  # agent unreachable / timed out
+        raise HTTPException(status_code=502, detail=f"{what} failed: {exc}") from exc
+
+
+@app.post("/invite/{token}/run", response_model=CandidateRunOut)
+def candidate_run(
+    token: str,
+    body: CandidateRunIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> CandidateRunOut:
+    """Run the candidate's code against their own stdin and return its output.
+
+    Not a submission: nothing is stored and it does not consume their one
+    attempt. Rate-limited because it is free, unmetered compute on the agent.
+    """
+    limiter.check("run", client_ip(request), config.RUN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S)
+    email = _normalize_email(body.candidate_email)
+    _load_invite_for_candidate(token, email, session)
+
+    result = _agent_run_call(
+        "run", lambda: agent_client.run_code(body.code, body.language, body.stdin)
+    )
+    if result.get("infra_error"):
+        # The agent couldn't run this language at all — our problem, not theirs.
+        raise HTTPException(status_code=502, detail=f"run failed: {result['infra_error']}")
+    return CandidateRunOut(
+        stdout=result.get("stdout", ""),
+        stderr=result.get("stderr"),
+        duration_s=result.get("duration_s", 0.0),
+        timed_out=bool(result.get("timed_out")),
+        compile_error=result.get("compile_error"),
+    )
+
+
+@app.post("/invite/{token}/run-tests", response_model=CandidateRunTestsOut)
+def candidate_run_tests(
+    token: str,
+    body: CandidateRunTestsIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> CandidateRunTestsOut:
+    """Run the question's test suite and report pass/fail per case.
+
+    The candidate's rehearsal before submitting: they learn how many cases pass,
+    never what the cases are. The agent already withholds the I/O on this path;
+    we drop the case *names* too and identify cases positionally, so nothing
+    about the answer key reaches the candidate.
+
+    Not a submission — nothing stored, their attempt is untouched.
+    """
+    limiter.check("run", client_ip(request), config.RUN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S)
+    email = _normalize_email(body.candidate_email)
+    _, question = _load_invite_for_candidate(token, email, session)
+
+    result = _agent_run_call(
+        "run-tests", lambda: agent_client.run_tests(question, body.code, body.language)
+    )
+    if result.get("infra_error"):
+        raise HTTPException(status_code=502, detail=f"run-tests failed: {result['infra_error']}")
+
+    cases = [
+        CandidateTestOutcomeOut(
+            index=i,
+            category=c.get("category", "correctness"),
+            status=c.get("status", "FAIL"),
+            duration_s=c.get("duration_s", 0.0),
+        )
+        for i, c in enumerate(result.get("test_cases", []), start=1)
+    ]
+    return CandidateRunTestsOut(
+        total=len(cases),
+        passed=sum(1 for c in cases if c.status == "PASS"),
+        compile_error=result.get("compile_error"),
+        test_cases=cases,
     )
 
 
@@ -557,20 +750,11 @@ def candidate_submit(
     if question is None:
         raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
 
-    # One submission per email address per invite (decision A). Case-insensitive
-    # so "A@x.com" and "a@x.com" count as the same candidate.
-    email = body.candidate_email.strip().lower()
-    already = session.exec(
-        select(Submission).where(
-            Submission.invite_id == invite.id,
-            Submission.candidate_email == email,
-        )
-    ).first()
-    if already is not None:
-        raise HTTPException(
-            status_code=409,
-            detail="a submission for this email already exists on this invite.",
-        )
+    # Re-check both gates here, not just in /start: the start screen is only UI,
+    # so a caller can POST straight to this route and skip it.
+    email = _normalize_email(body.candidate_email)
+    _check_invited(invite, email)
+    _check_not_already_submitted(invite, email, session)
 
     sub = Submission(
         id=uuid.uuid4().hex,

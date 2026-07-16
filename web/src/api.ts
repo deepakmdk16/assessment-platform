@@ -1,11 +1,14 @@
 import type {
   Invite,
-  InviteGetResponse,
+  InviteStartResponse,
+  InviteStatusResponse,
   LoginResponse,
   QuestionDraftIn,
   QuestionDraftOut,
   QuestionIn,
   QuestionOut,
+  RunResponse,
+  RunTestsResponse,
   SubmissionDetail,
   SubmissionRow,
   SubmitResponse,
@@ -145,7 +148,23 @@ export const api = {
   getSubmission: (submissionId: string) =>
     request<SubmissionDetail>(`/submissions/${submissionId}`, { auth: true }),
 
-  getInvite: (token: string) => request<InviteGetResponse>(`/invite/${token}`),
+  getInvite: (token: string) => request<InviteStatusResponse>(`/invite/${token}`),
+
+  startInvite: (token: string, candidate_email: string) =>
+    request<InviteStartResponse>(`/invite/${token}/start`, {
+      method: 'POST',
+      body: { candidate_email },
+    }),
+
+  runCandidate: (
+    token: string,
+    data: { candidate_email: string; language: string; code: string; stdin: string },
+  ) => request<RunResponse>(`/invite/${token}/run`, { method: 'POST', body: data }),
+
+  runCandidateTests: (
+    token: string,
+    data: { candidate_email: string; language: string; code: string },
+  ) => request<RunTestsResponse>(`/invite/${token}/run-tests`, { method: 'POST', body: data }),
 
   submitCandidate: (
     token: string,

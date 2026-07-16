@@ -1,16 +1,28 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
-import type { Invite, QuestionOut, SubmissionRow } from '../types'
+import type { Invite, InviteDelivery, QuestionOut, SubmissionRow } from '../types'
 
 export function QuestionDetailPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { id } = useParams<{ id: string }>()
   const [question, setQuestion] = useState<QuestionOut | null>(null)
   const [invites, setInvites] = useState<Invite[]>([])
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([])
   const [error, setError] = useState<string | null>(null)
+
+  // Inviting is a deliberate action, so the email field lives in a dialog rather
+  // than sitting on the page implying a question isn't finished without one.
+  // Arriving straight from the wizard we open it once as a nudge — that's the
+  // only time the dismiss button reads "Skip for now" instead of "Cancel".
+  const justCreated = Boolean((location.state as { justCreated?: boolean } | null)?.justCreated)
+  const [inviteOpen, setInviteOpen] = useState(justCreated)
+  // The nudge is one-shot: once dismissed, re-opening the dialog by hand is a
+  // deliberate act, so the dismiss button goes back to reading "Cancel".
+  const [isNudge, setIsNudge] = useState(justCreated)
+  const dialogRef = useRef<HTMLDialogElement>(null)
 
   const [recipients, setRecipients] = useState('')
   const [creatingInvite, setCreatingInvite] = useState(false)
@@ -18,6 +30,10 @@ export function QuestionDetailPage() {
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null)
   const [revokingToken, setRevokingToken] = useState<string | null>(null)
   const [revokeError, setRevokeError] = useState<{ token: string; message: string } | null>(null)
+  // Emailing is best-effort, so a created invite may still not have reached
+  // anyone. Surface that rather than letting the interviewer assume delivery.
+  const [undelivered, setUndelivered] = useState<InviteDelivery[]>([])
+  const [sentTo, setSentTo] = useState<string[]>([])
 
   useEffect(() => {
     if (!id) return
@@ -29,21 +45,54 @@ export function QuestionDetailPage() {
       .catch(() => setError('Failed to load submissions'))
   }, [id])
 
+  // Consume the nudge: history state survives a reload, so without clearing it
+  // the invite dialog would pop open again every time the page is refreshed.
+  // The initial state above already captured it, so this only affects reloads.
+  useEffect(() => {
+    if (justCreated) navigate(location.pathname, { replace: true, state: null })
+  }, [justCreated, navigate, location.pathname])
+
+  // Drive the native <dialog> from state so we get focus trapping, Esc-to-close
+  // and the backdrop without hand-rolling a modal. `question` is a dependency
+  // because the dialog isn't mounted until it loads — without it the post-create
+  // auto-open runs against a null ref and silently never opens.
+  useEffect(() => {
+    const el = dialogRef.current
+    if (!el) return
+    if (inviteOpen && !el.open) el.showModal()
+    if (!inviteOpen && el.open) el.close()
+  }, [inviteOpen, question])
+
+  function closeInviteDialog() {
+    setInviteOpen(false)
+    setIsNudge(false)
+    setInviteError(null)
+    setRecipients('')
+  }
+
   async function handleCreateInvite(e: FormEvent) {
     e.preventDefault()
     if (!id) return
     setInviteError(null)
+    setUndelivered([])
+    setSentTo([])
+    // Accept the comma- or newline-separated list interviewers actually paste.
+    const recipientList = recipients
+      .split(/[,\n]/)
+      .map((r) => r.trim())
+      .filter(Boolean)
+    if (recipientList.length === 0) {
+      // No recipients means no link: it would be one nobody could open.
+      setInviteError('Enter at least one candidate email — the link only works for these addresses.')
+      return
+    }
     setCreatingInvite(true)
     try {
-      const recipientList = recipients
-        .split(/[,\n]/)
-        .map((r) => r.trim())
-        .filter(Boolean)
-      const invite = await api.createInvite(id, {
-        recipients: recipientList.length > 0 ? recipientList : undefined,
-      })
+      const invite = await api.createInvite(id, { recipients: recipientList })
       setInvites((prev) => [invite, ...prev])
-      setRecipients('')
+      setUndelivered(invite.deliveries.filter((d) => !d.sent))
+      setSentTo(invite.deliveries.filter((d) => d.sent).map((d) => d.recipient))
+      closeInviteDialog()
     } catch (err) {
       setInviteError(err instanceof ApiError ? err.message : 'Failed to generate invite')
     } finally {
@@ -227,27 +276,27 @@ export function QuestionDetailPage() {
         <aside className="side">
           <div className="card pad">
             <h3>Invite a candidate</h3>
-            <form className="stack" onSubmit={handleCreateInvite}>
-              <div className="field">
-                <label htmlFor="recipients">Candidate emails (optional)</label>
-                <textarea
-                  id="recipients"
-                  value={recipients}
-                  onChange={(e) => setRecipients(e.target.value)}
-                  placeholder="candidate@example.com"
-                />
-              </div>
-              {inviteError && (
-                <p role="alert" className="form-error">
-                  {inviteError}
+            {sentTo.length > 0 && (
+              <p role="status" className="form-success">
+                Invite sent to {sentTo.join(', ')}.
+              </p>
+            )}
+            {undelivered.length > 0 && (
+              <div role="alert" className="form-warning">
+                <p>
+                  The invite was created, but the email couldn’t be sent to{' '}
+                  {undelivered.map((d) => d.recipient).join(', ')}. Copy the link from the table and
+                  send it another way.
                 </p>
-              )}
-              <button type="submit" className="btn accent block" disabled={creatingInvite}>
-                {creatingInvite ? 'Generating…' : 'Generate coding test'}
-              </button>
-            </form>
+                <p className="cellsub">{undelivered[0].error}</p>
+              </div>
+            )}
+            <button type="button" className="btn accent block" onClick={() => setInviteOpen(true)}>
+              Send invite
+            </button>
             <p className="invite-hint muted">
-              The link is emailed to each candidate. You can also copy it from the table.
+              Each invite link is emailed to the candidates you name, and only works for those
+              addresses. You can also copy it from the table.
             </p>
           </div>
 
@@ -274,6 +323,50 @@ export function QuestionDetailPage() {
           </div>
         </aside>
       </div>
+
+      <dialog
+        ref={dialogRef}
+        className="modal"
+        aria-labelledby="invite-dialog-title"
+        onClose={closeInviteDialog}
+      >
+        <form className="stack" onSubmit={handleCreateInvite}>
+          <h2 id="invite-dialog-title">Send invite</h2>
+          <p className="muted">
+            The link is emailed to each address and only works for them — a candidate has to confirm
+            their email to start.
+          </p>
+          <div className="field">
+            <label htmlFor="recipients">Candidate emails</label>
+            <textarea
+              id="recipients"
+              value={recipients}
+              autoFocus
+              onChange={(e) => setRecipients(e.target.value)}
+              placeholder="alice@example.com, bob@example.com"
+            />
+            <p className="cellsub">Separate multiple addresses with a comma or a new line.</p>
+          </div>
+          {inviteError && (
+            <p role="alert" className="form-error">
+              {inviteError}
+            </p>
+          )}
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="btn sec"
+              onClick={closeInviteDialog}
+              disabled={creatingInvite}
+            >
+              {isNudge ? 'Skip for now' : 'Cancel'}
+            </button>
+            <button type="submit" className="btn accent" disabled={creatingInvite}>
+              {creatingInvite ? 'Sending…' : 'Send invite'}
+            </button>
+          </div>
+        </form>
+      </dialog>
     </div>
   )
 }

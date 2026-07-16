@@ -291,25 +291,92 @@ first. **No backend/agent changes.**
 - Removed orphaned `NavBar.tsx`. Verified: `pytest` untouched; `web`
   typecheck/lint(+guards)/unit (12) + build clean; **E2E 4/4** (helper + one spec
   assertion updated for new heading/notice text). On branch `slice8-ui-overhaul`.
-- **Known limits / follow-ups (all need BACKEND, deferred):** dashboard table has no
-  Difficulty/Status/invite-count columns (no such fields/counts in the API yet);
-  submission-detail per-test-case table is a placeholder until the callback's
-  `full_result` shape is wired; the candidate **Run** button is UI-only (needs a
-  stateless agent "run-against-sample" path).
+- **Known limits / follow-ups (all needed BACKEND):** dashboard table has no
+  Difficulty/Status/invite-count columns (no such fields/counts in the API yet) —
+  **still open**; submission-detail per-test-case table was a placeholder — **fixed in
+  Slice 10**; the candidate **Run** button was UI-only — **fixed in Slice 11**.
+
+**Slice 9–12 done (invite binding, report card, candidate Run, draft robustness,
+2026-07-16).** One branch, `slice9-assessment-workflow`, plus its cross-repo half on
+the Agent's `slice11-run-endpoints`. Closes open item #0 (a) and (b), and the draft
+robustness the user flagged.
+
+- **Slice 9 — invite links are bound to their recipients.** The link was effectively
+  a bearer token for the question: anyone it was forwarded to could open it, read the
+  problem and submit; and a repeat candidate only learned they couldn't retake it
+  *after* writing a solution. Now: invites **require ≥1 recipient** (422 otherwise);
+  new **`POST /invite/{token}/start`** takes the candidate's email, 403s an uninvited
+  address, 409s one who already submitted, and only then returns the question;
+  **`GET /invite/{token}` is a liveness probe carrying no question data** — moving the
+  question behind `/start` is what makes the check real, since otherwise a link holder
+  could read the problem off the probe. `/submit` re-checks both gates (the gate is
+  only UI). **Caveat, by decision:** this is an identity *claim*, not proof — someone
+  who knows an invited address can still type it. Per-recipient tokens or an emailed
+  OTP are the stronger form; chosen deliberately for speed.
+- **Slice 9 — inviting is a deliberate, optional action (user call, 2026-07-16).**
+  Creating a question never required an invite, but the email box sat on the page
+  implying otherwise. It now lives in a **dialog** behind "Send invite": arriving from
+  the wizard opens it once as a nudge (dismiss reads **"Skip for now"**, one-shot —
+  re-opening by hand reads "Cancel"), emails are comma- or newline-separated, and a
+  successful send closes the dialog and confirms who it went to. **No email → no
+  invite link** (the 422 stands): a link naming nobody is one nobody could open, so
+  the binding holds everywhere. Secrets now load from a gitignored **`.env`**
+  (`.env.example` is the template; real env vars still win).
+- **Slice 9 — invite email actually reports itself.** `send_invite_emails` now sends
+  per recipient (one bad address no longer costs the others their invite) and returns
+  a `Delivery` each; `InviteOut.deliveries[]` carries it on create and the UI warns
+  when a send failed. Sending stays best-effort (a dead mail server must not undo an
+  invite that exists), but silent non-delivery is gone. **Still needs real SMTP creds
+  to actually reach a candidate** — see README → "Sending invite emails (SMTP)".
+- **Slice 10 — the interviewer report card renders.** The per-test table never worked:
+  `extractCases()` probed `full_result` for `test_results`/`tests`/`results`/`cases`/
+  `checks`, but the agent's key is **`test_cases`** — so it always fell to the "not
+  wired yet" placeholder. The data had been stored verbatim since Slice 1; nothing
+  read it. Now typed (`AgentFullResult`/`ResultTestCase`/`ResultQuality`) and rendered:
+  verdict, points, threshold, compile/infra errors, AI summary + strengths/weaknesses/
+  criteria, and every case's input/expected/actual/status/timing. **No backend change
+  was needed.** The E2E mock agent's callback was thinner than the real one — that
+  drift is what let a broken card pass CI — so it now mirrors `result_to_dict`.
+- **Slice 11 — candidate Run + Run against test cases** (cross-repo). Agent Phase A:
+  **`POST /run`** (execute once against caller stdin) and **`POST /run/tests`** (suite;
+  **pass/fail only**, no I/O). Platform Phase B: `POST /invite/{token}/run` and
+  `.../run-tests`, gated exactly like `/start` (else the link is free agent compute),
+  rate-limited on their own bucket (`RUN_RATE_LIMIT_MAX`; run-tests is a pass/fail
+  oracle for reverse-engineering the suite), and redacting further — **case names are
+  dropped** (a name like `handles_duplicates` is itself a hint); cases are positional,
+  "Test 1", like HackerRank. Neither route creates a Submission or spends the one
+  attempt. UI: a **custom-input box** (what LeetCode/HackerRank actually do — an
+  interactive terminal would need a persistent container + PTY per session, which this
+  architecture doesn't have), output console, and a pass/fail strip.
+- **Slice 12 — draft failures degrade gracefully.** Two retries, deliberately distinct:
+  the **agent** re-drafts when its own output is unusable (`ASSESS_DRAFT_ATTEMPTS`=2 —
+  the model is stochastic, so a reference that won't compile is usually a one-off); the
+  **platform** retries only what a retry could fix (agent unreachable / 429 / 5xx) and
+  **fails fast on 503 (no API key), 422 (already re-drafted) and 400** — retrying those
+  just makes the interviewer wait for the same error. `AGENT_DRAFT_TIMEOUT_S` raised
+  120→240s to cover the agent's internal attempts. UI gives a **Try again** button and
+  a message that says whether retrying can help.
+- **The C++ `.hpp` failure is fixed at its source** (agent): the runner compiles exactly
+  one translation unit (`g++ main.cpp`), so a reference split across a header could
+  never build — nothing had told the model that. The drafting prompt now states the
+  single-file rule.
+- Verified: `pytest` **87**, ruff+mypy clean; agent `pytest` **115**, ruff+mypy clean;
+  `web` typecheck/lint/unit **30** + build clean; **Playwright 7/7**.
+- **Local-dev hazard worth knowing:** Playwright's `reuseExistingServer` is on locally,
+  so a **stale `platform-api` on :9000 or a real `assess-api` on :8000 from an earlier
+  session gets silently reused** — the suite then runs against old code / the real agent
+  and fails confusingly. `lsof -ti:8000,9000,5173 | xargs kill -9` before a local run.
 
 **Open items (pick up here — each its own session):**
-0. **NEXT SESSION — backend-focused (user's plan, 2026-07-16).** The UI redesign
-   (Slice 8) is done & frontend-only. The user paused here to resume with **backend
-   work**: (a) **invite email actually reaching the candidate** — the wiring exists
-   (`email_client.send_invite_emails`) but only logs the link without SMTP; verify /
-   configure SMTP so the candidate receives it (see "The one thing not wired" note
-   below and README SMTP_* env). (b) **"new cards" (features) + new backend APIs** —
-   the user will specify; likely candidates: real per-test-case results on the
-   submission-detail page (finalise the `full_result` contract + expose it), a
-   question **difficulty/status** field to fill the dashboard columns, and a Run
-   endpoint. (c) **strengthen existing features with more robust test cases**
-   (backend pytest + `web` unit/E2E). Keep the Slice-8 styling contract: new UI
-   goes through tokens/semantic classes, no inline styles/hex.
+0. **Backend work — mostly done (Slices 9–12, 2026-07-16).** (a) invite email —
+   **wiring done**: per-recipient delivery is reported and surfaced, but it still
+   **needs real SMTP credentials configured** to reach a candidate (README →
+   "Sending invite emails (SMTP)"); pick a provider and verify a live send.
+   (b) new features/APIs — **done**: real per-test-case results on the report card
+   (Slice 10) and the Run endpoints (Slice 11). (c) more robust tests — done for the
+   new surface (+62 tests across both repos). **Still open from the original list:**
+   a question **difficulty/status** field to fill the dashboard's empty columns
+   (needs a model + migration).
 1. **Frontend UX polish** — **done (Slice 6):** add-question wizard, dashboard
    polish, and the revoke-error placement nit all shipped.
 2. **Prod hardening.** EmailStr + Alembic **done (Slice 6).** Remaining:
