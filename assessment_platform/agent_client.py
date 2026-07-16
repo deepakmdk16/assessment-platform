@@ -1,12 +1,18 @@
 """Outbound integration with the (stateless) Assessment Agent.
 
-Builds the agent's `POST /assessments` request from a stored question + a
-submission, triggers the job, and returns the agent's `job_id`. This is the only
-place that talks to the agent; tests mock `httpx.post` here to run offline.
+The only place that talks to the agent; tests mock these functions to run
+offline. Four calls, of which exactly one grades:
 
-The request shape matches the agent's `AssessmentRequest` exactly (question dict
-with a nested `example: {input, output}`, plus code/language/candidate/
-callback_url/email_to).
+- `trigger_assessment` — the grading job (async: the agent 202s, then calls back).
+- `draft_question`     — the authoring assistant (synchronous, LLM-backed).
+- `run_code`           — execute once against the candidate's own stdin.
+- `run_tests`          — run the question's suite; pass/fail per case only.
+
+The last two are the candidate's editor buttons: synchronous, non-grading, and
+they store nothing on either side.
+
+Request shapes match the agent's pydantic models exactly (the question dict
+carries a nested `example: {input, output}`).
 """
 
 from __future__ import annotations
@@ -14,8 +20,15 @@ from __future__ import annotations
 import httpx
 
 from . import config
-from .config import AGENT_BASE_URL, AGENT_DRAFT_TIMEOUT_S, AGENT_TIMEOUT_S
+from .config import AGENT_BASE_URL, AGENT_DRAFT_TIMEOUT_S, AGENT_RUN_TIMEOUT_S, AGENT_TIMEOUT_S
 from .models import Question, Submission
+
+
+def _auth_headers() -> dict[str, str]:
+    """Our shared secret, sent only when configured (dev/tests run without)."""
+    if config.ASSESS_API_TOKEN:
+        return {config.AUTH_HEADER: config.ASSESS_API_TOKEN}
+    return {}
 
 
 def build_question_payload(question: Question) -> dict:
@@ -69,11 +82,56 @@ def draft_question(
         "difficulty": difficulty,
         "target_complexity": target_complexity,
     }
-    headers = {}
-    if config.ASSESS_API_TOKEN:
-        headers[config.AUTH_HEADER] = config.ASSESS_API_TOKEN
     resp = httpx.post(
-        f"{base_url}/questions/draft", json=body, headers=headers, timeout=AGENT_DRAFT_TIMEOUT_S
+        f"{base_url}/questions/draft",
+        json=body,
+        headers=_auth_headers(),
+        timeout=AGENT_DRAFT_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    result: dict = resp.json()
+    return result
+
+
+def run_code(
+    code: str,
+    language: str,
+    stdin: str,
+    base_url: str = AGENT_BASE_URL,
+) -> dict:
+    """Execute `code` once against `stdin` on the agent; return what it printed.
+
+    The candidate's "Run" button. Synchronous and non-grading: no verdict, no
+    LLM, nothing stored on either side. Raises on transport/HTTP error.
+    """
+    body = {"code": code, "language": language, "stdin": stdin}
+    resp = httpx.post(
+        f"{base_url}/run", json=body, headers=_auth_headers(), timeout=AGENT_RUN_TIMEOUT_S
+    )
+    resp.raise_for_status()
+    result: dict = resp.json()
+    return result
+
+
+def run_tests(
+    question: Question,
+    code: str,
+    language: str,
+    base_url: str = AGENT_BASE_URL,
+) -> dict:
+    """Run `code` against the question's tests; return pass/fail per case.
+
+    The candidate's "Run against test cases" rehearsal. The agent returns no
+    input/expected/actual on this path, and the caller redacts further before
+    it reaches the candidate. Raises on transport/HTTP error.
+    """
+    body = {
+        "question": build_question_payload(question),
+        "code": code,
+        "language": language,
+    }
+    resp = httpx.post(
+        f"{base_url}/run/tests", json=body, headers=_auth_headers(), timeout=AGENT_RUN_TIMEOUT_S
     )
     resp.raise_for_status()
     result: dict = resp.json()
@@ -95,10 +153,8 @@ def trigger_assessment(
         "callback_url": callback_url,
         "email_to": None,
     }
-    # Send our shared secret only when configured (backward-compatible with dev/tests).
-    headers = {}
-    if config.ASSESS_API_TOKEN:
-        headers[config.AUTH_HEADER] = config.ASSESS_API_TOKEN
-    resp = httpx.post(f"{base_url}/assessments", json=body, headers=headers, timeout=AGENT_TIMEOUT_S)
+    resp = httpx.post(
+        f"{base_url}/assessments", json=body, headers=_auth_headers(), timeout=AGENT_TIMEOUT_S
+    )
     resp.raise_for_status()
     return resp.json()["job_id"]

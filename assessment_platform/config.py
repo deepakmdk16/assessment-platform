@@ -33,6 +33,12 @@ AGENT_TIMEOUT_S = float(os.getenv("AGENT_TIMEOUT_S", "10.0"))
 # of seconds).
 AGENT_DRAFT_TIMEOUT_S = float(os.getenv("AGENT_DRAFT_TIMEOUT_S", "120.0"))
 
+# Timeout (seconds) for the SYNCHRONOUS candidate run calls (`/run`, `/run/tests`).
+# These compile and execute code inline before responding, so they need more than
+# the 10s accept budget — but far less than a draft (no LLM). The agent bounds each
+# execution with its own per-case time limit; this is the outer transport budget.
+AGENT_RUN_TIMEOUT_S = float(os.getenv("AGENT_RUN_TIMEOUT_S", "60.0"))
+
 # Shared-secret auth, matching the agent's contract exactly. Both sides use the
 # `X-Assess-Token` header; enforcement is per-token and only active when the
 # relevant env var is set (unset => no auth, for dev/tests).
@@ -88,6 +94,11 @@ SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
 RATE_LIMIT_WINDOW_S = int(os.getenv("RATE_LIMIT_WINDOW_S", "60"))
 LOGIN_RATE_LIMIT_MAX = int(os.getenv("LOGIN_RATE_LIMIT_MAX", "10"))
 SUBMIT_RATE_LIMIT_MAX = int(os.getenv("SUBMIT_RATE_LIMIT_MAX", "20"))
+# Candidate Run / Run-against-tests. Higher than submit (a candidate iterates
+# many times in a sitting) but still capped: these execute untrusted code on the
+# agent for free, and run-tests is a pass/fail oracle — unlimited, it would let
+# someone reverse-engineer the test suite one guess at a time.
+RUN_RATE_LIMIT_MAX = int(os.getenv("RUN_RATE_LIMIT_MAX", "60"))
 
 # Languages offered to candidates (UI-facing; the agent enforces what it supports).
 SUPPORTED_LANGUAGES = [

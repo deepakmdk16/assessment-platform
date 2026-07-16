@@ -119,6 +119,35 @@ export interface SubmitResponse {
   status: string
 }
 
+/** `POST /invite/{token}/run` — the candidate's code against their own stdin. */
+export interface RunResponse {
+  stdout: string
+  stderr: string | null
+  duration_s: number
+  timed_out: boolean
+  compile_error: string | null
+}
+
+/**
+ * One test case as the candidate may see it: pass/fail and timing only.
+ * No name, input, expected or actual — that's the answer key, and it's stripped
+ * server-side (the agent doesn't even send it on this path).
+ */
+export interface CandidateTestOutcome {
+  index: number
+  category: TestCaseCategory
+  status: ResultCaseStatus
+  duration_s: number
+}
+
+/** `POST /invite/{token}/run-tests` — the pre-submit rehearsal. */
+export interface RunTestsResponse {
+  total: number
+  passed: number
+  compile_error: string | null
+  test_cases: CandidateTestOutcome[]
+}
+
 export interface SubmissionRow {
   submission_id: string
   candidate_name: string

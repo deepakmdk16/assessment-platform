@@ -1104,6 +1104,43 @@ button.tab:hover {
   font-size: 0.85rem;
 }
 
+/* Headline of the run-against-tests result ("3 of 5 test cases passed"). */
+.run-summary {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin: 0 0 0.6rem;
+}
+
+.run-summary.good {
+  color: var(--color-good);
+}
+
+/* One row per test case: label, status chip, timing. Deliberately carries no
+   input/expected — the candidate sees pass/fail only. */
+.test-strip {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.test-strip li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+.test-strip-name {
+  flex: 1;
+  font-weight: 500;
+}
+
 .console-body pre {
   margin: 0.25rem 0 0.75rem;
 }

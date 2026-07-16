@@ -7,6 +7,8 @@ import type {
   QuestionDraftOut,
   QuestionIn,
   QuestionOut,
+  RunResponse,
+  RunTestsResponse,
   SubmissionDetail,
   SubmissionRow,
   SubmitResponse,
@@ -153,6 +155,16 @@ export const api = {
       method: 'POST',
       body: { candidate_email },
     }),
+
+  runCandidate: (
+    token: string,
+    data: { candidate_email: string; language: string; code: string; stdin: string },
+  ) => request<RunResponse>(`/invite/${token}/run`, { method: 'POST', body: data }),
+
+  runCandidateTests: (
+    token: string,
+    data: { candidate_email: string; language: string; code: string },
+  ) => request<RunTestsResponse>(`/invite/${token}/run-tests`, { method: 'POST', body: data }),
 
   submitCandidate: (
     token: string,

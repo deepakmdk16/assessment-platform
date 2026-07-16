@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -46,9 +46,14 @@ from .models import (
 from .ratelimit import client_ip, limiter
 from .schemas import (
     CandidateQuestionView,
+    CandidateRunIn,
+    CandidateRunOut,
+    CandidateRunTestsIn,
+    CandidateRunTestsOut,
     CandidateStartIn,
     CandidateSubmitIn,
     CandidateSubmitOut,
+    CandidateTestOutcomeOut,
     DashboardSubmissionOut,
     InterviewerOut,
     InviteCreate,
@@ -318,14 +323,20 @@ def create_question(
     return _question_out(q)
 
 
-def _draft_error_message(detail: Any) -> str:
-    """Flatten the agent's error detail into a readable string. A 422 detail is a
-    dict carrying `warnings`; join them so the UI shows the reason."""
+def _agent_detail(exc: httpx.HTTPStatusError) -> str:
+    """The agent's own error reason, flattened to a readable string.
+
+    A draft 422's detail is a dict carrying `warnings`; join them so the UI shows
+    the reason rather than "[object Object]".
+    """
+    try:
+        detail: Any = exc.response.json().get("detail", exc.response.text)
+    except ValueError:
+        detail = exc.response.text
     if isinstance(detail, dict):
         warnings = detail.get("warnings")
         if warnings:
             return "; ".join(str(w) for w in warnings)
-        return str(detail)
     return str(detail)
 
 
@@ -347,14 +358,10 @@ def draft_question(
         )
     except httpx.HTTPStatusError as exc:
         # Surface the agent's own status/reason (503 offline, 422 unusable draft,
-        # 400 bad language) as a readable string. The 422 detail is a dict carrying
-        # `warnings`; flatten it so the UI shows the reason, not "[object Object]".
-        status = exc.response.status_code
-        try:
-            detail = exc.response.json().get("detail", exc.response.text)
-        except ValueError:
-            detail = exc.response.text
-        raise HTTPException(status_code=status, detail=_draft_error_message(detail)) from exc
+        # 400 bad language) so the UI can show what actually went wrong.
+        raise HTTPException(
+            status_code=exc.response.status_code, detail=_agent_detail(exc)
+        ) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"agent unreachable: {exc}") from exc
 
@@ -622,6 +629,110 @@ def start_invite(
     _check_invited(invite, email)
     _check_not_already_submitted(invite, email, session)
     return _candidate_question_view(invite, session)
+
+
+def _load_invite_for_candidate(token: str, email: str, session: Session) -> tuple[Invite, Question]:
+    """Shared guard for the candidate's in-editor actions (run / run-tests).
+
+    Same gates as /start: the link must be live, the caller must be an invited
+    recipient, and they must not have submitted already. Without this, anyone
+    holding the link could burn agent compute for free.
+    """
+    invite = _load_invite_or_error(token, session)
+    _check_invited(invite, email)
+    _check_not_already_submitted(invite, email, session)
+    question = session.get(Question, invite.question_id)
+    if question is None:
+        raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
+    return invite, question
+
+
+def _agent_run_call(what: str, call: Callable[[], dict]) -> dict:
+    """Invoke a synchronous agent run call, mapping its failures to ours."""
+    try:
+        return call()
+    except httpx.HTTPStatusError as exc:
+        # The agent rejected the request (e.g. unsupported language) — pass its
+        # reason through as a 400 rather than a blank 502.
+        if exc.response.status_code == 400:
+            raise HTTPException(status_code=400, detail=_agent_detail(exc)) from exc
+        raise HTTPException(status_code=502, detail=f"{what} failed: {exc}") from exc
+    except Exception as exc:  # agent unreachable / timed out
+        raise HTTPException(status_code=502, detail=f"{what} failed: {exc}") from exc
+
+
+@app.post("/invite/{token}/run", response_model=CandidateRunOut)
+def candidate_run(
+    token: str,
+    body: CandidateRunIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> CandidateRunOut:
+    """Run the candidate's code against their own stdin and return its output.
+
+    Not a submission: nothing is stored and it does not consume their one
+    attempt. Rate-limited because it is free, unmetered compute on the agent.
+    """
+    limiter.check("run", client_ip(request), config.RUN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S)
+    email = _normalize_email(body.candidate_email)
+    _load_invite_for_candidate(token, email, session)
+
+    result = _agent_run_call(
+        "run", lambda: agent_client.run_code(body.code, body.language, body.stdin)
+    )
+    if result.get("infra_error"):
+        # The agent couldn't run this language at all — our problem, not theirs.
+        raise HTTPException(status_code=502, detail=f"run failed: {result['infra_error']}")
+    return CandidateRunOut(
+        stdout=result.get("stdout", ""),
+        stderr=result.get("stderr"),
+        duration_s=result.get("duration_s", 0.0),
+        timed_out=bool(result.get("timed_out")),
+        compile_error=result.get("compile_error"),
+    )
+
+
+@app.post("/invite/{token}/run-tests", response_model=CandidateRunTestsOut)
+def candidate_run_tests(
+    token: str,
+    body: CandidateRunTestsIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> CandidateRunTestsOut:
+    """Run the question's test suite and report pass/fail per case.
+
+    The candidate's rehearsal before submitting: they learn how many cases pass,
+    never what the cases are. The agent already withholds the I/O on this path;
+    we drop the case *names* too and identify cases positionally, so nothing
+    about the answer key reaches the candidate.
+
+    Not a submission — nothing stored, their attempt is untouched.
+    """
+    limiter.check("run", client_ip(request), config.RUN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S)
+    email = _normalize_email(body.candidate_email)
+    _, question = _load_invite_for_candidate(token, email, session)
+
+    result = _agent_run_call(
+        "run-tests", lambda: agent_client.run_tests(question, body.code, body.language)
+    )
+    if result.get("infra_error"):
+        raise HTTPException(status_code=502, detail=f"run-tests failed: {result['infra_error']}")
+
+    cases = [
+        CandidateTestOutcomeOut(
+            index=i,
+            category=c.get("category", "correctness"),
+            status=c.get("status", "FAIL"),
+            duration_s=c.get("duration_s", 0.0),
+        )
+        for i, c in enumerate(result.get("test_cases", []), start=1)
+    ]
+    return CandidateRunTestsOut(
+        total=len(cases),
+        passed=sum(1 for c in cases if c.status == "PASS"),
+        compile_error=result.get("compile_error"),
+        test_cases=cases,
+    )
 
 
 @app.post("/invite/{token}/submit", response_model=CandidateSubmitOut, status_code=201)

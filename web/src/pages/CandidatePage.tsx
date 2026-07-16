@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
-import type { InviteStartResponse, Language } from '../types'
+import { badgeClass } from '../badges'
+import type { InviteStartResponse, Language, RunResponse, RunTestsResponse } from '../types'
 
 type Stage =
   | 'loading'
@@ -30,7 +31,11 @@ export function CandidatePage() {
   const [submitting, setSubmitting] = useState(false)
 
   const [consoleTab, setConsoleTab] = useState<'testcase' | 'result'>('testcase')
-  const [runNote, setRunNote] = useState<string | null>(null)
+  const [stdin, setStdin] = useState('')
+  const [running, setRunning] = useState<'run' | 'tests' | null>(null)
+  const [runResult, setRunResult] = useState<RunResponse | null>(null)
+  const [testsResult, setTestsResult] = useState<RunTestsResponse | null>(null)
+  const [runError, setRunError] = useState<string | null>(null)
 
   // Probe the link only — the question isn't served until the gate below proves
   // the visitor is one of the invited recipients.
@@ -75,11 +80,35 @@ export function CandidatePage() {
     }
   }
 
-  function handleRun() {
+  /** Shared plumbing for the two non-grading actions. Neither consumes the
+   *  candidate's single submission attempt. */
+  async function doRun(which: 'run' | 'tests') {
+    if (!token || !language) return
+    setRunError(null)
+    setRunResult(null)
+    setTestsResult(null)
     setConsoleTab('result')
-    setRunNote(
-      'Running against the sample is coming soon. Use Submit to grade your solution against the full test suite.',
-    )
+    setRunning(which)
+    try {
+      if (which === 'run') {
+        setRunResult(
+          await api.runCandidate(token, { candidate_email: candidateEmail, language, code, stdin }),
+        )
+      } else {
+        setTestsResult(
+          await api.runCandidateTests(token, { candidate_email: candidateEmail, language, code }),
+        )
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) setStage('already_submitted')
+      else if (err instanceof ApiError && (err.status === 410 || err.status === 404))
+        setStage('expired')
+      else if (err instanceof ApiError && err.status === 429)
+        setRunError('Too many runs in a short time. Wait a moment and try again.')
+      else setRunError(err instanceof ApiError ? err.message : 'Failed to run your code')
+    } finally {
+      setRunning(null)
+    }
   }
 
   async function handleSubmitCode(e: FormEvent) {
@@ -269,18 +298,37 @@ export function CandidatePage() {
             </div>
             <div className="console-body">
               {consoleTab === 'testcase' ? (
-                hasExample ? (
-                  <>
-                    <span className="io-label">Input</span>
-                    <pre className="code">{q?.example_input}</pre>
-                    <span className="io-label">Expected</span>
-                    <pre className="code">{q?.example_output}</pre>
-                  </>
-                ) : (
-                  <p className="muted">No sample test case provided for this problem.</p>
-                )
+                <>
+                  {hasExample && (
+                    <>
+                      <span className="io-label">Sample input</span>
+                      <pre className="code">{q?.example_input}</pre>
+                      <span className="io-label">Sample output</span>
+                      <pre className="code">{q?.example_output}</pre>
+                    </>
+                  )}
+                  <div className="field">
+                    <label htmlFor="stdin">Your input (stdin)</label>
+                    <textarea
+                      id="stdin"
+                      className="mono"
+                      rows={4}
+                      value={stdin}
+                      onChange={(e) => setStdin(e.target.value)}
+                      placeholder={q?.example_input ?? 'Type the input your program reads…'}
+                    />
+                  </div>
+                  <p className="cellsub">
+                    Run feeds this to your program on standard input.
+                  </p>
+                </>
               ) : (
-                <p className="muted">{runNote ?? 'Run your code to see output here.'}</p>
+                <ConsoleResult
+                  running={running}
+                  error={runError}
+                  run={runResult}
+                  tests={testsResult}
+                />
               )}
             </div>
           </div>
@@ -291,10 +339,23 @@ export function CandidatePage() {
                 {submitError}
               </p>
             )}
-            <button type="button" className="btn sec" onClick={handleRun}>
-              Run
+            <button
+              type="button"
+              className="btn sec"
+              onClick={() => doRun('run')}
+              disabled={running !== null || submitting || !code}
+            >
+              {running === 'run' ? 'Running…' : 'Run'}
             </button>
-            <button type="submit" className="btn submit" disabled={submitting}>
+            <button
+              type="button"
+              className="btn sec"
+              onClick={() => doRun('tests')}
+              disabled={running !== null || submitting || !code}
+            >
+              {running === 'tests' ? 'Running tests…' : 'Run against test cases'}
+            </button>
+            <button type="submit" className="btn submit" disabled={submitting || running !== null}>
               {submitting ? 'Submitting…' : 'Submit'}
             </button>
           </form>
@@ -302,6 +363,95 @@ export function CandidatePage() {
       </div>
     </div>
   )
+}
+
+/** The console's Result tab: output from Run, or the pass/fail strip from
+ *  Run-against-test-cases. The candidate sees counts and statuses only — never
+ *  a case's input or expected output. */
+function ConsoleResult({
+  running,
+  error,
+  run,
+  tests,
+}: {
+  running: 'run' | 'tests' | null
+  error: string | null
+  run: RunResponse | null
+  tests: RunTestsResponse | null
+}) {
+  if (running) return <p className="muted">Running…</p>
+  if (error)
+    return (
+      <p role="alert" className="form-error">
+        {error}
+      </p>
+    )
+
+  if (run) {
+    if (run.compile_error)
+      return (
+        <>
+          <span className="io-label">Compile error</span>
+          <pre className="code">{run.compile_error}</pre>
+        </>
+      )
+    if (run.timed_out)
+      return (
+        <p className="form-warning">
+          Your program ran out of time before it finished. It may be stuck waiting for input, or
+          too slow.
+        </p>
+      )
+    return (
+      <>
+        <span className="io-label">Output</span>
+        <pre className="code">{run.stdout || '(no output)'}</pre>
+        {run.stderr && (
+          <>
+            <span className="io-label">Errors</span>
+            <pre className="code">{run.stderr}</pre>
+          </>
+        )}
+        <p className="cellsub">Finished in {run.duration_s}s</p>
+      </>
+    )
+  }
+
+  if (tests) {
+    if (tests.compile_error)
+      return (
+        <>
+          <span className="io-label">Compile error</span>
+          <pre className="code">{tests.compile_error}</pre>
+        </>
+      )
+    const allPassed = tests.passed === tests.total && tests.total > 0
+    return (
+      <>
+        <p className={allPassed ? 'run-summary good' : 'run-summary'}>
+          {tests.passed} of {tests.total} test cases passed
+        </p>
+        <ul className="test-strip">
+          {tests.test_cases.map((c) => (
+            <li key={c.index}>
+              <span className="test-strip-name">
+                Test {c.index}
+                {c.category === 'performance' && <span className="cellsub"> · performance</span>}
+              </span>
+              <span className={badgeClass(c.status)}>{c.status}</span>
+              <span className="cellsub">{c.duration_s}s</span>
+            </li>
+          ))}
+        </ul>
+        <p className="cellsub">
+          These are the same tests used for grading. The inputs aren’t shown — Submit when you’re
+          ready to record your attempt.
+        </p>
+      </>
+    )
+  }
+
+  return <p className="muted">Run your code to see output here.</p>
 }
 
 function CandidateNotice({ title, body }: { title: string; body: string }) {

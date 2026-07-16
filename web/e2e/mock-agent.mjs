@@ -130,6 +130,45 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  // Non-grading run paths (the candidate's editor). Deterministic stand-ins for
+  // the real agent's execution: echo something plausible rather than running code.
+  if (req.method === 'POST' && req.url === '/run') {
+    let body = {}
+    try {
+      body = JSON.parse(await readBody(req))
+    } catch {
+      // tolerate a malformed body
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        stdout: `mock-run-output for stdin: ${(body.stdin ?? '').trim() || '(empty)'}`,
+        stderr: null,
+        duration_s: 0.01,
+        timed_out: false,
+        compile_error: null,
+        infra_error: null,
+      }),
+    )
+    return
+  }
+
+  if (req.method === 'POST' && req.url === '/run/tests') {
+    // Mirrors the real agent's redaction: status only, never input/expected/actual.
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        compile_error: null,
+        infra_error: null,
+        test_cases: [
+          { name: 'basic', category: 'correctness', status: 'PASS', duration_s: 0.01 },
+          { name: 'large', category: 'performance', status: 'FAIL', duration_s: 0.5 },
+        ],
+      }),
+    )
+    return
+  }
+
   if (req.method === 'POST' && req.url === '/assessments') {
     let body = {}
     try {
