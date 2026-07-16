@@ -130,11 +130,73 @@ export interface SubmissionRow {
   created_at: string
 }
 
+/** How one test case came out. Mirrors the agent's runner outcome. */
+export type ResultCaseStatus = 'PASS' | 'FAIL' | 'TLE'
+
+export interface ResultTestCase {
+  name: string
+  category: TestCaseCategory
+  weight: number
+  status: ResultCaseStatus
+  input: string
+  expected: string
+  actual: string
+  duration_s: number
+  timed_out: boolean
+  error: string | null
+}
+
+export interface QualityCriterion {
+  name: string
+  score: number
+  comment: string
+}
+
+export interface ResultQuality {
+  engine: string
+  time_complexity: string
+  meets_time_constraints: boolean
+  overall_score: number
+  criteria: QualityCriterion[]
+  strengths: string[]
+  weaknesses: string[]
+  summary: string
+}
+
+/**
+ * The agent's callback payload (its `result_to_dict`), which the platform stores
+ * verbatim in `full_result` — it never reshapes or recomputes it.
+ *
+ * Every field is optional on purpose: this is a faithful record of whatever the
+ * agent sent, and a failed job calls back with an error-shaped payload instead
+ * ({ job_id, status, error }). Treat anything here as possibly absent.
+ */
+export interface AgentFullResult {
+  question_id?: string
+  question_title?: string
+  language?: string
+  verdict?: string
+  reason?: string
+  score_pct?: number
+  points_earned?: number
+  points_total?: number
+  pass_threshold_pct?: number
+  compile_error?: string | null
+  infra_error?: string | null
+  test_cases?: ResultTestCase[]
+  quality?: ResultQuality | null
+  judge_cost_usd?: number | null
+  adversarial?: unknown
+  /** Present only on the agent's error callback. */
+  error?: string
+  status?: string
+}
+
 export interface SubmissionResult {
   verdict: string
   score_pct: number
   reason: string
-  full_result: Record<string, unknown>
+  full_result: AgentFullResult
   received_at: string
 }
 

@@ -27,13 +27,62 @@ function readBody(req) {
   })
 }
 
+// Mirrors the real agent's `result_to_dict` (assessment_agent/agent.py) — the
+// platform stores this verbatim as `full_result` and the interviewer's report
+// card reads it field by field. Keep the SHAPE in step with the real agent: a
+// thinner mock is what let a broken report card pass E2E once already.
 async function fireCallback(callbackUrl, jobId) {
   const payload = {
     job_id: jobId,
+    question_id: 'mock-question',
+    question_title: 'Mock question',
+    language: 'python',
     verdict: 'PASS',
-    score_pct: 100.0,
     reason: 'mock agent: all tests passed',
-    summary: 'Mock grade for E2E.',
+    score_pct: 100.0,
+    points_earned: 2,
+    points_total: 2,
+    pass_threshold_pct: 90.0,
+    compile_error: null,
+    infra_error: null,
+    test_cases: [
+      {
+        name: 'basic',
+        category: 'correctness',
+        weight: 1.0,
+        status: 'PASS',
+        input: 'mock-input-1',
+        expected: 'mock-expected-1',
+        actual: 'mock-expected-1',
+        duration_s: 0.01,
+        timed_out: false,
+        error: null,
+      },
+      {
+        name: 'large',
+        category: 'performance',
+        weight: 1.0,
+        status: 'PASS',
+        input: 'mock-input-2',
+        expected: 'mock-expected-2',
+        actual: 'mock-expected-2',
+        duration_s: 0.2,
+        timed_out: false,
+        error: null,
+      },
+    ],
+    quality: {
+      engine: 'mock-agent',
+      time_complexity: 'O(n)',
+      meets_time_constraints: true,
+      overall_score: 9,
+      criteria: [{ name: 'Readability', score: 9, comment: 'Mock criterion comment.' }],
+      strengths: ['Mock strength: handles edge cases.'],
+      weaknesses: ['Mock weakness: no input validation.'],
+      summary: 'Mock grade for E2E.',
+    },
+    judge_cost_usd: null,
+    adversarial: null,
   }
   const headers = { 'Content-Type': 'application/json' }
   if (CALLBACK_TOKEN) headers['X-Assess-Token'] = CALLBACK_TOKEN
