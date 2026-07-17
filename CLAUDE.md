@@ -33,6 +33,11 @@ deterministic grade.
   `npm run lint`, `npm run test`.
 - The agent must be running (`../AssesmentAgent`: `uv run assess-api`, `:8000`)
   for submissions to actually grade end-to-end.
+- **serena needs activating before use.** The global `~/.claude/CLAUDE.md` §7
+  requires serena for symbol lookup, but it starts with no active project and the
+  first call errors out — the silent fallback is the whole-file `Read` §7 exists to
+  prevent. Call `activate_project("assessment-platform")` before the first symbol
+  lookup of a session. (`.serena/` is gitignored, so this is per-clone.)
 
 ## Architecture (where things live)
 
