@@ -91,6 +91,15 @@ CORS_ORIGINS = [
 # `registration_code` in the body (403 otherwise). Unset => open sign-up (dev).
 REGISTRATION_CODE = os.getenv("REGISTRATION_CODE") or None
 
+# Whether to believe X-Forwarded-For when identifying the caller for rate limits.
+# Behind a reverse proxy or load balancer every request arrives from the PROXY's
+# address, so all callers collapse into one shared bucket and the first few
+# exhaust the limit for everyone. Reading the forwarded header fixes that — but it
+# is client-supplied and trivially forged, so it is only trustworthy when a proxy
+# you control is guaranteed to rewrite it. OFF by default: correct for the direct
+# uvicorn dev setup, and safe (not permissive) if a deploy forgets to set it.
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true"
+
 # SMTP for emailing invite links. When SMTP_HOST is unset the mailer logs the
 # link instead of sending (dev/tests), so nothing here is required to run.
 SMTP_HOST = os.getenv("SMTP_HOST") or None
@@ -106,6 +115,15 @@ SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
 RATE_LIMIT_WINDOW_S = int(os.getenv("RATE_LIMIT_WINDOW_S", "60"))
 LOGIN_RATE_LIMIT_MAX = int(os.getenv("LOGIN_RATE_LIMIT_MAX", "10"))
 SUBMIT_RATE_LIMIT_MAX = int(os.getenv("SUBMIT_RATE_LIMIT_MAX", "20"))
+# Sign-up. Login was capped but register wasn't, and sign-up is OPEN whenever
+# REGISTRATION_CODE is unset (the default) — so anyone could mint accounts in bulk,
+# and every account reaches the LLM-backed draft endpoint below.
+REGISTER_RATE_LIMIT_MAX = int(os.getenv("REGISTER_RATE_LIMIT_MAX", "5"))
+# Question drafting: the ONLY endpoint that spends real LLM money, and each call
+# can hold a worker thread for AGENT_DRAFT_TIMEOUT_S (default 240s). Uncapped it is
+# both a billing hole and a way to exhaust the thread pool. Generous enough for
+# real authoring (a draft takes tens of seconds), low enough to stop a loop.
+DRAFT_RATE_LIMIT_MAX = int(os.getenv("DRAFT_RATE_LIMIT_MAX", "10"))
 # Candidate Run / Run-against-tests. Higher than submit (a candidate iterates
 # many times in a sitting) but still capped: these execute untrusted code on the
 # agent for free, and run-tests is a pass/fail oracle — unlimited, it would let

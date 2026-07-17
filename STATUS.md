@@ -14,6 +14,13 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
 - **Question `difficulty` / `status` field.** The dashboard has no Difficulty/Status
   columns because the model/API has no such fields. Needs a model field + Alembic
   migration + wizard UI.
+- **Set `TRUST_PROXY_HEADERS=true` when deploying behind a proxy.** The rate
+  limiters key on the caller's address; behind a proxy that is the *proxy* for
+  every request, collapsing every bucket into one shared counter (the first few
+  callers 429 everyone else). The support exists and defaults OFF — safe for the
+  direct dev setup, wrong the moment there's a load balancer in front. Not code:
+  a deploy-time checklist item. Chained proxies (CDN → LB) need `client_ip()`
+  revisited, as it trusts exactly one hop.
 - **HMAC body-signing (cross-repo, deferred).** Hardens the shared-secret
   agent↔platform auth. Must land on **both** sides in one coordinated slice (the
   Agent grows the verify counterpart) or the platform side is inert.

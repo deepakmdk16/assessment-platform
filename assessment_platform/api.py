@@ -218,10 +218,33 @@ def health() -> dict:
 # --------------------------------------------------------------------------- #
 
 
+def _secret_matches(provided: str | None, expected: str) -> bool:
+    """Constant-time comparison of a caller-supplied secret against the real one.
+
+    `==` on secrets returns as soon as two bytes differ, so how long the reject
+    takes leaks how much of the prefix was right, and a patient caller can rebuild
+    the secret one byte at a time. The shared agent token and the sign-up code are
+    both long-lived, so neither should be compared that way.
+    """
+    if provided is None:
+        return False
+    return secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+
+
 @app.post("/auth/register", response_model=InterviewerOut, status_code=201)
-def register(body: RegisterIn, session: Session = Depends(get_session)) -> InterviewerOut:
+def register(
+    body: RegisterIn, request: Request, session: Session = Depends(get_session)
+) -> InterviewerOut:
+    # Login was rate-limited but this wasn't, and sign-up is open unless
+    # REGISTRATION_CODE is set — so this was the unmetered way to mint the accounts
+    # that reach the paid draft endpoint.
+    limiter.check(
+        "register", client_ip(request), config.REGISTER_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
     # Gated sign-up: when a registration code is configured, require a match.
-    if config.REGISTRATION_CODE and body.registration_code != config.REGISTRATION_CODE:
+    if config.REGISTRATION_CODE and not _secret_matches(
+        body.registration_code, config.REGISTRATION_CODE
+    ):
         raise HTTPException(status_code=403, detail="invalid or missing registration code.")
     existing = session.exec(
         select(Interviewer).where(Interviewer.email == body.email)
@@ -343,12 +366,22 @@ def _agent_detail(exc: httpx.HTTPStatusError) -> str:
 @app.post("/questions/draft", response_model=QuestionDraftOut)
 def draft_question(
     body: QuestionDraftIn,
+    request: Request,
     current: Interviewer = Depends(get_current_interviewer),
 ) -> QuestionDraftOut:
     """Draft a question from a brief via the agent. Stateless: stores NOTHING —
     the interviewer reviews/edits the returned draft and then saves it through the
     normal POST /questions path (the platform never stores an unvalidated question).
+
+    Rate-limited because it is the one endpoint that spends real money: every call
+    runs an LLM on the agent. Bearer auth alone is not a budget — sign-up is open
+    unless REGISTRATION_CODE is set, so "authenticated" was free to obtain. Each
+    call can also hold a worker thread for the full draft timeout, so an uncapped
+    loop exhausts the pool as well as the bill.
     """
+    limiter.check(
+        "draft", client_ip(request), config.DRAFT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
     try:
         payload = agent_client.draft_question(
             brief=body.brief,
@@ -933,7 +966,7 @@ def _require_callback_token(x_assess_token: str | None = Header(default=None)) -
     Runs as a route dependency so a bad/missing token 401s BEFORE any job_id logic.
     """
     expected = config.CALLBACK_TOKEN
-    if expected and x_assess_token != expected:
+    if expected and not _secret_matches(x_assess_token, expected):
         raise HTTPException(status_code=401, detail=f"invalid or missing {config.AUTH_HEADER}.")
 
 
