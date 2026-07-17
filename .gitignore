@@ -11,3 +11,9 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .serena/
+
+# Per-developer Claude Code permission allowlist. `.claude/settings.json` (the
+# shared policy, e.g. the .env deny) IS tracked; this one is local noise.
+# Previously only ignored via a personal global gitignore, so a fresh clone would
+# have committed it.
+.claude/settings.local.json
