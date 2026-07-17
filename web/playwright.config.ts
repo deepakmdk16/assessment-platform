@@ -48,9 +48,14 @@ export default defineConfig({
         DATABASE_URL: 'sqlite:///./e2e-platform.db',
         // Vite may report its Origin as either host; allow both.
         CORS_ORIGINS: `${FRONTEND_URL},http://localhost:5173`,
-        // Disable rate limits so a run of many logins/submits can't flake.
+        // Disable rate limits so a run of many logins/submits can't flake. Every
+        // bucket must be listed by name: a limiter added later defaults to ON, and
+        // an E2E run does in one window what a human would spread over a day.
         LOGIN_RATE_LIMIT_MAX: '0',
         SUBMIT_RATE_LIMIT_MAX: '0',
+        REGISTER_RATE_LIMIT_MAX: '0',
+        DRAFT_RATE_LIMIT_MAX: '0',
+        RUN_RATE_LIMIT_MAX: '0',
         HOST: '127.0.0.1',
         PORT: '9000',
       },

@@ -5,6 +5,7 @@ routes. Fully offline (agent mocked)."""
 from __future__ import annotations
 
 from conftest import register_interviewer  # pytest adds tests/ to sys.path
+from fastapi import Request
 from fastapi.testclient import TestClient
 from test_slice1 import _auth, _make_invite, _sample_question
 
@@ -66,6 +67,62 @@ def test_login_rate_limited(anon_client: TestClient, monkeypatch) -> None:
     assert anon_client.post("/auth/login", json=body).status_code == 200
     assert anon_client.post("/auth/login", json=body).status_code == 200
     assert anon_client.post("/auth/login", json=body).status_code == 429
+
+
+def _register_body(n: int) -> dict[str, str]:
+    return {"email": f"bulk{n}@x.io", "password": "pw", "name": "Bulk"}
+
+
+def test_register_rate_limited(anon_client: TestClient, monkeypatch) -> None:
+    """Sign-up is open by default, so uncapped it mints accounts that reach /draft."""
+    monkeypatch.setattr(config, "REGISTER_RATE_LIMIT_MAX", 2)
+    assert anon_client.post("/auth/register", json=_register_body(1)).status_code == 201
+    assert anon_client.post("/auth/register", json=_register_body(2)).status_code == 201
+    # A third DISTINCT account from the same address is refused: the cap is on
+    # minting accounts, not on retrying one.
+    assert anon_client.post("/auth/register", json=_register_body(3)).status_code == 429
+
+
+def _fake_draft(**_kwargs: object) -> dict[str, object]:
+    return {
+        "question": {"id": "q1", "title": "T", "prompt": "P", "constraints": "", "test_cases": []},
+        "warnings": [],
+        "engine": "test",
+    }
+
+
+def test_draft_rate_limited(anon_client: TestClient, monkeypatch) -> None:
+    """/questions/draft is the only endpoint that spends real LLM money."""
+    monkeypatch.setattr(config, "DRAFT_RATE_LIMIT_MAX", 1)
+    monkeypatch.setattr(agent_client, "draft_question", _fake_draft)
+    tok = register_interviewer(anon_client, "draft-rl@x.io")
+    body = {"brief": "sum of n", "language": "python"}
+
+    assert anon_client.post("/questions/draft", json=body, headers=_auth(tok)).status_code == 200
+    # A bearer token is not a budget — the same authenticated caller is capped.
+    assert anon_client.post("/questions/draft", json=body, headers=_auth(tok)).status_code == 429
+
+
+def _request_from(forwarded: str | None, peer: str = "10.0.0.1") -> Request:
+    headers = [(b"x-forwarded-for", forwarded.encode())] if forwarded else []
+    return Request({"type": "http", "headers": headers, "client": (peer, 12345)})
+
+
+def test_client_ip_ignores_forwarded_header_by_default() -> None:
+    """X-Forwarded-For is client-supplied: believing it unasked would let anyone
+    hand themselves a fresh rate-limit bucket per request."""
+    assert config.TRUST_PROXY_HEADERS is False  # the safe default
+    assert client_ip(_request_from("1.2.3.4")) == "10.0.0.1"
+
+
+def test_client_ip_uses_rightmost_forwarded_hop_when_trusted(monkeypatch) -> None:
+    """Only the rightmost hop is trustworthy — the proxy appends the peer it saw,
+    so anything to its left arrived from the client and may be forged."""
+    monkeypatch.setattr(config, "TRUST_PROXY_HEADERS", True)
+    # "<forged by the caller>, <appended by our proxy>"
+    assert client_ip(_request_from("9.9.9.9, 1.2.3.4")) == "1.2.3.4"
+    # Trusted but no header (direct hit past the proxy) -> fall back to the peer.
+    assert client_ip(_request_from(None)) == "10.0.0.1"
 
 
 def test_candidate_submit_rate_limited(anon_client: TestClient, monkeypatch) -> None:
