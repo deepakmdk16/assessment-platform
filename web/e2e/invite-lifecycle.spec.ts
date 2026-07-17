@@ -96,7 +96,12 @@ test('revoking an invite blocks the candidate link (410)', async ({ page, browse
   // Revoke via the invites table (the confirm() dialog auto-accepts).
   page.on('dialog', (dialog) => dialog.accept())
   await page.getByRole('button', { name: 'Revoke' }).click()
-  await expect(page.getByRole('cell', { name: 'revoked' })).toBeVisible()
+  // `exact` matters: getByRole matches the accessible name by SUBSTRING, and this
+  // invite's recipient cell reads "revoked@example.com". Without it the assertion
+  // is satisfied by the recipient cell the moment the row renders — so it passes
+  // without the status ever changing, and then breaks with a strict-mode violation
+  // once the status cell says "revoked" too and both match.
+  await expect(page.getByRole('cell', { name: 'revoked', exact: true })).toBeVisible()
 
   // The candidate now hits the terminal "no longer active" screen.
   const context = await browser.newContext()
