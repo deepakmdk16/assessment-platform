@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from . import agent_client, config, email_client
@@ -457,7 +457,27 @@ def delete_question(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> None:
+    """Delete a question and its invites/test cases. 409 if anyone has submitted.
+
+    Submissions are the system of record — cascading them away would destroy the
+    thing this service exists to keep, and every candidate's result with it. So a
+    question with recorded attempts is not deletable; the invites can be revoked
+    instead. Invites and test cases carry no independent record and go with it.
+    """
     q = _owned_question(question_id, current, session)
+    # COUNT, not a fetch: the rows carry the candidates' full code blobs and we
+    # only need to know whether any exist.
+    submission_count = session.exec(
+        select(func.count()).select_from(Submission).where(Submission.question_id == question_id)
+    ).one()
+    if submission_count:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot delete question {question_id!r}: {submission_count} submission(s) "
+                "are recorded against it. Revoke its invites instead."
+            ),
+        )
     session.delete(q)
     session.commit()
 

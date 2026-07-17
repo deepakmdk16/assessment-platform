@@ -6,8 +6,13 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+import pytest
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session
 
 from assessment_platform import agent_client, config
+from assessment_platform import db as db_module
+from assessment_platform.models import Submission
 
 
 def _sample_question(qid: str = "sum_of_n") -> dict[str, Any]:
@@ -92,6 +97,74 @@ def test_question_crud_roundtrip(client) -> None:
 
 def test_get_missing_question_404(client) -> None:
     assert client.get("/questions/nope").status_code == 404
+
+
+def test_delete_question_with_submissions_409(client, monkeypatch) -> None:
+    """A question someone has submitted against is not deletable.
+
+    Submissions are the system of record. Cascading them away with the question
+    would destroy the very thing the platform exists to keep — and every result
+    attached to it — so the delete is refused instead.
+    """
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-del")
+    sub_id = client.post(
+        "/submissions",
+        json={
+            "question_id": "sum_of_n",
+            "candidate": "Jane Doe",
+            "language": "python",
+            "code": "print(1)",
+        },
+    ).json()["id"]
+
+    resp = client.delete("/questions/sum_of_n")
+    assert resp.status_code == 409
+    assert "submission" in resp.json()["detail"]
+
+    # Refused, not half-done: both the question and the submission survive intact.
+    assert client.get("/questions/sum_of_n").status_code == 200
+    assert client.get(f"/submissions/{sub_id}").status_code == 200
+
+
+def test_delete_question_cascades_invites(client) -> None:
+    """Invites go with their question rather than lingering as orphans.
+
+    An invite is only a link to a question, so it carries no record worth keeping
+    once the question is gone — but left behind it would point at a row that no
+    longer exists.
+    """
+    client.post("/questions", json=_sample_question())
+    token = client.post(
+        "/questions/sum_of_n/invites", json={"recipients": ["candidate@test.io"]}
+    ).json()["token"]
+    assert client.get(f"/invite/{token}").status_code == 200
+
+    assert client.delete("/questions/sum_of_n").status_code == 204
+    assert client.get(f"/invite/{token}").status_code == 404
+
+
+def test_sqlite_foreign_keys_are_enforced(anon_client) -> None:
+    """SQLite must reject a row pointing at a question that doesn't exist.
+
+    SQLite ignores foreign keys unless the pragma is on, while Postgres — the
+    production target — always enforces them. Without this, a write that orphans
+    rows passes every local test and then fails in prod. `anon_client` is here to
+    point `db_module.engine` at the test DB.
+    """
+    with Session(db_module.engine) as session:
+        session.add(
+            Submission(
+                id="orphan",
+                question_id="no_such_question",
+                candidate="Nobody",
+                language="python",
+                code="print(1)",
+                status="pending",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
 
 
 def test_pass_threshold_must_be_a_fraction(client) -> None:

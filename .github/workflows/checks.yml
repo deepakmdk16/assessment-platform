@@ -1,0 +1,51 @@
+name: Checks
+
+# The offline gate: pytest / ruff / mypy, the web build+typecheck+lint+unit
+# suite, and the secret scan. This is the same `scripts/checkpoints.sh` the
+# local pre-push hook runs — deliberately invoked rather than re-listed here, so
+# there is exactly one definition of "the gates" and CI cannot drift from what
+# runs on your machine.
+#
+# The local hook is skippable (`--no-verify`) and absent on a fresh clone until
+# `scripts/install-hooks.sh` is run; this workflow is neither. Playwright E2E
+# stays in its own workflow (e2e.yml) — checkpoints.sh leaves it opt-in behind
+# RUN_E2E, and CI gates it separately.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv (installs Python from pyproject)
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend deps
+        run: uv sync
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # checkpoints.sh runs `npm run typecheck/lint/test/build` in web/ and
+      # assumes node_modules is already there.
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: web
+
+      - name: Run checkpoints (pytest, ruff, mypy, web gates, secret scan)
+        run: bash scripts/checkpoints.sh
