@@ -19,6 +19,10 @@ deterministic grade.
   Styling is **token-driven**: all appearance lives in `web/src/styles/` (a restyle
   edits CSS, never `.tsx`). No inline `style=` / hex in components — enforced by
   `npm run lint`. See CONVENTIONS.md → "Styling".
+  **New UI feature / non-trivial visual change → mockup first.** Build a static
+  mockup (use the `artifact-design` skill) and get sign-off **before** editing
+  `.tsx` — don't iterate live in the running app. Skip for token tweaks, copy
+  changes, or one-liners.
 
 ## Stack & how to run
 
@@ -93,17 +97,16 @@ aborts the push; E2E stays opt-in via `RUN_E2E=1` (CI already gates it). Gates
 3. `/code-review` (or a self-review of the diff) has been run.
 4. New endpoints have tests that run **offline** (mock the agent call; no network,
    no real LLM).
-5. **[ROADMAP.md](ROADMAP.md) is updated** to reflect what this slice shipped —
-   mark the finished open item done (or narrow it to what remains) and record the
-   new slice. The roadmap must never lag the code.
+5. **[STATUS.md](STATUS.md) is updated** — remove any item this change closes and
+   add any new follow-up it opens. It tracks only pending work; history is `git
+   log`, so a detailed commit message is the changelog.
 
-## Status & roadmap
+## Status & next
 
-Current status, the slice-by-slice changelog, and the open-items backlog live in
-[ROADMAP.md](ROADMAP.md) — moved out of this file so CLAUDE.md stays lean and
-loads cheaply every session. **Pre-push checkpoint #5 applies to ROADMAP.md:**
-update it in the same commit that shifts the work; trim merged slices to one line
-(git history holds the detail).
+Pending / next work lives in [STATUS.md](STATUS.md) — a short, **open-items-only**
+list. Feature *history* is `git log` (commits are per-slice and detailed), not a
+changelog file. **Pre-push checkpoint #5 applies to STATUS.md:** update it in the
+same commit that opens or closes an item.
 
 ## Companion repo
 
