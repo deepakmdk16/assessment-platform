@@ -7,10 +7,12 @@ cases and return a submission-plus-result view without leaking ORM internals.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+from .models import as_utc
 
 Category = Literal["correctness", "performance"]
 
@@ -164,6 +166,19 @@ class InviteCreate(BaseModel):
     # no recipients would be a link nobody could ever use.
     recipients: list[EmailStr] = Field(min_length=1)
     expires_at: datetime | None = None
+
+    @field_validator("expires_at")
+    @classmethod
+    def _expiry_in_future(cls, v: datetime | None) -> datetime | None:
+        # A past expiry produces an invite that 410s the instant it's opened —
+        # silently, and only after every recipient has already been emailed the
+        # link. Reject it at the boundary, using the same naive->UTC rule as the
+        # runtime expiry check (models.as_utc) so the two never disagree.
+        if v is None:
+            return v
+        if as_utc(v) <= datetime.now(timezone.utc):
+            raise ValueError("expires_at must be in the future")
+        return v
 
 
 class InviteDeliveryOut(BaseModel):

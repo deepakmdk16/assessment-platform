@@ -95,8 +95,3 @@ have *not* fixed yet:
   status reads `running` until someone presses F5, so the product's payoff moment
   needs a manual refresh. Poll `GET /submissions/{id}` while pending/running.
   Mockup-first per CLAUDE.md.
-- **Small cleanup (one batch).** `expires_at` accepts a past datetime → an invite
-  that 410s on arrival, silently, *after* emailing every recipient. `assert x is not
-  None` is load-bearing control flow in register/login/create_question/create_invite
-  (`python -O` strips asserts). CORS `allow_credentials=True` is unnecessary — the JWT
-  rides in a header, not a cookie.
