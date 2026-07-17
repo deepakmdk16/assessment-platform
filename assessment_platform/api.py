@@ -25,6 +25,7 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from . import agent_client, config, email_client
@@ -616,8 +617,20 @@ def _check_invited(invite: Invite, email: str) -> None:
         )
 
 
+# Both the pre-insert check and the unique-constraint backstop answer a duplicate
+# attempt identically — the candidate must not be able to tell which one caught
+# them, and one message means the two cannot drift apart.
+_ALREADY_SUBMITTED_DETAIL = "your assessment has already been recorded for this email address."
+
+
 def _check_not_already_submitted(invite: Invite, email: str, session: Session) -> None:
-    """409 if `email` already submitted on this invite (one attempt per candidate)."""
+    """409 if `email` already submitted on this invite (one attempt per candidate).
+
+    The fast path only: it is a SELECT before an INSERT, so it cannot stop two
+    concurrent submits from both passing. The `uq_submission_invite_candidate`
+    constraint is what actually enforces the rule; this just turns the common,
+    uncontended case into a clean 409 instead of a caught IntegrityError.
+    """
     already = session.exec(
         select(Submission).where(
             Submission.invite_id == invite.id,
@@ -625,10 +638,7 @@ def _check_not_already_submitted(invite: Invite, email: str, session: Session) -
         )
     ).first()
     if already is not None:
-        raise HTTPException(
-            status_code=409,
-            detail="your assessment has already been recorded for this email address.",
-        )
+        raise HTTPException(status_code=409, detail=_ALREADY_SUBMITTED_DETAIL)
 
 
 def _candidate_question_view(invite: Invite, session: Session) -> InvitePublicOut:
@@ -821,7 +831,14 @@ def candidate_submit(
         status="pending",
     )
     session.add(sub)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        # Lost the race: a concurrent submit for this (invite, candidate) committed
+        # between our check above and this insert, and the unique constraint caught
+        # what the check structurally cannot. Same answer either way — one attempt.
+        session.rollback()
+        raise HTTPException(status_code=409, detail=_ALREADY_SUBMITTED_DETAIL) from exc
     session.refresh(sub)
 
     sub = _trigger_agent(session, question, sub)

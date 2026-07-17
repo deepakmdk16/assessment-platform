@@ -13,7 +13,7 @@ auto-bumps on any UPDATE via SQLAlchemy `onupdate` (see `_updated_at`).
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -96,6 +96,17 @@ class Invite(SQLModel, table=True):
 
 
 class Submission(SQLModel, table=True):
+    # One attempt per candidate per invite, enforced by the DATABASE. The
+    # pre-insert check in `candidate_submit` is a SELECT followed by an INSERT, so
+    # two concurrent submits both pass it and both write — the "one attempt" rule
+    # was advisory until this constraint existed. NULLs compare as distinct in SQL
+    # (both SQLite and Postgres), so the interviewer's direct POST /submissions
+    # path — which has no invite_id or candidate_email — stays unconstrained, which
+    # is the intent: it is not a candidate attempt.
+    __table_args__ = (
+        UniqueConstraint("invite_id", "candidate_email", name="uq_submission_invite_candidate"),
+    )
+
     id: str = Field(primary_key=True)  # uuid hex, assigned in the route
     question_id: str = Field(foreign_key="question.id", index=True)
     # Set when the submission came in through a candidate invite link (nullable so
