@@ -14,6 +14,13 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
 - **Question `difficulty` / `status` field.** The dashboard has no Difficulty/Status
   columns because the model/API has no such fields. Needs a model field + Alembic
   migration + wizard UI.
+- **Archive (soft-delete) a question that has submissions.** `DELETE /questions/{id}`
+  now 409s once anything has been submitted against it, because submissions are the
+  record and must not be cascaded away — so an interviewer has no way to retire an
+  old question. An `archived` status that hides it from the dashboard while keeping
+  its submissions is the intended path; folds into the `difficulty`/`status` item
+  above. (`api.deleteQuestion` exists in `web/src/api.ts` but has no call site, so
+  no UI surfaces the 409 today.)
 - **HMAC body-signing (cross-repo, deferred).** Hardens the shared-secret
   agent↔platform auth. Must land on **both** sides in one coordinated slice (the
   Agent grows the verify counterpart) or the platform side is inert.

@@ -10,12 +10,34 @@ arg is silently dropped for non-SQLite URLs, so the Postgres swap stays URL-only
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
+from typing import Any
 
+from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, SQLModel, create_engine
 
 from .config import DATABASE_URL
+
+
+@event.listens_for(Engine, "connect")
+def _sqlite_enforce_foreign_keys(dbapi_connection: Any, _connection_record: Any) -> None:
+    """Turn on SQLite's foreign-key enforcement (it is OFF by default, per connection).
+
+    Without this, SQLite accepts writes that violate a foreign key and silently
+    leaves orphan rows, while Postgres — the production target — rejects the same
+    write. That difference means a delete/insert path can pass every local test and
+    then fail in production, so dev must enforce what prod enforces.
+
+    Registered on the Engine *class*, not inside `make_engine`, so it also covers
+    engines built directly (the test fixture makes its own). Non-SQLite drivers are
+    left alone by the isinstance check, so the Postgres swap stays URL-only.
+    """
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 def make_engine(url: str = DATABASE_URL) -> Engine:

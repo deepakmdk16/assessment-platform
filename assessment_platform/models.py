@@ -57,6 +57,14 @@ class Question(SQLModel, table=True):
         back_populates="question",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )
+    # An invite is just a link to this question — it is meaningless once the
+    # question is gone, so it goes with it. Submissions are deliberately NOT
+    # cascaded: they are the system of record, so a question that has any is
+    # refused deletion instead (see `delete_question`).
+    invites: list["Invite"] = Relationship(
+        back_populates="question",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
 
 
 class QuestionTestCase(SQLModel, table=True):
@@ -83,6 +91,8 @@ class Invite(SQLModel, table=True):
     status: str = "active"
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
+
+    question: Question | None = Relationship(back_populates="invites")
 
 
 class Submission(SQLModel, table=True):
