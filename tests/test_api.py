@@ -210,6 +210,23 @@ def test_create_submission_mocks_agent(client, monkeypatch) -> None:
     assert captured["callback_url"].endswith("/assessments/callback")
 
 
+def test_direct_submissions_are_not_constrained_by_the_invite_unique(client, monkeypatch) -> None:
+    """`uq_submission_invite_candidate` must not touch the interviewer's own path.
+
+    POST /submissions carries no invite_id and no candidate_email, and NULLs
+    compare as distinct in SQL, so any number of direct submissions coexist — they
+    are not candidate attempts. Asserted rather than assumed: if NULLs ever stopped
+    being distinct, the second insert here would 409 instead.
+    """
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    body = {"question_id": "sum_of_n", "candidate": "Jane Doe", "language": "python", "code": "x"}
+
+    assert client.post("/submissions", json=body).status_code == 201
+    assert client.post("/submissions", json=body).status_code == 201
+    assert len(client.get("/submissions").json()) == 2
+
+
 def test_submission_unknown_question_404(client, monkeypatch) -> None:
     monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "x")
     resp = client.post(
