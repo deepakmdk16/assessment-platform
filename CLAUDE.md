@@ -293,8 +293,9 @@ first. **No backend/agent changes.**
   assertion updated for new heading/notice text). On branch `slice8-ui-overhaul`.
 - **Known limits / follow-ups (all needed BACKEND):** dashboard table has no
   Difficulty/Status/invite-count columns (no such fields/counts in the API yet) —
-  **still open**; submission-detail per-test-case table was a placeholder — **fixed in
-  Slice 10**; the candidate **Run** button was UI-only — **fixed in Slice 11**.
+  **still open, now open item #7**; submission-detail per-test-case table was a
+  placeholder — **fixed in Slice 10**; the candidate **Run** button was UI-only —
+  **fixed in Slice 11**.
 
 **Slice 9–12 done (invite binding, report card, candidate Run, draft robustness,
 2026-07-16).** One branch, `slice9-assessment-workflow`, plus its cross-repo half on
@@ -326,8 +327,11 @@ robustness the user flagged.
   per recipient (one bad address no longer costs the others their invite) and returns
   a `Delivery` each; `InviteOut.deliveries[]` carries it on create and the UI warns
   when a send failed. Sending stays best-effort (a dead mail server must not undo an
-  invite that exists), but silent non-delivery is gone. **Still needs real SMTP creds
-  to actually reach a candidate** — see README → "Sending invite emails (SMTP)".
+  invite that exists), but silent non-delivery is gone. **Live-verified against Gmail
+  SMTP (2026-07-16)** — see the live-verification note below. Setup: README → "Sending
+  invite emails (SMTP)". **Known gap:** `deliveries[]` is returned on create but **not
+  stored**, so after a reload there's no record of who was actually emailed (see open
+  item #6).
 - **Slice 10 — the interviewer report card renders.** The per-test table never worked:
   `extractCases()` probed `full_result` for `test_results`/`tests`/`results`/`cases`/
   `checks`, but the agent's key is **`test_cases`** — so it always fell to the "not
@@ -360,23 +364,35 @@ robustness the user flagged.
   one translation unit (`g++ main.cpp`), so a reference split across a header could
   never build — nothing had told the model that. The drafting prompt now states the
   single-file rule.
-- Verified: `pytest` **87**, ruff+mypy clean; agent `pytest` **115**, ruff+mypy clean;
-  `web` typecheck/lint/unit **30** + build clean; **Playwright 7/7**.
+- Verified offline: `pytest` **87**, ruff+mypy clean; agent `pytest` **115**, ruff+mypy
+  clean; `web` typecheck/lint/unit **30** + build clean; **Playwright 9/9**.
+- **LIVE browser verification DONE (user-driven, 2026-07-16)** — real Gmail SMTP (app
+  password), real agent, both feature branches, since merged (platform PR #9 → `main`
+  `dcfdfae`; agent PR #7 → `main` `9b9451e`). Confirmed by hand: (1) invite email
+  **received** by a single recipient, and only the named email can open the link;
+  (2) **multi-recipient** comma-separated invite delivered to both; (3) candidate
+  **Run** with custom stdin and **Run against test cases** both work in the editor;
+  (4) a candidate who already submitted is refused at **Start**; (5) **Cancel** after
+  an accidental "Send invite" creates nothing. One reported "multi-recipient email not
+  received" was **not a bug** — the DB showed the invite was addressed to
+  `deepakmadire@…` (the SMTP sender account) rather than the intended `deepakmdk16@…`,
+  i.e. a typo; the comma-split had stored two clean, correct entries. That episode is
+  what surfaced open item #6: a mistyped-but-valid address reports `sent: true`
+  truthfully, and with no stored delivery record there was no way to audit it after.
 - **Local-dev hazard worth knowing:** Playwright's `reuseExistingServer` is on locally,
   so a **stale `platform-api` on :9000 or a real `assess-api` on :8000 from an earlier
   session gets silently reused** — the suite then runs against old code / the real agent
   and fails confusingly. `lsof -ti:8000,9000,5173 | xargs kill -9` before a local run.
 
 **Open items (pick up here — each its own session):**
-0. **Backend work — mostly done (Slices 9–12, 2026-07-16).** (a) invite email —
-   **wiring done**: per-recipient delivery is reported and surfaced, but it still
-   **needs real SMTP credentials configured** to reach a candidate (README →
-   "Sending invite emails (SMTP)"); pick a provider and verify a live send.
-   (b) new features/APIs — **done**: real per-test-case results on the report card
-   (Slice 10) and the Run endpoints (Slice 11). (c) more robust tests — done for the
-   new surface (+62 tests across both repos). **Still open from the original list:**
-   a question **difficulty/status** field to fill the dashboard's empty columns
-   (needs a model + migration).
+0. **Backend work — DONE (Slices 9–12, merged 2026-07-16).** (a) invite email —
+   **done and live-verified**: candidates receive the link over real Gmail SMTP,
+   single and multi-recipient (setup: README → "Sending invite emails (SMTP)"; the
+   sender's app password lives in a gitignored `.env` / shell export, never in the
+   repo). (b) new features/APIs — **done**: real per-test-case results on the report
+   card (Slice 10) and the Run endpoints (Slice 11). (c) more robust tests — done for
+   the new surface (+62 tests across both repos). **What's left is now items #6 and #7
+   below** (both need a model + Alembic migration, and pair naturally).
 1. **Frontend UX polish** — **done (Slice 6):** add-question wizard, dashboard
    polish, and the revoke-error placement nit all shipped.
 2. **Prod hardening.** EmailStr + Alembic **done (Slice 6).** Remaining:
@@ -414,6 +430,18 @@ robustness the user flagged.
    422) + live re-verify. See the "`pass_threshold` unit mismatch — FIXED" note in
    the Slice 7 status above. (No edit page exists yet; when one is added it must do
    the same `×100`/`÷100` conversion.)
+6. **Persist invite delivery status (NEXT, 2026-07-16).** `deliveries[]` is returned
+   on the create response only — nothing stores it — so a reload loses it and there is
+   **no audit trail of who was actually emailed**. Surfaced during a live
+   investigation: the DB could say who an invite was *addressed to*, but not whether
+   the send *succeeded*. Matters for real hiring use, because a mistyped-but-valid
+   address reports `sent: true` truthfully and is otherwise indistinguishable from
+   success. Needs a model (delivery rows or a JSON column on `Invite`) + an Alembic
+   migration, and the invites table should show per-recipient status. Pairs with #7.
+7. **Question `difficulty` / `status` field (NEXT).** The dashboard table has no
+   Difficulty/Status columns because no such fields exist in the model/API (the
+   Slice-8 UI left the columns out for this reason). Needs a model field + Alembic
+   migration + wizard UI. The last item from the original Slice-8 follow-up list.
 
 ## Companion repo
 
