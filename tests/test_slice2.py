@@ -8,7 +8,7 @@ from conftest import register_interviewer  # pytest adds tests/ to sys.path
 from fastapi.testclient import TestClient
 from test_slice1 import _auth, _make_invite, _sample_question
 
-from assessment_platform import agent_client, config, email_client
+from assessment_platform import agent_client, api, config, email_client
 
 
 def _submit(client: TestClient, token: str, email: str, name: str = "Cand") -> object:
@@ -119,6 +119,34 @@ def test_one_submission_per_email(anon_client: TestClient, monkeypatch) -> None:
     assert _submit(anon_client, inv["token"], "JANE@x.io").status_code == 409
     # A different email is still allowed.
     assert _submit(anon_client, inv["token"], "john@x.io").status_code == 201
+
+
+def test_duplicate_submit_race_is_refused_by_the_db(
+    anon_client: TestClient, monkeypatch
+) -> None:
+    """The DATABASE enforces one attempt — the pre-insert check cannot.
+
+    `_check_not_already_submitted` is a SELECT followed by an INSERT, so two
+    concurrent submits both pass it and both write. Neutralising the check
+    reproduces exactly the state a race produces — both requests arriving at the
+    insert — and the unique constraint must still refuse the second. Without the
+    constraint this test stores two attempts and triggers two paid agent jobs.
+    """
+    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(api, "_check_not_already_submitted", lambda *a, **k: None)
+    tok = register_interviewer(anon_client, "race@x.io")
+    inv = _make_invite(anon_client, tok, recipients=["jane@x.io"])
+
+    assert _submit(anon_client, inv["token"], "jane@x.io").status_code == 201
+    resp = _submit(anon_client, inv["token"], "jane@x.io")
+    assert resp.status_code == 409
+    # Indistinguishable from the check's own 409 — the candidate learns nothing
+    # about which guard caught them.
+    assert "already been recorded" in resp.json()["detail"]
+
+    # Refused, not duplicated: exactly one attempt is on record.
+    subs = anon_client.get("/questions/sum_of_n/submissions", headers=_auth(tok)).json()
+    assert len(subs) == 1
 
 
 # --------------------------------------------------------------------------- #
