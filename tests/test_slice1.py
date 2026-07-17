@@ -13,7 +13,7 @@ from sqlmodel import Session, select
 from assessment_platform import agent_client
 from assessment_platform import db as db_module
 from assessment_platform.config import SUPPORTED_LANGUAGES
-from assessment_platform.models import Submission
+from assessment_platform.models import Invite, Submission
 
 
 def _sample_question(qid: str = "sum_of_n") -> dict[str, Any]:
@@ -127,17 +127,26 @@ def test_question_ownership_isolation(anon_client: TestClient) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _make_invite_resp(
+    client: TestClient,
+    token: str,
+    expires_at: str | None = None,
+    recipients: list[str] | None = None,
+):
+    client.post("/questions", json=_sample_question(), headers=_auth(token))
+    body: dict[str, Any] = {"recipients": recipients or ["cand@x.io"]}
+    if expires_at is not None:
+        body["expires_at"] = expires_at
+    return client.post("/questions/sum_of_n/invites", json=body, headers=_auth(token))
+
+
 def _make_invite(
     client: TestClient,
     token: str,
     expires_at: str | None = None,
     recipients: list[str] | None = None,
 ) -> dict:
-    client.post("/questions", json=_sample_question(), headers=_auth(token))
-    body: dict[str, Any] = {"recipients": recipients or ["cand@x.io"]}
-    if expires_at is not None:
-        body["expires_at"] = expires_at
-    resp = client.post("/questions/sum_of_n/invites", json=body, headers=_auth(token))
+    resp = _make_invite_resp(client, token, expires_at, recipients)
     assert resp.status_code == 201
     return resp.json()
 
@@ -238,8 +247,14 @@ def test_candidate_submit_triggers_agent(anon_client: TestClient, monkeypatch) -
 
 def test_expired_invite_410(anon_client: TestClient, monkeypatch) -> None:
     tok = register_interviewer(anon_client, "iv4@x.io")
-    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    inv = _make_invite(anon_client, tok, expires_at=past, recipients=["x@x.io"])
+    inv = _make_invite(anon_client, tok, recipients=["x@x.io"])
+    # Model an invite whose once-future expiry has since elapsed: the API rejects a
+    # past expires_at at creation, so age the stored row directly instead.
+    with Session(db_module.engine) as s:
+        row = s.exec(select(Invite).where(Invite.token == inv["token"])).one()
+        row.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        s.add(row)
+        s.commit()
 
     assert anon_client.get(f"/invite/{inv['token']}").status_code == 410
 
@@ -249,6 +264,13 @@ def test_expired_invite_410(anon_client: TestClient, monkeypatch) -> None:
         json={"candidate_name": "X", "candidate_email": "x@x.io", "language": "python", "code": "x"},
     )
     assert resp.status_code == 410
+
+
+def test_invite_past_expiry_rejected(anon_client: TestClient) -> None:
+    tok = register_interviewer(anon_client, "iv5@x.io")
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    resp = _make_invite_resp(anon_client, tok, expires_at=past)
+    assert resp.status_code == 422
 
 
 # --------------------------------------------------------------------------- #

@@ -21,6 +21,16 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def as_utc(dt: datetime) -> datetime:
+    """Interpret a naive datetime as UTC; leave aware ones unchanged.
+
+    Datetimes stored in SQLite come back naive, and clients may post naive ISO
+    strings; both the invite-expiry validator and the runtime expiry check need
+    the same rule so they never disagree about whether an invite has expired.
+    """
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def _created_at() -> Any:
     return Field(default_factory=_utcnow)
 

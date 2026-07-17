@@ -44,6 +44,7 @@ from .models import (
     Question,
     QuestionTestCase,
     Submission,
+    as_utc,
 )
 from .ratelimit import client_ip, limiter
 from .schemas import (
@@ -98,7 +99,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
-    allow_credentials=True,
+    # No credentials cross-origin: the JWT rides in the Authorization header, not
+    # a cookie, so cookie/credential CORS is unnecessary (and can't combine with
+    # a wildcard origin anyway).
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -107,6 +110,18 @@ app.add_middleware(
 # --------------------------------------------------------------------------- #
 # Serialization helpers                                                         #
 # --------------------------------------------------------------------------- #
+
+
+def _require_id(value: int | None) -> int:
+    """Narrow a persisted row's Optional[int] id to int, guarding at runtime.
+
+    A committed/loaded row always has an id, but the column type is Optional. A
+    bare `assert` would express this — except `python -O` strips asserts, so the
+    guarantee would vanish in an optimized run. Raise explicitly instead.
+    """
+    if value is None:
+        raise RuntimeError("expected a persisted row to have an id")
+    return value
 
 
 def _question_out(q: Question) -> QuestionOut:
@@ -201,8 +216,7 @@ def _is_expired(expires_at: datetime | None) -> bool:
     naive from SQLite; treat those as UTC so the comparison never crashes."""
     if expires_at is None:
         return False
-    exp = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) > exp
+    return datetime.now(timezone.utc) > as_utc(expires_at)
 
 
 # --------------------------------------------------------------------------- #
@@ -261,8 +275,9 @@ def register(
     session.add(interviewer)
     session.commit()
     session.refresh(interviewer)
-    assert interviewer.id is not None  # persisted -> has an id
-    return InterviewerOut(id=interviewer.id, email=interviewer.email, name=interviewer.name)
+    return InterviewerOut(
+        id=_require_id(interviewer.id), email=interviewer.email, name=interviewer.name
+    )
 
 
 @app.post("/auth/login", response_model=TokenOut)
@@ -277,14 +292,12 @@ def login(
     ).first()
     if interviewer is None or not verify_password(body.password, interviewer.password_hash):
         raise HTTPException(status_code=401, detail="invalid email or password.")
-    assert interviewer.id is not None  # persisted -> has an id
-    return TokenOut(access_token=create_access_token(interviewer.id))
+    return TokenOut(access_token=create_access_token(_require_id(interviewer.id)))
 
 
 @app.get("/auth/me", response_model=InterviewerOut)
 def me(current: Interviewer = Depends(get_current_interviewer)) -> InterviewerOut:
-    assert current.id is not None  # loaded from DB -> has an id
-    return InterviewerOut(id=current.id, email=current.email, name=current.name)
+    return InterviewerOut(id=_require_id(current.id), email=current.email, name=current.name)
 
 
 # --------------------------------------------------------------------------- #
@@ -319,10 +332,9 @@ def create_question(
 ) -> QuestionOut:
     if session.get(Question, body.id) is not None:
         raise HTTPException(status_code=409, detail=f"question {body.id!r} already exists.")
-    assert current.id is not None  # loaded from DB -> has an id
     q = Question(
         id=body.id,
-        owner_id=current.id,
+        owner_id=_require_id(current.id),
         title=body.title,
         prompt=body.prompt,
         constraints=body.constraints,
@@ -529,11 +541,10 @@ def create_invite(
     session: Session = Depends(get_session),
 ) -> InviteOut:
     question = _owned_question(question_id, current, session)  # 404/403 guard
-    assert current.id is not None
     invite = Invite(
         token=secrets.token_urlsafe(32),
         question_id=question_id,
-        created_by=current.id,
+        created_by=_require_id(current.id),
         # Normalize on the way in so the start/submit checks can compare directly.
         recipients=[_normalize_email(r) for r in body.recipients],
         expires_at=body.expires_at,
