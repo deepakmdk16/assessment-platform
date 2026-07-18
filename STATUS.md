@@ -51,17 +51,6 @@ orphans, the submit race) and security/cost (draft + register caps, proxy-aware
 limits, constant-time compares) are **done** — see `git log`. What it found and we
 have *not* fixed yet:
 
-- **Submissions stick in `running` forever.** If the agent 202s and its callback
-  never arrives (crash, dropped network, lost job) the status never changes — and
-  `retry` only accepts `error`, so there is no recovery path at all: the interviewer
-  can neither retry nor cancel, and the candidate's attempt is stranded. Needs a
-  design call: stale-`running` reaper vs. grace-period retry vs. polling the agent
-  for job state. Do with request correlation below — you need tracing to know what
-  you are reaping.
-- **No request correlation.** Nothing ties submission → agent job → callback. When a
-  callback goes missing (above), the only breadcrumb is one `logger.warning` for an
-  unknown `job_id`. The whole architecture is an async callback handoff, so this is
-  the observability to add first.
 - **Sync routes + blocking agent calls.** Every route is `def`, so FastAPI runs it in
   a ~40-thread pool, and `draft_question` blocks a thread for up to
   `AGENT_DRAFT_TIMEOUT_S` (240s) × 3 transport retries; run/run-tests up to 60s. ~40

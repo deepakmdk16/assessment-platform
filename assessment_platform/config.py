@@ -142,6 +142,15 @@ DRAFT_RATE_LIMIT_MAX = int(os.getenv("DRAFT_RATE_LIMIT_MAX", "10"))
 # someone reverse-engineer the test suite one guess at a time.
 RUN_RATE_LIMIT_MAX = int(os.getenv("RUN_RATE_LIMIT_MAX", "60"))
 
+# A submission sits in "running" from the agent's 202 until its callback lands.
+# If that callback never arrives (agent crash, dropped network, lost job) the row
+# would be stranded forever — and retry only accepts "error", so nothing could
+# recover it. When an interviewer reads their submissions, any that have been
+# "running" longer than this are reaped to "error" so the existing retry path
+# works. Generous by default so a merely-slow job isn't reaped mid-grade; set to
+# 0 to disable reaping.
+REAP_RUNNING_AFTER_S = int(os.getenv("REAP_RUNNING_AFTER_S", "900"))
+
 # Languages offered to candidates (UI-facing; the agent enforces what it supports).
 SUPPORTED_LANGUAGES = [
     "python",

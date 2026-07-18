@@ -3,6 +3,7 @@ LLM, or network is required."""
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -356,6 +357,74 @@ def test_callback_agent_error_payload(client, monkeypatch) -> None:
     assert sub["status"] == "error"
     assert sub["result"]["verdict"] == "ERROR"
     assert sub["result"]["reason"] == "kaboom"
+
+
+# --------------------------------------------------------------------------- #
+# Reaper: submissions stranded in "running" (callback never arrived)            #
+# --------------------------------------------------------------------------- #
+
+
+def _age_submission(sub_id: str, seconds: float) -> None:
+    """Backdate a submission's updated_at so the reaper sees it as stale.
+
+    Set explicitly, so SQLAlchemy's onupdate default does not overwrite it.
+    """
+    with Session(db_module.engine) as s:
+        row = s.get(Submission, sub_id)
+        assert row is not None
+        row.updated_at = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+        s.add(row)
+        s.commit()
+
+
+def test_reaper_flips_stale_running_to_error(client, monkeypatch) -> None:
+    sub_id = _create_running_submission(client, monkeypatch, "job-stale")
+    _age_submission(sub_id, config.REAP_RUNNING_AFTER_S + 60)
+
+    # Viewing the submission reaps it.
+    sub = client.get(f"/submissions/{sub_id}").json()
+    assert sub["status"] == "error"
+    # agent_job_id is preserved so a late callback can still match and land.
+    assert sub["agent_job_id"] == "job-stale"
+
+
+def test_reaper_leaves_fresh_running_alone(client, monkeypatch) -> None:
+    sub_id = _create_running_submission(client, monkeypatch, "job-fresh")
+    sub = client.get(f"/submissions/{sub_id}").json()
+    assert sub["status"] == "running"
+
+
+def test_reaped_submission_becomes_retryable(client, monkeypatch) -> None:
+    sub_id = _create_running_submission(client, monkeypatch, "job-old")
+    _age_submission(sub_id, config.REAP_RUNNING_AFTER_S + 60)
+    client.get("/submissions")  # reap on the dashboard read
+
+    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-new")
+    resp = client.post(f"/submissions/{sub_id}/retry")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "running"
+    assert resp.json()["agent_job_id"] == "job-new"
+
+
+def test_reaper_disabled_when_grace_non_positive(client, monkeypatch) -> None:
+    sub_id = _create_running_submission(client, monkeypatch, "job-keep")
+    _age_submission(sub_id, 100_000)
+    monkeypatch.setattr(config, "REAP_RUNNING_AFTER_S", 0)
+    sub = client.get(f"/submissions/{sub_id}").json()
+    assert sub["status"] == "running"
+
+
+def test_late_callback_lands_even_after_reap(client, monkeypatch) -> None:
+    sub_id = _create_running_submission(client, monkeypatch, "job-late")
+    _age_submission(sub_id, config.REAP_RUNNING_AFTER_S + 60)
+    client.get("/submissions")  # reap -> error
+
+    # The job wasn't dead, just slow: its callback still matches on agent_job_id.
+    resp = client.post("/assessments/callback", json=_callback_payload("job-late"))
+    assert resp.status_code == 200
+    sub = client.get(f"/submissions/{sub_id}").json()
+    assert sub["status"] == "done"
+    assert sub["result"]["verdict"] == "PASS"
 
 
 def test_callback_unknown_job_ignored(client) -> None:
