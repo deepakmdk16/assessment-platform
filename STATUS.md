@@ -62,21 +62,6 @@ have *not* fixed yet:
   callback goes missing (above), the only breadcrumb is one `logger.warning` for an
   unknown `job_id`. The whole architecture is an async callback handoff, so this is
   the observability to add first.
-- **`init_db()` runs on every startup, contradicting Alembic.** `api.py`'s
-  `_lifespan` calls it unconditionally under a stale comment ("no Alembic yet") —
-  Alembic is here. `create_all` no-ops on existing tables so nothing corrupts, but it
-  **hides schema drift**: a model change works in dev without a migration, the
-  migration never gets written, and a fresh prod DB then gets `create_all`'s schema
-  rather than Alembic's. Gate behind `AUTO_CREATE_TABLES`, default off; delete the
-  comment.
-- **Tests are not offline locally** (violates CONVENTIONS.md → Tests). `config.py`
-  calls `load_dotenv()`, so a developer's `.env` sets `SMTP_HOST` and
-  `send_invite_emails` opens real Gmail connections during **pytest and Playwright**
-  (visible as `invite email: failed to send to …`). Sending is best-effort so nothing
-  fails — it just hits the network on every invite test and is likely much of
-  pytest's ~155s. CI is unaffected (no `.env` there). Force SMTP off under test.
-- **`/health` checks nothing.** Returns `{"status":"ok"}` without touching the DB, so
-  a load balancer happily keeps routing to an instance whose database is gone.
 - **Sync routes + blocking agent calls.** Every route is `def`, so FastAPI runs it in
   a ~40-thread pool, and `draft_question` blocks a thread for up to
   `AGENT_DRAFT_TIMEOUT_S` (240s) × 3 transport retries; run/run-tests up to 60s. ~40

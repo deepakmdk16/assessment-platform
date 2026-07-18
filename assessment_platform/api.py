@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -83,7 +83,10 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    init_db()  # v1: create tables on startup (no Alembic yet)
+    # Production runs Alembic migrations; create_all only when explicitly opted in
+    # (dev/E2E) so a missing migration surfaces instead of being papered over.
+    if config.AUTO_CREATE_TABLES:
+        init_db()
     yield
 
 
@@ -225,7 +228,13 @@ def _is_expired(expires_at: datetime | None) -> bool:
 
 
 @app.get("/health")
-def health() -> dict:
+def health(session: Session = Depends(get_session)) -> dict:
+    # A load balancer routes on this, so it must fail when the DB is gone rather
+    # than report ok while every real request errors. Cheapest liveness probe.
+    try:
+        session.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
     return {"status": "ok"}
 
 

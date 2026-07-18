@@ -38,7 +38,10 @@ uv sync                 # install deps into .venv
 uv run platform-api     # serve on http://127.0.0.1:9000
 ```
 
-Tables are created on startup (`SQLModel.metadata.create_all`; no Alembic in v1).
+Schema comes from Alembic (`uv run alembic upgrade head`). For a quick local
+start you can instead set `AUTO_CREATE_TABLES=true` to have the tables created on
+startup (`SQLModel.metadata.create_all`); it defaults off so production can't
+silently skip a migration.
 
 ### Configuration (env vars)
 

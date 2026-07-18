@@ -4,10 +4,11 @@ LLM, or network is required."""
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import Session
 
 from assessment_platform import agent_client, config
@@ -46,7 +47,34 @@ def _sample_question(qid: str = "sum_of_n") -> dict[str, Any]:
 
 
 def test_health(client) -> None:
-    assert client.get("/health").json() == {"status": "ok"}
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+def test_health_503_when_db_unreachable(anon_client) -> None:
+    # A load balancer routes on /health, so it must fail when the DB is gone
+    # rather than report ok. Simulate a session whose query raises.
+    from assessment_platform.api import app
+    from assessment_platform.db import get_session
+
+    def _broken_session():
+        session = MagicMock()
+        session.execute.side_effect = OperationalError("select 1", {}, Exception("db down"))
+        yield session
+
+    app.dependency_overrides[get_session] = _broken_session
+    try:
+        assert anon_client.get("/health").status_code == 503
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+
+def test_smtp_forced_off_under_test() -> None:
+    # conftest sets PLATFORM_TESTING=1 before config loads, so a developer's real
+    # .env can never make the offline suite open a live Gmail connection.
+    assert config.TESTING is True
+    assert config.SMTP_HOST is None
 
 
 def test_question_crud_roundtrip(client) -> None:

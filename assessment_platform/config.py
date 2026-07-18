@@ -26,6 +26,17 @@ load_dotenv(override=False)
 # SQLAlchemy URL. Default: local SQLite file. Set to a postgresql+psycopg URL in prod.
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./platform.db")
 
+# Test mode, set by the harness (pytest conftest + the Playwright webServer). When
+# on, integrations that would otherwise hit the network are forced OFF, so a
+# developer's real `.env` (loaded above) can't make the suite send live email.
+TESTING = os.getenv("PLATFORM_TESTING", "").lower() in {"1", "true"}
+
+# Create tables on startup via SQLModel.metadata.create_all. OFF by default:
+# production runs the Alembic migrations, and an unconditional create_all silently
+# masks a missing migration (a model change works in dev without one, then a fresh
+# prod DB gets create_all's schema instead of Alembic's). Dev and E2E opt in.
+AUTO_CREATE_TABLES = os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true"
+
 # Base URL of the (stateless) Assessment Agent we POST jobs to.
 AGENT_BASE_URL = os.getenv("AGENT_BASE_URL", "http://127.0.0.1:8000")
 
@@ -101,8 +112,9 @@ REGISTRATION_CODE = os.getenv("REGISTRATION_CODE") or None
 TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true"
 
 # SMTP for emailing invite links. When SMTP_HOST is unset the mailer logs the
-# link instead of sending (dev/tests), so nothing here is required to run.
-SMTP_HOST = os.getenv("SMTP_HOST") or None
+# link instead of sending (dev/tests), so nothing here is required to run. Under
+# test we hard-null it so a developer's .env can't make invite tests hit Gmail.
+SMTP_HOST = None if TESTING else (os.getenv("SMTP_HOST") or None)
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER") or None
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or None

@@ -11,6 +11,12 @@ Tests never touch the real `platform.db` and never hit the network.
 
 from __future__ import annotations
 
+import os
+
+# Mark the process as test mode BEFORE importing anything that reads config, so a
+# developer's real .env (which config loads) can't make the suite send live email.
+os.environ.setdefault("PLATFORM_TESTING", "1")
+
 from collections.abc import Iterator
 
 import pytest
