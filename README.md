@@ -113,10 +113,12 @@ forwarded link, not deliberate impersonation.
 | GET    | `/auth/me`                        | bearer      | Current interviewer.                                          |
 | POST   | `/questions`                      | bearer      | Create a question (owned by caller).                         |
 | POST   | `/questions/draft`                | bearer      | Draft a question from a brief via the agent. **Stores nothing** — the interviewer reviews/edits, then saves via `POST /questions`. |
-| GET    | `/questions`                      | bearer      | List the caller's own questions.                             |
+| GET    | `/questions`                      | bearer      | List the caller's own questions (active only; `?include_archived=true` to include archived). |
 | GET    | `/questions/{id}`                 | bearer      | Get one (403 if not owner, 404 if missing).                  |
 | PUT    | `/questions/{id}`                 | bearer      | Full replace (owner only).                                   |
-| DELETE | `/questions/{id}`                 | bearer      | Delete (owner only).                                         |
+| POST   | `/questions/{id}/archive`         | bearer      | Retire a question: hidden from the default list, submissions kept. The path for a question with submissions (DELETE 409s on those). |
+| POST   | `/questions/{id}/unarchive`       | bearer      | Restore an archived question to the active list.             |
+| DELETE | `/questions/{id}`                 | bearer      | Delete (owner only); **409** once it has submissions — archive it instead. |
 | POST   | `/questions/{id}/invites`         | bearer      | Create a candidate invite link → `{token,url,deliveries[],...}`. **At least one recipient is required** — the link only works for those addresses. |
 | GET    | `/questions/{id}/invites`         | bearer      | List invites for a question.                                 |
 | POST   | `/questions/{id}/invites/{token}/revoke` | bearer | Deactivate an invite; its link then 410s.                 |
