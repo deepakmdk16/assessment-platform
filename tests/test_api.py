@@ -156,6 +156,70 @@ def test_delete_question_with_submissions_409(client, monkeypatch) -> None:
     assert client.get(f"/submissions/{sub_id}").status_code == 200
 
 
+# --------------------------------------------------------------------------- #
+# Question difficulty + status (archive / unarchive)                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_create_question_with_difficulty_defaults_active(client) -> None:
+    q = _sample_question()
+    q["difficulty"] = "medium"
+    body = client.post("/questions", json=q).json()
+    assert body["difficulty"] == "medium"
+    assert body["status"] == "active"
+
+
+def test_create_question_without_difficulty(client) -> None:
+    body = client.post("/questions", json=_sample_question()).json()
+    assert body["difficulty"] is None
+    assert body["status"] == "active"
+
+
+def test_invalid_difficulty_rejected(client) -> None:
+    q = _sample_question()
+    q["difficulty"] = "impossible"
+    assert client.post("/questions", json=q).status_code == 422
+
+
+def test_update_sets_difficulty(client) -> None:
+    client.post("/questions", json=_sample_question())
+    upd = {k: v for k, v in _sample_question().items() if k != "id"}
+    upd["difficulty"] = "hard"
+    assert client.put("/questions/sum_of_n", json=upd).json()["difficulty"] == "hard"
+
+
+def test_archive_hides_from_list_but_keeps_reachable(client) -> None:
+    client.post("/questions", json=_sample_question())
+    assert client.post("/questions/sum_of_n/archive").json()["status"] == "archived"
+
+    # Hidden from the default dashboard list...
+    assert [q["id"] for q in client.get("/questions").json()] == []
+    # ...but still returned with ?include_archived=true, and directly reachable.
+    assert [q["id"] for q in client.get("/questions?include_archived=true").json()] == ["sum_of_n"]
+    assert client.get("/questions/sum_of_n").json()["status"] == "archived"
+
+
+def test_unarchive_restores_to_list(client) -> None:
+    client.post("/questions", json=_sample_question())
+    client.post("/questions/sum_of_n/archive")
+    assert client.post("/questions/sum_of_n/unarchive").json()["status"] == "active"
+    assert [q["id"] for q in client.get("/questions").json()] == ["sum_of_n"]
+
+
+def test_archive_retires_a_question_with_submissions(client, monkeypatch) -> None:
+    # DELETE 409s once a question has submissions; archive is the retire path.
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-arch")
+    client.post(
+        "/submissions",
+        json={"question_id": "sum_of_n", "candidate": "J", "language": "python", "code": "x"},
+    )
+    assert client.delete("/questions/sum_of_n").status_code == 409
+    assert client.post("/questions/sum_of_n/archive").json()["status"] == "archived"
+    # The submission is untouched.
+    assert len(client.get("/questions/sum_of_n/submissions").json()) == 1
+
+
 def test_delete_question_cascades_invites(client) -> None:
     """Invites go with their question rather than lingering as orphans.
 

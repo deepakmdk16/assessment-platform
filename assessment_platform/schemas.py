@@ -15,6 +15,8 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from .models import as_utc
 
 Category = Literal["correctness", "performance"]
+Difficulty = Literal["easy", "medium", "hard"]
+QuestionStatus = Literal["active", "archived"]
 
 
 class TestCaseIn(BaseModel):
@@ -41,6 +43,7 @@ class QuestionCreate(BaseModel):
     required_complexity: str | None = None
     example_input: str | None = None
     example_output: str | None = None
+    difficulty: Difficulty | None = None
     test_cases: list[TestCaseIn] = Field(default_factory=list)
 
 
@@ -57,6 +60,7 @@ class QuestionUpdate(BaseModel):
     required_complexity: str | None = None
     example_input: str | None = None
     example_output: str | None = None
+    difficulty: Difficulty | None = None
     test_cases: list[TestCaseIn] = Field(default_factory=list)
 
 
@@ -70,6 +74,8 @@ class QuestionOut(BaseModel):
     required_complexity: str | None
     example_input: str | None
     example_output: str | None
+    difficulty: str | None
+    status: str
     created_at: datetime
     updated_at: datetime
     test_cases: list[TestCaseOut]

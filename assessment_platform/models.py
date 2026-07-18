@@ -60,6 +60,11 @@ class Question(SQLModel, table=True):
     required_complexity: str | None = None
     example_input: str | None = None
     example_output: str | None = None
+    # Interviewer-facing metadata. difficulty is an optional label (easy/medium/
+    # hard); status retires a question without deleting it — "archived" hides it
+    # from the dashboard while keeping its submissions (which are the record).
+    difficulty: str | None = None
+    status: str = Field(default="active", index=True)
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 
