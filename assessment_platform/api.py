@@ -18,13 +18,13 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -83,7 +83,10 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    init_db()  # v1: create tables on startup (no Alembic yet)
+    # Production runs Alembic migrations; create_all only when explicitly opted in
+    # (dev/E2E) so a missing migration surfaces instead of being papered over.
+    if config.AUTO_CREATE_TABLES:
+        init_db()
     yield
 
 
@@ -225,7 +228,13 @@ def _is_expired(expires_at: datetime | None) -> bool:
 
 
 @app.get("/health")
-def health() -> dict:
+def health(session: Session = Depends(get_session)) -> dict:
+    # A load balancer routes on this, so it must fail when the DB is gone rather
+    # than report ok while every real request errors. Cheapest liveness probe.
+    try:
+        session.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
     return {"status": "ok"}
 
 
@@ -877,6 +886,7 @@ def _trigger_agent(session: Session, question: Question, sub: Submission) -> Sub
         session.add(sub)
         session.commit()
         session.refresh(sub)
+        logger.warning("submission %s: agent trigger failed: %s", sub.id, exc)
         raise HTTPException(status_code=502, detail=f"agent call failed: {exc}") from exc
 
     sub.agent_job_id = job_id
@@ -884,7 +894,44 @@ def _trigger_agent(session: Session, question: Question, sub: Submission) -> Sub
     session.add(sub)
     session.commit()
     session.refresh(sub)
+    # Correlation breadcrumb: ties this submission to the agent job so a later
+    # callback (or a reap) can be traced back through the logs by either id.
+    logger.info("submission %s triggered agent job %s (status=running)", sub.id, job_id)
     return sub
+
+
+def _reap_stale_running(session: Session) -> list[str]:
+    """Flip submissions stuck in "running" past the grace window to "error".
+
+    A submission is "running" from the agent's 202 until its callback lands; if the
+    callback never arrives the row is stranded and retry (error-only) can't recover
+    it. Called on the interviewer read paths, so viewing the dashboard heals
+    stranded attempts. Only `status` changes — `agent_job_id` is left intact, so a
+    late callback still matches and can still land its result. Returns the reaped
+    submission ids. Reaping is disabled when REAP_RUNNING_AFTER_S <= 0.
+    """
+    if config.REAP_RUNNING_AFTER_S <= 0:
+        return []
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=config.REAP_RUNNING_AFTER_S)
+    running = session.exec(
+        select(Submission).where(Submission.status == "running")
+    ).all()
+    reaped: list[str] = []
+    for sub in running:
+        if as_utc(sub.updated_at) < cutoff:
+            sub.status = "error"
+            session.add(sub)
+            reaped.append(sub.id)
+            logger.warning(
+                "reaped stale submission %s (agent_job_id=%s): no callback within %ss",
+                sub.id,
+                sub.agent_job_id,
+                config.REAP_RUNNING_AFTER_S,
+            )
+    if reaped:
+        session.commit()
+    return reaped
 
 
 @app.post("/submissions", response_model=SubmissionOut, status_code=201)
@@ -946,6 +993,7 @@ def list_submissions(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> list[SubmissionOut]:
+    _reap_stale_running(session)  # heal submissions stranded in "running" on view
     # Only submissions for the caller's own questions.
     subs = session.exec(
         select(Submission)
@@ -962,6 +1010,7 @@ def get_submission(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> SubmissionOut:
+    _reap_stale_running(session)  # heal a submission stranded in "running" on view
     sub = _owned_submission(submission_id, current, session)  # 404/403 guard
     result = session.exec(
         select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
@@ -980,6 +1029,7 @@ def question_submissions(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> list[DashboardSubmissionOut]:
+    _reap_stale_running(session)  # heal submissions stranded in "running" on view
     _owned_question(question_id, current, session)  # 404/403 guard
     subs = session.exec(
         select(Submission).where(Submission.question_id == question_id)
@@ -1081,6 +1131,9 @@ def assessments_callback(
     sub.status = "error" if is_error else "done"
     session.add(sub)
     session.commit()
+    logger.info(
+        "callback for agent job %s matched submission %s -> %s", job_id, sub.id, sub.status
+    )
     return {"status": "ok", "submission_id": sub.id}
 
 

@@ -46,6 +46,11 @@ export default defineConfig({
         AGENT_BASE_URL: AGENT_URL,
         PLATFORM_BASE_URL: PLATFORM_URL,
         DATABASE_URL: 'sqlite:///./e2e-platform.db',
+        // Test mode: force SMTP off so invites don't hit real Gmail during E2E.
+        PLATFORM_TESTING: '1',
+        // The E2E DB is created on the fly, so opt into startup table creation
+        // (production runs Alembic instead; it's OFF by default).
+        AUTO_CREATE_TABLES: 'true',
         // Vite may report its Origin as either host; allow both.
         CORS_ORIGINS: `${FRONTEND_URL},http://localhost:5173`,
         // Disable rate limits so a run of many logins/submits can't flake. Every
