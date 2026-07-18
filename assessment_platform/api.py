@@ -196,7 +196,7 @@ def _invite_url(token: str) -> str:
     return f"{config.FRONTEND_BASE_URL}/t/{token}"
 
 
-def _invite_out(inv: Invite, deliveries: list[email_client.Delivery] | None = None) -> InviteOut:
+def _invite_out(inv: Invite) -> InviteOut:
     return InviteOut(
         token=inv.token,
         url=_invite_url(inv.token),
@@ -204,9 +204,13 @@ def _invite_out(inv: Invite, deliveries: list[email_client.Delivery] | None = No
         recipients=inv.recipients,
         expires_at=inv.expires_at,
         status=inv.status,
+        # Read the persisted send outcomes, so every read (not just create) shows
+        # who was actually emailed.
         deliveries=[
-            InviteDeliveryOut(recipient=d.recipient, sent=d.sent, error=d.error)
-            for d in (deliveries or [])
+            InviteDeliveryOut(
+                recipient=d.get("recipient", ""), sent=bool(d.get("sent")), error=d.get("error")
+            )
+            for d in (inv.deliveries or [])
         ],
     )
 
@@ -610,7 +614,15 @@ def create_invite(
     deliveries = email_client.send_invite_emails(
         invite.recipients, _invite_url(invite.token), question.title
     )
-    return _invite_out(invite, deliveries)
+    # Persist the per-recipient outcome so it's an audit trail, not just this
+    # response. Store after the send so the invite exists even if the send throws.
+    invite.deliveries = [
+        {"recipient": d.recipient, "sent": d.sent, "error": d.error} for d in deliveries
+    ]
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    return _invite_out(invite)
 
 
 @app.get("/questions/{question_id}/invites", response_model=list[InviteOut])

@@ -102,6 +102,10 @@ class Invite(SQLModel, table=True):
     question_id: str = Field(foreign_key="question.id", index=True)
     created_by: int = Field(foreign_key="interviewer.id", index=True)
     recipients: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    # Per-recipient send outcome captured at creation, so who-was-emailed is an
+    # audit trail rather than a value that vanishes with the create response. Each
+    # entry is {recipient, sent, error}. See schemas.InviteDeliveryOut.
+    deliveries: list[dict] = Field(default_factory=list, sa_column=Column(JSON))
     expires_at: datetime | None = None
     status: str = "active"
     created_at: datetime = _created_at()

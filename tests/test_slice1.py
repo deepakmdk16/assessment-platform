@@ -163,6 +163,21 @@ def test_create_invite_returns_link(anon_client: TestClient) -> None:
     assert len(listed) == 1 and listed[0]["token"] == inv["token"]
 
 
+def test_invite_deliveries_persist_and_surface_on_read(anon_client: TestClient) -> None:
+    tok = register_interviewer(anon_client, "iv-deliv@x.io")
+    inv = _make_invite(anon_client, tok, recipients=["a@x.io", "b@x.io"])
+    # Create response carries a per-recipient outcome for every recipient.
+    assert {d["recipient"] for d in inv["deliveries"]} == {"a@x.io", "b@x.io"}
+
+    # The audit trail persists: listing invites returns the same outcomes rather
+    # than the empty list reads used to give (deliveries weren't stored before).
+    listed = anon_client.get("/questions/sum_of_n/invites", headers=_auth(tok)).json()
+    assert len(listed) == 1
+    assert {d["recipient"] for d in listed[0]["deliveries"]} == {"a@x.io", "b@x.io"}
+    # Under test SMTP is off, so every recipient records a not-sent outcome.
+    assert all(d["sent"] is False for d in listed[0]["deliveries"])
+
+
 def test_create_invite_rejects_invalid_recipient_422(anon_client: TestClient) -> None:
     tok = register_interviewer(anon_client, "iv-bad@x.io")
     anon_client.post("/questions", json=_sample_question(), headers=_auth(tok))

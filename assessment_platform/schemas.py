@@ -202,8 +202,8 @@ class InviteOut(BaseModel):
     recipients: list[str]
     expires_at: datetime | None
     status: str
-    # Populated only on the create response — delivery outcomes aren't stored, so
-    # reads (list/revoke) return an empty list rather than a stale one.
+    # Per-recipient send outcome, persisted at creation, so every read (create,
+    # list, revoke) reports who was actually emailed.
     deliveries: list[InviteDeliveryOut] = Field(default_factory=list)
 
 
