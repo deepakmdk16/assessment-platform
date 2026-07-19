@@ -51,10 +51,6 @@ have *not* fixed yet:
   **pager UI** (Prev/Next + a total count) — the dashboard currently shows only the
   first 100 rows, silently. Needs a totals envelope or a count endpoint plus pager
   controls, **mockup-first per CLAUDE.md.**
-- **Frontend: no result polling.** No `setInterval` anywhere: after a submit the
-  status reads `running` until someone presses F5, so the product's payoff moment
-  needs a manual refresh. Poll `GET /submissions/{id}` while pending/running.
-  Mockup-first per CLAUDE.md.
 - **Candidate IDE: autosave in-progress code to `localStorage`.** The `ErrorBoundary`
   around the candidate editor (see `git log`) can't recover the editor's unsaved
   buffer on a render throw — its fallback is honest about that. Persisting the
