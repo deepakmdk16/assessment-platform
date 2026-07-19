@@ -697,3 +697,50 @@ def test_draft_uses_the_longer_draft_timeout(client, monkeypatch) -> None:
     assert resp.status_code == 200
     assert captured["timeout"] == config.AGENT_DRAFT_TIMEOUT_S
     assert config.AGENT_DRAFT_TIMEOUT_S > config.AGENT_TIMEOUT_S
+
+
+def test_questions_pagination_bounds_and_cover(client) -> None:
+    for i in range(3):
+        assert client.post("/questions", json=_sample_question(f"q{i}")).status_code == 201
+
+    all_ids = [q["id"] for q in client.get("/questions").json()]
+    assert sorted(all_ids) == ["q0", "q1", "q2"]
+
+    # limit + offset partition the full set with no overlap and no gaps.
+    page1 = [q["id"] for q in client.get("/questions?limit=2&offset=0").json()]
+    page2 = [q["id"] for q in client.get("/questions?limit=2&offset=2").json()]
+    assert len(page1) == 2 and len(page2) == 1
+    assert set(page1).isdisjoint(page2)
+    assert set(page1) | set(page2) == {"q0", "q1", "q2"}
+
+    # Ordering is deterministic: the same request returns the same order twice,
+    # so paging over it never repeats or skips a row.
+    assert [q["id"] for q in client.get("/questions").json()] == all_ids
+
+    # Bounds are enforced (limit 1..200, offset >= 0).
+    assert client.get("/questions?limit=0").status_code == 422
+    assert client.get("/questions?limit=201").status_code == 422
+    assert client.get("/questions?offset=-1").status_code == 422
+
+
+def test_submissions_list_is_lean(client, monkeypatch) -> None:
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    body = {"question_id": "sum_of_n", "candidate": "Jane", "language": "python", "code": "print(1)"}
+    assert client.post("/submissions", json=body).status_code == 201
+
+    rows = client.get("/submissions").json()
+    assert len(rows) == 1
+    row = rows[0]
+    # The list is a summary: the heavy per-row blobs must not ship.
+    assert "code" not in row
+    assert "full_result" not in row
+    assert "result" not in row
+    assert {"id", "question_id", "candidate", "language", "status", "verdict", "score_pct"} <= row.keys()
+
+    # The full payload is still available per-id.
+    detail = client.get(f"/submissions/{row['id']}").json()
+    assert detail["code"] == "print(1)"
+
+    # Pagination bounds apply here too.
+    assert client.get("/submissions?limit=0").status_code == 422

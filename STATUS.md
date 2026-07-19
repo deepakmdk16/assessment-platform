@@ -7,16 +7,6 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
 
 ## Open items
 
-- **Persist invite delivery status — UI remaining.** Backend done (see `git log`):
-  a `deliveries` JSON column on `Invite` + Alembic migration stores the per-recipient
-  outcome at creation, and every read (create/list/revoke) now returns it instead of
-  an empty list. Still to do, **mockup-first per CLAUDE.md:** surface per-recipient
-  delivery status in the invites table.
-- **Question `difficulty` / `status` field — UI remaining.** Backend done (see `git
-  log`): `Question.difficulty`/`status` columns + Alembic migration, `difficulty` on
-  create/update, `status` returned, and archive/unarchive endpoints. Still to do,
-  **mockup-first per CLAUDE.md:** a difficulty dropdown in the wizard and
-  Difficulty/Status columns + an archive button on the dashboard.
 - **Set `TRUST_PROXY_HEADERS=true` when deploying behind a proxy.** The rate
   limiters key on the caller's address; behind a proxy that is the *proxy* for
   every request, collapsing every bucket into one shared counter (the first few
@@ -52,16 +42,17 @@ have *not* fixed yet:
   `AGENT_DRAFT_TIMEOUT_S` (240s) × 3 transport retries; run/run-tests up to 60s. ~40
   concurrent drafts wedge the entire API, `/health` included. The rate limits now cap
   the easy trigger, but the shape is unchanged.
-- **No pagination.** `GET /questions`, `GET /submissions` and
-  `/questions/{id}/submissions` return everything, and `SubmissionOut` embeds the full
-  `code` blob *and* the entire `full_result` payload — 500 candidates is 500 code
-  blobs plus 500 agent payloads in one response. The N+1 was avoided in
-  `_results_by_submission`; the payload size was not.
-- **Frontend: no `ErrorBoundary`.** Any render throw (Monaco failing to load, an
-  unexpected `full_result` shape) is a white screen for a candidate mid-assessment
-  with their code in the editor — the worst failure location in the product.
-  Mockup-first per CLAUDE.md.
-- **Frontend: no result polling.** No `setInterval` anywhere: after a submit the
-  status reads `running` until someone presses F5, so the product's payoff moment
-  needs a manual refresh. Poll `GET /submissions/{id}` while pending/running.
-  Mockup-first per CLAUDE.md.
+- **Pagination — bounded now, pager UI deferred.** Done (see `git log`): all three
+  list endpoints (`GET /questions`, `GET /submissions`, `/questions/{id}/submissions`)
+  take `limit` (default 100, cap 200) + `offset` with deterministic ordering (newest
+  first, id tiebreaker), so no response can be forced to serialize the whole table;
+  and `GET /submissions` rows are now the lean `SubmissionSummaryOut` — no `code` /
+  `full_result` (fetch the full `SubmissionOut` per-id for detail). Still to do: a real
+  **pager UI** (Prev/Next + a total count) — the dashboard currently shows only the
+  first 100 rows, silently. Needs a totals envelope or a count endpoint plus pager
+  controls, **mockup-first per CLAUDE.md.**
+- **Candidate IDE: autosave in-progress code to `localStorage`.** The `ErrorBoundary`
+  around the candidate editor (see `git log`) can't recover the editor's unsaved
+  buffer on a render throw — its fallback is honest about that. Persisting the
+  candidate's code to `localStorage` as they type would let a reload restore it,
+  closing the one gap the boundary can't. Small, self-contained follow-up.

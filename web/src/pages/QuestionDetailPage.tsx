@@ -174,7 +174,7 @@ export function QuestionDetailPage() {
                   <thead>
                     <tr>
                       <th>Link</th>
-                      <th>Recipients</th>
+                      <th>Recipients &amp; delivery</th>
                       <th>Status</th>
                       <th></th>
                     </tr>
@@ -183,7 +183,23 @@ export function QuestionDetailPage() {
                     {invites.map((invite) => (
                       <tr key={invite.token}>
                         <td className="invite-url">{invite.url}</td>
-                        <td>{invite.recipients.join(', ') || '—'}</td>
+                        <td>
+                          {invite.deliveries.length > 0 ? (
+                            <ul className="recip-list">
+                              {invite.deliveries.map((d) => (
+                                <li className="recip" key={d.recipient}>
+                                  <span className={`recip-dot ${d.sent ? 'ok' : 'fail'}`} />
+                                  <span className="recip-addr">{d.recipient}</span>
+                                  {!d.sent && d.error && (
+                                    <span className="recip-why">— {d.error}</span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            invite.recipients.join(', ') || '—'
+                          )}
+                        </td>
                         <td>
                           <span className={badgeClass(invite.status)}>{invite.status}</span>
                         </td>

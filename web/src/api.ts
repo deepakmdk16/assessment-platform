@@ -107,7 +107,16 @@ export const api = {
 
   me: () => request<User>('/auth/me', { auth: true }),
 
-  listQuestions: () => request<QuestionOut[]>('/questions', { auth: true }),
+  listQuestions: (includeArchived = false) =>
+    request<QuestionOut[]>(`/questions${includeArchived ? '?include_archived=true' : ''}`, {
+      auth: true,
+    }),
+
+  archiveQuestion: (id: string) =>
+    request<QuestionOut>(`/questions/${id}/archive`, { method: 'POST', auth: true }),
+
+  unarchiveQuestion: (id: string) =>
+    request<QuestionOut>(`/questions/${id}/unarchive`, { method: 'POST', auth: true }),
 
   createQuestion: (data: QuestionIn) =>
     request<QuestionOut>('/questions', { method: 'POST', body: data, auth: true }),

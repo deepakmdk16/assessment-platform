@@ -31,6 +31,7 @@ const question: QuestionOut = {
   required_complexity: 'O(n)',
   example_input: '2 7',
   example_output: '0 1',
+  status: 'active',
   test_cases: [],
   created_at: '2026-07-16T00:00:00Z',
   updated_at: '2026-07-16T00:00:00Z',
@@ -183,7 +184,7 @@ describe('SubmissionDetailPage', () => {
     expect(screen.getByText(/judge is skipped/i)).toBeInTheDocument()
   })
 
-  it('shows a pending notice when the agent has not called back yet', async () => {
+  it('shows a live grading notice while the agent is still working', async () => {
     vi.mocked(api.getSubmission).mockResolvedValue({
       ...submission,
       status: 'running',
@@ -191,6 +192,19 @@ describe('SubmissionDetailPage', () => {
     })
     renderPage()
 
-    expect(await screen.findByText(/hasn’t been graded yet/i)).toBeInTheDocument()
+    expect(await screen.findByText(/grading in progress/i)).toBeInTheDocument()
+    // The affordance that tells the interviewer not to refresh — the point of P5.
+    expect(screen.getByText(/updates automatically/i)).toBeInTheDocument()
+  })
+
+  it('surfaces a terminal error instead of polling forever', async () => {
+    vi.mocked(api.getSubmission).mockResolvedValue({
+      ...submission,
+      status: 'error',
+      result: null,
+    })
+    renderPage()
+
+    expect(await screen.findByText(/grading couldn’t complete/i)).toBeInTheDocument()
   })
 })
