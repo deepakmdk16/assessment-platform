@@ -1197,6 +1197,13 @@ button.tab:hover {
   text-transform: capitalize;
 }
 
+/* "Draft restored" hint next to the language picker — a quiet reassurance that
+   autosaved work came back; clears on the first edit. */
+.editor-hint {
+  margin-left: auto;
+  font-size: 0.78rem;
+}
+
 .editor-wrapper {
   flex: 1;
   min-height: 200px;

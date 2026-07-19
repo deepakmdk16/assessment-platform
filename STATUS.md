@@ -51,8 +51,3 @@ have *not* fixed yet:
   **pager UI** (Prev/Next + a total count) — the dashboard currently shows only the
   first 100 rows, silently. Needs a totals envelope or a count endpoint plus pager
   controls, **mockup-first per CLAUDE.md.**
-- **Candidate IDE: autosave in-progress code to `localStorage`.** The `ErrorBoundary`
-  around the candidate editor (see `git log`) can't recover the editor's unsaved
-  buffer on a render throw — its fallback is honest about that. Persisting the
-  candidate's code to `localStorage` as they type would let a reload restore it,
-  closing the one gap the boundary can't. Small, self-contained follow-up.

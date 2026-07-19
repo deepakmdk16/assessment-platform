@@ -15,6 +15,41 @@ type Stage =
   | 'submitted'
   | 'already_submitted'
 
+// Autosave the in-progress solution to localStorage, keyed by the invite token,
+// so a reload (or the ErrorBoundary catching a render throw) doesn't lose the
+// candidate's work. Cleared once the attempt is recorded.
+interface Draft {
+  code: string
+  language: string
+}
+
+const DRAFT_PREFIX = 'assessment-draft:'
+
+function loadDraft(token: string): Draft | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_PREFIX + token)
+    return raw ? (JSON.parse(raw) as Draft) : null
+  } catch {
+    return null
+  }
+}
+
+function saveDraft(token: string, draft: Draft): void {
+  try {
+    localStorage.setItem(DRAFT_PREFIX + token, JSON.stringify(draft))
+  } catch {
+    // Private mode / quota exceeded — autosave is best-effort, so drop it silently.
+  }
+}
+
+function clearDraft(token: string): void {
+  try {
+    localStorage.removeItem(DRAFT_PREFIX + token)
+  } catch {
+    // ignore
+  }
+}
+
 export function CandidatePage() {
   const { token } = useParams<{ token: string }>()
   const [stage, setStage] = useState<Stage>('loading')
@@ -27,6 +62,7 @@ export function CandidatePage() {
 
   const [language, setLanguage] = useState<Language | ''>('')
   const [code, setCode] = useState('')
+  const [draftRestored, setDraftRestored] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -51,6 +87,19 @@ export function CandidatePage() {
       })
   }, [token])
 
+  // Autosave the draft while editing (debounced so keystrokes don't thrash
+  // localStorage), and clear it once the attempt is recorded so a later invite
+  // to the same browser starts clean.
+  useEffect(() => {
+    if (stage !== 'editor' || !token) return
+    const t = setTimeout(() => saveDraft(token, { code, language }), 500)
+    return () => clearTimeout(t)
+  }, [stage, token, code, language])
+
+  useEffect(() => {
+    if (token && (stage === 'submitted' || stage === 'already_submitted')) clearDraft(token)
+  }, [stage, token])
+
   async function handleGateSubmit(e: FormEvent) {
     e.preventDefault()
     if (!token) return
@@ -59,7 +108,20 @@ export function CandidatePage() {
     try {
       const data = await api.startInvite(token, candidateEmail)
       setInvite(data)
-      setLanguage(data.languages[0] ?? '')
+      // Restore an autosaved draft for this invite, if any; only keep a saved
+      // language that's still offered, else fall back to the first choice.
+      const saved = loadDraft(token)
+      if (saved?.code) {
+        setCode(saved.code)
+        setLanguage(
+          data.languages.includes(saved.language as Language)
+            ? (saved.language as Language)
+            : (data.languages[0] ?? ''),
+        )
+        setDraftRestored(true)
+      } else {
+        setLanguage(data.languages[0] ?? '')
+      }
       setStage('editor')
     } catch (err) {
       if (!(err instanceof ApiError)) {
@@ -266,6 +328,11 @@ export function CandidatePage() {
                 </option>
               ))}
             </select>
+            {draftRestored && (
+              <span className="editor-hint muted" role="status">
+                Draft restored
+              </span>
+            )}
           </div>
 
           <div className="editor-wrapper">
@@ -273,7 +340,10 @@ export function CandidatePage() {
               height="100%"
               language={language || undefined}
               value={code}
-              onChange={(value) => setCode(value ?? '')}
+              onChange={(value) => {
+                setCode(value ?? '')
+                if (draftRestored) setDraftRestored(false)
+              }}
               theme="vs-dark"
               options={{ minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }}
             />
