@@ -14,51 +14,16 @@ export function SubmissionDetailPage() {
   const [question, setQuestion] = useState<QuestionOut | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<'report' | 'tests'>('report')
-  const [pollTimedOut, setPollTimedOut] = useState(false)
 
-  // Poll while the submission is still being graded so the report appears without
-  // a manual refresh. Stops on a terminal state (result present or status=error),
-  // on unmount, and after a cap so a wedged job doesn't poll forever.
   useEffect(() => {
     if (!id) return
-    const sid = id
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let questionLoaded = false
-    const startedAt = Date.now()
-    const POLL_MS = 3000
-    const MAX_MS = 120000
-
-    async function tick() {
-      try {
-        const s = await api.getSubmission(sid)
-        if (cancelled) return
+    api
+      .getSubmission(id)
+      .then((s) => {
         setSub(s)
-        if (!questionLoaded) {
-          questionLoaded = true
-          api
-            .getQuestion(s.question_id)
-            .then((q) => {
-              if (!cancelled) setQuestion(q)
-            })
-            .catch(() => undefined)
-        }
-        const pending = !s.result && (s.status === 'pending' || s.status === 'running')
-        if (!pending) return
-        if (Date.now() - startedAt >= MAX_MS) {
-          setPollTimedOut(true)
-          return
-        }
-        timer = setTimeout(tick, POLL_MS)
-      } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load submission')
-      }
-    }
-    tick()
-    return () => {
-      cancelled = true
-      if (timer) clearTimeout(timer)
-    }
+        api.getQuestion(s.question_id).then(setQuestion).catch(() => undefined)
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load submission'))
   }, [id])
 
   if (error) return <p className="form-error">{error}</p>
@@ -68,7 +33,6 @@ export function SubmissionDetailPage() {
   const full = result?.full_result
   const cases = full?.test_cases ?? []
   const quality = full?.quality
-  const isPending = !result && (sub.status === 'pending' || sub.status === 'running') && !pollTimedOut
 
   return (
     <div className="ide">
@@ -87,9 +51,7 @@ export function SubmissionDetailPage() {
               <span className="score">{result.score_pct}%</span>
             </>
           ) : (
-            <span className={`${badgeClass(sub.status)}${isPending ? ' chip-live' : ''}`}>
-              {sub.status}
-            </span>
+            <span className={badgeClass(sub.status)}>{sub.status}</span>
           )}
         </div>
       </header>
@@ -167,7 +129,7 @@ export function SubmissionDetailPage() {
             </div>
 
             {!result ? (
-              <GradingNotice status={sub.status} timedOut={pollTimedOut} />
+              <PendingNotice status={sub.status} />
             ) : tab === 'report' ? (
               <ReportTab
                 reason={result.reason}
@@ -189,39 +151,12 @@ export function SubmissionDetailPage() {
   )
 }
 
-function GradingNotice({ status, timedOut }: { status: string; timedOut: boolean }) {
-  if (status === 'error') {
-    return (
-      <div className="grading">
-        <div className="grading-title">Grading couldn’t complete</div>
-        <p className="grading-sub">
-          The agent couldn’t be reached for this submission, so it was never graded. Retry it from
-          the submissions list.
-        </p>
-      </div>
-    )
-  }
-  if (timedOut) {
-    return (
-      <div className="grading">
-        <div className="grading-title">Still grading</div>
-        <p className="grading-sub">
-          This is taking longer than usual. It’s still being processed — refresh to check again.
-        </p>
-      </div>
-    )
-  }
-  return (
-    <div className="grading">
-      <div className="spinner" aria-hidden="true" />
-      <div className="grading-title">Grading in progress</div>
-      <p className="grading-sub">
-        The agent is running the code and judging quality. This updates automatically — no need to
-        refresh.
-      </p>
-      <div className="live-dot">Checking every few seconds</div>
-    </div>
-  )
+function PendingNotice({ status }: { status: string }) {
+  const body =
+    status === 'error'
+      ? 'The agent could not be reached for this submission, so it was never graded. Retry it from the submissions list.'
+      : 'This submission hasn’t been graded yet. The report appears once the agent calls back.'
+  return <p className="muted">{body}</p>
 }
 
 function ReportTab({

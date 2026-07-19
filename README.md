@@ -35,20 +35,13 @@ Python ≥ 3.10 · [uv](https://docs.astral.sh/uv/) · FastAPI · SQLModel
 
 ```bash
 uv sync                 # install deps into .venv
-bash scripts/dev.sh     # migrate ./dev.db to head, then serve on :9000
+uv run platform-api     # serve on http://127.0.0.1:9000
 ```
-
-`scripts/dev.sh` runs `alembic upgrade head` before starting, so an existing
-`dev.db` picks up new migrations instead of 500-ing on a missing column; it pins
-`DATABASE_URL` to `./dev.db` unless you export your own. To run the raw server
-without the migrate step, use `uv run platform-api` (config default DB is
-`./platform.db`).
 
 Schema comes from Alembic (`uv run alembic upgrade head`). For a quick local
 start you can instead set `AUTO_CREATE_TABLES=true` to have the tables created on
-startup (`SQLModel.metadata.create_all`) — but that only creates a *fresh* DB, it
-never ALTERs an existing one, so it defaults off and `scripts/dev.sh` is the
-safe path for an evolving `dev.db`.
+startup (`SQLModel.metadata.create_all`); it defaults off so production can't
+silently skip a migration.
 
 ### Configuration (env vars)
 

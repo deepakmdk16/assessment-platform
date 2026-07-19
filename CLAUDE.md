@@ -26,10 +26,7 @@ deterministic grade.
 
 ## Stack & how to run
 
-- Backend: Python ≥ 3.10, `uv`. Run the API: `bash scripts/dev.sh` (`:9000`) —
-  runs `alembic upgrade head` first so an existing `dev.db` never 500s on a
-  missing column, and pins `DATABASE_URL` to `./dev.db`. Raw server (no migrate,
-  default DB `./platform.db`): `uv run platform-api`.
+- Backend: Python ≥ 3.10, `uv`. Run the API: `uv run platform-api` (`:9000`).
 - Tests: `uv run pytest`. Lint/types: `uv run ruff check .`, `uv run mypy`.
 - Frontend: `cd web && npm install && npm run dev` (`VITE_API_BASE_URL` →
   `http://127.0.0.1:9000`). Checks: `npm run build`, `npm run typecheck`,

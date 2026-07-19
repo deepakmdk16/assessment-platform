@@ -9,7 +9,6 @@ import { QuestionDetailPage } from './pages/QuestionDetailPage'
 import { SubmissionDetailPage } from './pages/SubmissionDetailPage'
 import { CandidatePage } from './pages/CandidatePage'
 import { NotFoundPage } from './pages/NotFoundPage'
-import { CandidateErrorFallback, ErrorBoundary } from './components/ErrorBoundary'
 
 export function App() {
   return (
@@ -17,14 +16,7 @@ export function App() {
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
-      <Route
-        path="/t/:token"
-        element={
-          <ErrorBoundary fallback={<CandidateErrorFallback />}>
-            <CandidatePage />
-          </ErrorBoundary>
-        }
-      />
+      <Route path="/t/:token" element={<CandidatePage />} />
 
       <Route
         path="/dashboard"

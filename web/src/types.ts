@@ -37,12 +37,10 @@ export interface QuestionIn {
   required_complexity: string
   example_input: string
   example_output: string
-  difficulty?: string
   test_cases: TestCaseIn[]
 }
 
 export interface QuestionOut extends Omit<QuestionIn, 'test_cases'> {
-  status: string
   test_cases: TestCaseOut[]
   created_at: string
   updated_at: string

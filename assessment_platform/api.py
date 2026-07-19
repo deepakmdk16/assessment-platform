@@ -22,11 +22,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, col, select
+from sqlmodel import Session, select
 
 from . import agent_client, config, email_client
 from .auth import (
@@ -74,7 +74,6 @@ from .schemas import (
     ResultOut,
     SubmissionCreate,
     SubmissionOut,
-    SubmissionSummaryOut,
     TestCaseOut,
     TokenOut,
 )
@@ -177,22 +176,6 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
         agent_job_id=sub.agent_job_id,
         created_at=sub.created_at,
         result=result_out,
-    )
-
-
-def _submission_summary(
-    sub: Submission, result: AssessmentResult | None
-) -> SubmissionSummaryOut:
-    return SubmissionSummaryOut(
-        id=sub.id,
-        question_id=sub.question_id,
-        candidate=sub.candidate,
-        language=sub.language,
-        status=sub.status,
-        agent_job_id=sub.agent_job_id,
-        created_at=sub.created_at,
-        verdict=result.verdict if result else None,
-        score_pct=result.score_pct if result else None,
     )
 
 
@@ -478,8 +461,6 @@ def draft_question(
 @app.get("/questions", response_model=list[QuestionOut])
 def list_questions(
     include_archived: bool = False,
-    limit: int = Query(default=100, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> list[QuestionOut]:
@@ -488,9 +469,6 @@ def list_questions(
         # Archived questions are retired: hidden from the dashboard by default but
         # still reachable (and their submissions kept) via ?include_archived=true.
         stmt = stmt.where(Question.status == "active")
-    # Newest first, id as a stable tiebreaker so paging over equal timestamps
-    # (common in tests / bulk imports) is deterministic.
-    stmt = stmt.order_by(col(Question.created_at).desc(), col(Question.id)).offset(offset).limit(limit)
     return [_question_out(q) for q in session.exec(stmt).all()]
 
 
@@ -1065,27 +1043,20 @@ def retry_submission(
     return _submission_out(sub, None)
 
 
-@app.get("/submissions", response_model=list[SubmissionSummaryOut])
+@app.get("/submissions", response_model=list[SubmissionOut])
 def list_submissions(
-    limit: int = Query(default=100, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
-) -> list[SubmissionSummaryOut]:
+) -> list[SubmissionOut]:
     _reap_stale_running(session)  # heal submissions stranded in "running" on view
-    # Only submissions for the caller's own questions. Lean rows: the full `code`
-    # and `full_result` blobs are fetched per-id via GET /submissions/{id}, so a
-    # page here stays small even at hundreds of rows.
+    # Only submissions for the caller's own questions.
     subs = session.exec(
         select(Submission)
         .join(Question)  # FK Submission.question_id -> Question.id infers the ON clause
         .where(Question.owner_id == current.id)
-        .order_by(col(Submission.created_at).desc(), col(Submission.id))
-        .offset(offset)
-        .limit(limit)
     ).all()
     results = _results_by_submission(subs, session)
-    return [_submission_summary(sub, results.get(sub.id)) for sub in subs]
+    return [_submission_out(sub, results.get(sub.id)) for sub in subs]
 
 
 @app.get("/submissions/{submission_id}", response_model=SubmissionOut)
@@ -1110,19 +1081,13 @@ def get_submission(
 @app.get("/questions/{question_id}/submissions", response_model=list[DashboardSubmissionOut])
 def question_submissions(
     question_id: str,
-    limit: int = Query(default=100, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> list[DashboardSubmissionOut]:
     _reap_stale_running(session)  # heal submissions stranded in "running" on view
     _owned_question(question_id, current, session)  # 404/403 guard
     subs = session.exec(
-        select(Submission)
-        .where(Submission.question_id == question_id)
-        .order_by(col(Submission.created_at).desc(), col(Submission.id))
-        .offset(offset)
-        .limit(limit)
+        select(Submission).where(Submission.question_id == question_id)
     ).all()
     results = _results_by_submission(subs, session)
     out = []
