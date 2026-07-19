@@ -60,6 +60,11 @@ class Question(SQLModel, table=True):
     required_complexity: str | None = None
     example_input: str | None = None
     example_output: str | None = None
+    # Interviewer-facing metadata. difficulty is an optional label (easy/medium/
+    # hard); status retires a question without deleting it — "archived" hides it
+    # from the dashboard while keeping its submissions (which are the record).
+    difficulty: str | None = None
+    status: str = Field(default="active", index=True)
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 
@@ -97,6 +102,10 @@ class Invite(SQLModel, table=True):
     question_id: str = Field(foreign_key="question.id", index=True)
     created_by: int = Field(foreign_key="interviewer.id", index=True)
     recipients: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    # Per-recipient send outcome captured at creation, so who-was-emailed is an
+    # audit trail rather than a value that vanishes with the create response. Each
+    # entry is {recipient, sent, error}. See schemas.InviteDeliveryOut.
+    deliveries: list[dict] = Field(default_factory=list, sa_column=Column(JSON))
     expires_at: datetime | None = None
     status: str = "active"
     created_at: datetime = _created_at()

@@ -186,11 +186,13 @@ def test_create_invite_survives_send_failure(
     assert _start(anon_client, inv["token"], "cand@x.io").status_code == 200
 
 
-def test_invite_reads_do_not_report_stale_deliveries(anon_client: TestClient) -> None:
+def test_invite_reads_report_the_persisted_delivery_trail(anon_client: TestClient) -> None:
+    # Delivery outcomes are now persisted at creation (audit trail), so reads
+    # surface who was emailed rather than the empty list they used to return.
     tok = register_interviewer(anon_client, "s9-stale@x.io")
     _make_invite(anon_client, tok, recipients=["cand@x.io"])
     listed = anon_client.get("/questions/sum_of_n/invites", headers=_auth(tok)).json()
-    assert listed[0]["deliveries"] == []
+    assert [d["recipient"] for d in listed[0]["deliveries"]] == ["cand@x.io"]
 
 
 # --------------------------------------------------------------------------- #

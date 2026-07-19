@@ -7,13 +7,16 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
 
 ## Open items
 
-- **Persist invite delivery status.** `deliveries[]` is returned on invite create
-  but never stored → no audit trail of who was actually emailed. Needs a model
-  (delivery rows or a JSON column on `Invite`) + an Alembic migration; surface
-  per-recipient status in the invites table. Pairs with the difficulty/status item.
-- **Question `difficulty` / `status` field.** The dashboard has no Difficulty/Status
-  columns because the model/API has no such fields. Needs a model field + Alembic
-  migration + wizard UI.
+- **Persist invite delivery status — UI remaining.** Backend done (see `git log`):
+  a `deliveries` JSON column on `Invite` + Alembic migration stores the per-recipient
+  outcome at creation, and every read (create/list/revoke) now returns it instead of
+  an empty list. Still to do, **mockup-first per CLAUDE.md:** surface per-recipient
+  delivery status in the invites table.
+- **Question `difficulty` / `status` field — UI remaining.** Backend done (see `git
+  log`): `Question.difficulty`/`status` columns + Alembic migration, `difficulty` on
+  create/update, `status` returned, and archive/unarchive endpoints. Still to do,
+  **mockup-first per CLAUDE.md:** a difficulty dropdown in the wizard and
+  Difficulty/Status columns + an archive button on the dashboard.
 - **Set `TRUST_PROXY_HEADERS=true` when deploying behind a proxy.** The rate
   limiters key on the caller's address; behind a proxy that is the *proxy* for
   every request, collapsing every bucket into one shared counter (the first few
@@ -21,13 +24,6 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
   direct dev setup, wrong the moment there's a load balancer in front. Not code:
   a deploy-time checklist item. Chained proxies (CDN → LB) need `client_ip()`
   revisited, as it trusts exactly one hop.
-- **Archive (soft-delete) a question that has submissions.** `DELETE /questions/{id}`
-  now 409s once anything has been submitted against it, because submissions are the
-  record and must not be cascaded away — so an interviewer has no way to retire an
-  old question. An `archived` status that hides it from the dashboard while keeping
-  its submissions is the intended path; folds into the `difficulty`/`status` item
-  above. (`api.deleteQuestion` exists in `web/src/api.ts` but has no call site, so
-  no UI surfaces the 409 today.)
 - **HMAC body-signing (cross-repo, deferred).** Hardens the shared-secret
   agent↔platform auth. Must land on **both** sides in one coordinated slice (the
   Agent grows the verify counterpart) or the platform side is inert.

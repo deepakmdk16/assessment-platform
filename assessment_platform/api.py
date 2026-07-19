@@ -138,6 +138,8 @@ def _question_out(q: Question) -> QuestionOut:
         required_complexity=q.required_complexity,
         example_input=q.example_input,
         example_output=q.example_output,
+        difficulty=q.difficulty,
+        status=q.status,
         created_at=q.created_at,
         updated_at=q.updated_at,
         test_cases=[
@@ -194,7 +196,7 @@ def _invite_url(token: str) -> str:
     return f"{config.FRONTEND_BASE_URL}/t/{token}"
 
 
-def _invite_out(inv: Invite, deliveries: list[email_client.Delivery] | None = None) -> InviteOut:
+def _invite_out(inv: Invite) -> InviteOut:
     return InviteOut(
         token=inv.token,
         url=_invite_url(inv.token),
@@ -202,9 +204,13 @@ def _invite_out(inv: Invite, deliveries: list[email_client.Delivery] | None = No
         recipients=inv.recipients,
         expires_at=inv.expires_at,
         status=inv.status,
+        # Read the persisted send outcomes, so every read (not just create) shows
+        # who was actually emailed.
         deliveries=[
-            InviteDeliveryOut(recipient=d.recipient, sent=d.sent, error=d.error)
-            for d in (deliveries or [])
+            InviteDeliveryOut(
+                recipient=d.get("recipient", ""), sent=bool(d.get("sent")), error=d.get("error")
+            )
+            for d in (inv.deliveries or [])
         ],
     )
 
@@ -352,6 +358,7 @@ def create_question(
         required_complexity=body.required_complexity,
         example_input=body.example_input,
         example_output=body.example_output,
+        difficulty=body.difficulty,
         test_cases=[
             QuestionTestCase(
                 name=tc.name,
@@ -453,13 +460,16 @@ def draft_question(
 
 @app.get("/questions", response_model=list[QuestionOut])
 def list_questions(
+    include_archived: bool = False,
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> list[QuestionOut]:
-    questions = session.exec(
-        select(Question).where(Question.owner_id == current.id)
-    ).all()
-    return [_question_out(q) for q in questions]
+    stmt = select(Question).where(Question.owner_id == current.id)
+    if not include_archived:
+        # Archived questions are retired: hidden from the dashboard by default but
+        # still reachable (and their submissions kept) via ?include_archived=true.
+        stmt = stmt.where(Question.status == "active")
+    return [_question_out(q) for q in session.exec(stmt).all()]
 
 
 @app.get("/questions/{question_id}", response_model=QuestionOut)
@@ -487,6 +497,7 @@ def update_question(
     q.required_complexity = body.required_complexity
     q.example_input = body.example_input
     q.example_output = body.example_output
+    q.difficulty = body.difficulty
     q.updated_at = datetime.now(timezone.utc)
     # Replace the whole test-case set (PUT = full replace). cascade delete-orphan
     # cleans up the old rows.
@@ -500,6 +511,42 @@ def update_question(
         )
         for tc in body.test_cases
     ]
+    session.add(q)
+    session.commit()
+    session.refresh(q)
+    return _question_out(q)
+
+
+@app.post("/questions/{question_id}/archive", response_model=QuestionOut)
+def archive_question(
+    question_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> QuestionOut:
+    """Retire a question: hide it from the dashboard while keeping its submissions.
+
+    This is the path for a question with recorded attempts — DELETE 409s on those
+    because the submissions are the record. Idempotent.
+    """
+    q = _owned_question(question_id, current, session)
+    q.status = "archived"
+    q.updated_at = datetime.now(timezone.utc)
+    session.add(q)
+    session.commit()
+    session.refresh(q)
+    return _question_out(q)
+
+
+@app.post("/questions/{question_id}/unarchive", response_model=QuestionOut)
+def unarchive_question(
+    question_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> QuestionOut:
+    """Restore an archived question to the active dashboard. Idempotent."""
+    q = _owned_question(question_id, current, session)
+    q.status = "active"
+    q.updated_at = datetime.now(timezone.utc)
     session.add(q)
     session.commit()
     session.refresh(q)
@@ -567,7 +614,15 @@ def create_invite(
     deliveries = email_client.send_invite_emails(
         invite.recipients, _invite_url(invite.token), question.title
     )
-    return _invite_out(invite, deliveries)
+    # Persist the per-recipient outcome so it's an audit trail, not just this
+    # response. Store after the send so the invite exists even if the send throws.
+    invite.deliveries = [
+        {"recipient": d.recipient, "sent": d.sent, "error": d.error} for d in deliveries
+    ]
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    return _invite_out(invite)
 
 
 @app.get("/questions/{question_id}/invites", response_model=list[InviteOut])
