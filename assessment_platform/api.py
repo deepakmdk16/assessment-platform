@@ -28,7 +28,7 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from . import agent_client, config, email_client
+from . import agent_client, config, email_client, signing
 from .auth import (
     create_access_token,
     get_current_interviewer,
@@ -1180,6 +1180,21 @@ def _require_callback_token(x_assess_token: str | None = Header(default=None)) -
         raise HTTPException(status_code=401, detail=f"invalid or missing {config.AUTH_HEADER}.")
 
 
+async def _require_callback_signature(request: Request) -> None:
+    """Verify the agent's HMAC body signature on inbound callbacks.
+
+    Enforced only when `CALLBACK_SIGNING_SECRET` is set (unset => no signing, for
+    dev/tests). Async so it can read the raw body — Starlette caches it, so the
+    route still parses the JSON payload afterwards. Proves the callback is really
+    the agent and the result wasn't altered, beyond the shared-secret token.
+    """
+    secret = config.CALLBACK_SIGNING_SECRET
+    if not secret:
+        return
+    if not signing.verify(secret, await request.body(), request.headers.get(signing.SIGNATURE_HEADER)):
+        raise HTTPException(status_code=401, detail="invalid or missing callback signature.")
+
+
 def _is_error_payload(payload: dict[str, Any], verdict: str) -> bool:
     """An assessment is an ERROR when the code couldn't be graded — a top-level
     agent error, an infra failure, or an explicit ERROR verdict. A `compile_error`
@@ -1191,7 +1206,10 @@ def _is_error_payload(payload: dict[str, Any], verdict: str) -> bool:
     )
 
 
-@app.post("/assessments/callback", dependencies=[Depends(_require_callback_token)])
+@app.post(
+    "/assessments/callback",
+    dependencies=[Depends(_require_callback_token), Depends(_require_callback_signature)],
+)
 def assessments_callback(
     payload: dict[str, Any], session: Session = Depends(get_session)
 ) -> dict:

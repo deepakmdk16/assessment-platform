@@ -3,6 +3,7 @@ LLM, or network is required."""
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock
@@ -12,7 +13,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import Session
 
-from assessment_platform import agent_client, config
+from assessment_platform import agent_client, config, signing
 from assessment_platform import db as db_module
 from assessment_platform.models import Submission
 
@@ -574,8 +575,8 @@ def test_outbound_call_includes_token_when_set(client, monkeypatch) -> None:
 
     captured: dict[str, Any] = {}
 
-    def fake_post(url, json, headers, timeout):  # noqa: A002, ANN001
-        captured["headers"] = headers
+    def fake_post(url, **kw):  # ANN001
+        captured["headers"] = kw["headers"]
         return httpx.Response(
             200,
             json={"job_id": "job-hdr", "status": "accepted"},
@@ -590,6 +591,56 @@ def test_outbound_call_includes_token_when_set(client, monkeypatch) -> None:
     )
     assert resp.status_code == 201
     assert captured["headers"]["X-Assess-Token"] == "outbound-secret"
+
+
+def test_outbound_request_is_signed_when_configured(client, monkeypatch) -> None:
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(config, "ASSESS_SIGNING_SECRET", "out-sign")
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url, **kw):  # ANN001
+        captured.update(kw)
+        return httpx.Response(
+            200,
+            json={"job_id": "j", "status": "accepted"},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(agent_client.httpx, "post", fake_post)
+    client.post(
+        "/submissions",
+        json={"question_id": "sum_of_n", "candidate": "J", "language": "python", "code": "x"},
+    )
+    # The outbound body carries a signature the agent can verify over those bytes.
+    sig = captured["headers"].get(signing.SIGNATURE_HEADER)
+    assert sig is not None
+    assert signing.verify("out-sign", captured["content"], sig)
+
+
+def test_callback_signature_required_when_configured(client, monkeypatch) -> None:
+    monkeypatch.setattr(config, "CALLBACK_SIGNING_SECRET", "cb-verify")
+    raw = json.dumps({"job_id": "nope", "verdict": "PASS", "score_pct": 100.0}).encode()
+    ct = {"Content-Type": "application/json"}
+
+    # No signature -> 401, before any job lookup.
+    assert client.post("/assessments/callback", content=raw, headers=ct).status_code == 401
+
+    # A valid signature over the exact bytes -> 200 (an unknown job is still acked).
+    ok = client.post(
+        "/assessments/callback",
+        content=raw,
+        headers={**ct, signing.SIGNATURE_HEADER: signing.sign("cb-verify", raw)},
+    )
+    assert ok.status_code == 200
+
+    # Wrong secret -> 401.
+    bad = client.post(
+        "/assessments/callback",
+        content=raw,
+        headers={**ct, signing.SIGNATURE_HEADER: signing.sign("wrong", raw)},
+    )
+    assert bad.status_code == 401
 
 
 # --------------------------------------------------------------------------- #
@@ -684,8 +735,8 @@ def test_draft_uses_the_longer_draft_timeout(client, monkeypatch) -> None:
     # AGENT_DRAFT_TIMEOUT_S, not the short trigger timeout — else complex drafts 502.
     captured: dict[str, Any] = {}
 
-    def fake_post(url, json, headers, timeout):  # noqa: A002, ANN001
-        captured["timeout"] = timeout
+    def fake_post(url, **kw):  # ANN001
+        captured["timeout"] = kw["timeout"]
         return httpx.Response(
             200,
             json={"engine": "x", "question": _draft_payload()["question"], "warnings": []},

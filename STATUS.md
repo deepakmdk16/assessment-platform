@@ -14,9 +14,6 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
   direct dev setup, wrong the moment there's a load balancer in front. Not code:
   a deploy-time checklist item. Chained proxies (CDN → LB) need `client_ip()`
   revisited, as it trusts exactly one hop.
-- **HMAC body-signing (cross-repo, deferred).** Hardens the shared-secret
-  agent↔platform auth. Must land on **both** sides in one coordinated slice (the
-  Agent grows the verify counterpart) or the platform side is inert.
 - **Claude Code tooling follow-ups (global, deferred — not platform code).** Three
   gaps found in the 2026-07-17 setup audit that live outside this repo, so they
   were left alone: the `ship` skill re-implements `scripts/checkpoints.sh` instead

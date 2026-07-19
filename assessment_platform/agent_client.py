@@ -17,6 +17,7 @@ carries a nested `example: {input, output}`).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -26,8 +27,20 @@ import httpx
 from . import config
 from .config import AGENT_BASE_URL, AGENT_DRAFT_TIMEOUT_S, AGENT_RUN_TIMEOUT_S, AGENT_TIMEOUT_S
 from .models import Question, Submission
+from .signing import SIGNATURE_HEADER, sign
 
 logger = logging.getLogger(__name__)
+
+
+def _signed_post(url: str, body: dict, *, timeout: float) -> httpx.Response:
+    """POST `body` to the agent as JSON bytes with the bearer token and, when
+    ASSESS_SIGNING_SECRET is configured, an HMAC signature over the exact bytes
+    (serialize once so the signed bytes are the bytes sent). See signing.py."""
+    content = json.dumps(body).encode()
+    headers = {"Content-Type": "application/json", **_auth_headers()}
+    if config.ASSESS_SIGNING_SECRET:
+        headers[SIGNATURE_HEADER] = sign(config.ASSESS_SIGNING_SECRET, content)
+    return httpx.post(url, content=content, headers=headers, timeout=timeout)
 
 
 def _auth_headers() -> dict[str, str]:
@@ -117,11 +130,8 @@ def draft_question(
     last: Exception
     for attempt in range(1, max(1, _DRAFT_TRANSPORT_ATTEMPTS) + 1):
         try:
-            resp = httpx.post(
-                f"{base_url}/questions/draft",
-                json=body,
-                headers=_auth_headers(),
-                timeout=AGENT_DRAFT_TIMEOUT_S,
+            resp = _signed_post(
+                f"{base_url}/questions/draft", body, timeout=AGENT_DRAFT_TIMEOUT_S
             )
             resp.raise_for_status()
             result: dict = resp.json()
@@ -152,9 +162,7 @@ def run_code(
     LLM, nothing stored on either side. Raises on transport/HTTP error.
     """
     body = {"code": code, "language": language, "stdin": stdin}
-    resp = httpx.post(
-        f"{base_url}/run", json=body, headers=_auth_headers(), timeout=AGENT_RUN_TIMEOUT_S
-    )
+    resp = _signed_post(f"{base_url}/run", body, timeout=AGENT_RUN_TIMEOUT_S)
     resp.raise_for_status()
     result: dict = resp.json()
     return result
@@ -177,9 +185,7 @@ def run_tests(
         "code": code,
         "language": language,
     }
-    resp = httpx.post(
-        f"{base_url}/run/tests", json=body, headers=_auth_headers(), timeout=AGENT_RUN_TIMEOUT_S
-    )
+    resp = _signed_post(f"{base_url}/run/tests", body, timeout=AGENT_RUN_TIMEOUT_S)
     resp.raise_for_status()
     result: dict = resp.json()
     return result
@@ -200,8 +206,6 @@ def trigger_assessment(
         "callback_url": callback_url,
         "email_to": None,
     }
-    resp = httpx.post(
-        f"{base_url}/assessments", json=body, headers=_auth_headers(), timeout=AGENT_TIMEOUT_S
-    )
+    resp = _signed_post(f"{base_url}/assessments", body, timeout=AGENT_TIMEOUT_S)
     resp.raise_for_status()
     return resp.json()["job_id"]
