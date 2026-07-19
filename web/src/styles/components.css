@@ -801,6 +801,32 @@ textarea {
   color: var(--color-bad);
 }
 
+/* A left-aligned toolbar above a list (e.g. the dashboard's "Show archived"). */
+.list-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.6rem;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.check input {
+  width: auto;
+}
+
+.row-archived {
+  opacity: 0.6;
+}
+
 /* ---------------------------------------------------------------- wizard */
 .wizard {
   max-width: 1040px;

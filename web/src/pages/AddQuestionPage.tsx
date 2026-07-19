@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
+import { difficultyClass } from '../badges'
 import { LANGUAGES } from '../types'
 import type { Language, TestCaseCategory, TestCaseIn } from '../types'
 
@@ -200,6 +201,7 @@ export function AddQuestionPage() {
         required_complexity: requiredComplexity,
         example_input: exampleInput,
         example_output: exampleOutput,
+        difficulty: difficulty.trim() || undefined,
         test_cases: testCases,
       })
       // `justCreated` opens the invite dialog once, as a nudge — inviting is
@@ -295,30 +297,19 @@ export function AddQuestionPage() {
                     onChange={(e) => setBrief(e.target.value)}
                   />
                 </div>
-                <div className="grid2">
-                  <div className="field">
-                    <label htmlFor="draft_language">Reference language</label>
-                    <select
-                      id="draft_language"
-                      value={draftLanguage}
-                      onChange={(e) => setDraftLanguage(e.target.value as Language)}
-                    >
-                      {LANGUAGES.map((lang) => (
-                        <option key={lang} value={lang}>
-                          {lang}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="field">
-                    <label htmlFor="difficulty">Difficulty (optional)</label>
-                    <input
-                      id="difficulty"
-                      placeholder="e.g. medium"
-                      value={difficulty}
-                      onChange={(e) => setDifficulty(e.target.value)}
-                    />
-                  </div>
+                <div className="field">
+                  <label htmlFor="draft_language">Reference language</label>
+                  <select
+                    id="draft_language"
+                    value={draftLanguage}
+                    onChange={(e) => setDraftLanguage(e.target.value as Language)}
+                  >
+                    {LANGUAGES.map((lang) => (
+                      <option key={lang} value={lang}>
+                        {lang}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="field">
                   <label htmlFor="target_complexity">Target complexity (optional)</label>
@@ -366,6 +357,19 @@ export function AddQuestionPage() {
                   <label htmlFor="title">Title</label>
                   <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
                 </div>
+              </div>
+              <div className="field">
+                <label htmlFor="difficulty">Difficulty (optional)</label>
+                <select
+                  id="difficulty"
+                  value={difficulty}
+                  onChange={(e) => setDifficulty(e.target.value)}
+                >
+                  <option value="">— Not set —</option>
+                  <option value="easy">easy</option>
+                  <option value="medium">medium</option>
+                  <option value="hard">hard</option>
+                </select>
               </div>
               <div className="field">
                 <label htmlFor="prompt">Prompt</label>
@@ -524,6 +528,14 @@ export function AddQuestionPage() {
               <dd>{id}</dd>
               <dt>Title</dt>
               <dd>{title}</dd>
+              <dt>Difficulty</dt>
+              <dd>
+                {difficulty ? (
+                  <span className={difficultyClass(difficulty)}>{difficulty}</span>
+                ) : (
+                  '—'
+                )}
+              </dd>
               <dt>Time limit</dt>
               <dd>{timeLimitS}s</dd>
               <dt>Pass threshold</dt>

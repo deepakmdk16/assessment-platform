@@ -7,11 +7,6 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
 
 ## Open items
 
-- **Question `difficulty` / `status` field — UI remaining.** Backend done (see `git
-  log`): `Question.difficulty`/`status` columns + Alembic migration, `difficulty` on
-  create/update, `status` returned, and archive/unarchive endpoints. Still to do,
-  **mockup-first per CLAUDE.md:** a difficulty dropdown in the wizard and
-  Difficulty/Status columns + an archive button on the dashboard.
 - **Set `TRUST_PROXY_HEADERS=true` when deploying behind a proxy.** The rate
   limiters key on the caller's address; behind a proxy that is the *proxy* for
   every request, collapsing every bucket into one shared counter (the first few

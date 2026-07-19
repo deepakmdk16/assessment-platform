@@ -31,6 +31,7 @@ const question: QuestionOut = {
   required_complexity: 'O(n)',
   example_input: '2 7',
   example_output: '0 1',
+  status: 'active',
   test_cases: [],
   created_at: '2026-07-16T00:00:00Z',
   updated_at: '2026-07-16T00:00:00Z',

@@ -8,3 +8,12 @@ export function badgeClass(value: string | null | undefined): string {
   if (['running', 'pending', 'tle'].includes(v)) return 'chip chip-warn'
   return 'chip chip-neutral'
 }
+
+/** Map a difficulty label (easy/medium/hard) to its .chip colour variant. */
+export function difficultyClass(value: string | null | undefined): string {
+  const v = (value ?? '').toLowerCase()
+  if (v === 'easy') return 'chip chip-easy'
+  if (v === 'medium') return 'chip chip-medium'
+  if (v === 'hard') return 'chip chip-hard'
+  return 'chip chip-neutral'
+}
