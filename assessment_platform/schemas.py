@@ -129,6 +129,22 @@ class SubmissionOut(BaseModel):
     result: ResultOut | None = None
 
 
+class SubmissionSummaryOut(BaseModel):
+    """Lean list row: everything the summary needs, minus the two heavy fields
+    (`code` and the agent's `full_result` payload). A page of these stays small
+    even at hundreds of rows; fetch the full `SubmissionOut` per-id for detail."""
+
+    id: str
+    question_id: str
+    candidate: str
+    language: str
+    status: str
+    agent_job_id: str | None
+    created_at: datetime
+    verdict: str | None = None
+    score_pct: float | None = None
+
+
 # --------------------------------------------------------------------------- #
 # Auth                                                                          #
 # --------------------------------------------------------------------------- #

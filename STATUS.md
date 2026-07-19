@@ -42,11 +42,15 @@ have *not* fixed yet:
   `AGENT_DRAFT_TIMEOUT_S` (240s) × 3 transport retries; run/run-tests up to 60s. ~40
   concurrent drafts wedge the entire API, `/health` included. The rate limits now cap
   the easy trigger, but the shape is unchanged.
-- **No pagination.** `GET /questions`, `GET /submissions` and
-  `/questions/{id}/submissions` return everything, and `SubmissionOut` embeds the full
-  `code` blob *and* the entire `full_result` payload — 500 candidates is 500 code
-  blobs plus 500 agent payloads in one response. The N+1 was avoided in
-  `_results_by_submission`; the payload size was not.
+- **Pagination — bounded now, pager UI deferred.** Done (see `git log`): all three
+  list endpoints (`GET /questions`, `GET /submissions`, `/questions/{id}/submissions`)
+  take `limit` (default 100, cap 200) + `offset` with deterministic ordering (newest
+  first, id tiebreaker), so no response can be forced to serialize the whole table;
+  and `GET /submissions` rows are now the lean `SubmissionSummaryOut` — no `code` /
+  `full_result` (fetch the full `SubmissionOut` per-id for detail). Still to do: a real
+  **pager UI** (Prev/Next + a total count) — the dashboard currently shows only the
+  first 100 rows, silently. Needs a totals envelope or a count endpoint plus pager
+  controls, **mockup-first per CLAUDE.md.**
 - **Frontend: no `ErrorBoundary`.** Any render throw (Monaco failing to load, an
   unexpected `full_result` shape) is a white screen for a candidate mid-assessment
   with their code in the editor — the worst failure location in the product.
