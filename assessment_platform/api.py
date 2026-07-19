@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -412,7 +412,7 @@ def _agent_detail(exc: httpx.HTTPStatusError) -> str:
 
 
 @app.post("/questions/draft", response_model=QuestionDraftOut)
-def draft_question(
+async def draft_question(
     body: QuestionDraftIn,
     request: Request,
     current: Interviewer = Depends(get_current_interviewer),
@@ -431,7 +431,7 @@ def draft_question(
         "draft", client_ip(request), config.DRAFT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
     try:
-        payload = agent_client.draft_question(
+        payload = await agent_client.draft_question(
             brief=body.brief,
             language=body.language,
             difficulty=body.difficulty,
@@ -817,10 +817,10 @@ def _load_invite_for_candidate(token: str, email: str, session: Session) -> tupl
     return invite, question
 
 
-def _agent_run_call(what: str, call: Callable[[], dict]) -> dict:
-    """Invoke a synchronous agent run call, mapping its failures to ours."""
+async def _agent_run_call(what: str, call: Callable[[], Awaitable[dict]]) -> dict:
+    """Await an agent run call, mapping its failures to ours."""
     try:
-        return call()
+        return await call()
     except httpx.HTTPStatusError as exc:
         # The agent rejected the request (e.g. unsupported language) — pass its
         # reason through as a 400 rather than a blank 502.
@@ -832,7 +832,7 @@ def _agent_run_call(what: str, call: Callable[[], dict]) -> dict:
 
 
 @app.post("/invite/{token}/run", response_model=CandidateRunOut)
-def candidate_run(
+async def candidate_run(
     token: str,
     body: CandidateRunIn,
     request: Request,
@@ -847,7 +847,7 @@ def candidate_run(
     email = _normalize_email(body.candidate_email)
     _load_invite_for_candidate(token, email, session)
 
-    result = _agent_run_call(
+    result = await _agent_run_call(
         "run", lambda: agent_client.run_code(body.code, body.language, body.stdin)
     )
     if result.get("infra_error"):
@@ -863,7 +863,7 @@ def candidate_run(
 
 
 @app.post("/invite/{token}/run-tests", response_model=CandidateRunTestsOut)
-def candidate_run_tests(
+async def candidate_run_tests(
     token: str,
     body: CandidateRunTestsIn,
     request: Request,
@@ -882,7 +882,7 @@ def candidate_run_tests(
     email = _normalize_email(body.candidate_email)
     _, question = _load_invite_for_candidate(token, email, session)
 
-    result = _agent_run_call(
+    result = await _agent_run_call(
         "run-tests", lambda: agent_client.run_tests(question, body.code, body.language)
     )
     if result.get("infra_error"):
@@ -906,7 +906,7 @@ def candidate_run_tests(
 
 
 @app.post("/invite/{token}/submit", response_model=CandidateSubmitOut, status_code=201)
-def candidate_submit(
+async def candidate_submit(
     token: str,
     body: CandidateSubmitIn,
     request: Request,
@@ -947,7 +947,7 @@ def candidate_submit(
         raise HTTPException(status_code=409, detail=_ALREADY_SUBMITTED_DETAIL) from exc
     session.refresh(sub)
 
-    sub = _trigger_agent(session, question, sub)
+    sub = await _trigger_agent(session, question, sub)
     return CandidateSubmitOut(submission_id=sub.id, status=sub.status)
 
 
@@ -956,7 +956,7 @@ def candidate_submit(
 # --------------------------------------------------------------------------- #
 
 
-def _trigger_agent(session: Session, question: Question, sub: Submission) -> Submission:
+async def _trigger_agent(session: Session, question: Question, sub: Submission) -> Submission:
     """Trigger an agent job for `sub` and persist the outcome.
 
     Shared by the initial submit and the manual retry: on success sets the new
@@ -966,7 +966,7 @@ def _trigger_agent(session: Session, question: Question, sub: Submission) -> Sub
     """
     callback_url = f"{PLATFORM_BASE_URL}/assessments/callback"
     try:
-        job_id = agent_client.trigger_assessment(question, sub, callback_url)
+        job_id = await agent_client.trigger_assessment(question, sub, callback_url)
     except Exception as exc:  # agent unreachable / rejected the job
         sub.status = "error"
         session.add(sub)
@@ -1021,7 +1021,7 @@ def _reap_stale_running(session: Session) -> list[str]:
 
 
 @app.post("/submissions", response_model=SubmissionOut, status_code=201)
-def create_submission(
+async def create_submission(
     body: SubmissionCreate,
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
@@ -1040,12 +1040,12 @@ def create_submission(
     session.commit()
     session.refresh(sub)
 
-    sub = _trigger_agent(session, question, sub)
+    sub = await _trigger_agent(session, question, sub)
     return _submission_out(sub, None)
 
 
 @app.post("/submissions/{submission_id}/retry", response_model=SubmissionOut)
-def retry_submission(
+async def retry_submission(
     submission_id: str,
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
@@ -1070,7 +1070,7 @@ def retry_submission(
 
     # Clear the prior failed attempt before re-triggering.
     sub.agent_job_id = None
-    sub = _trigger_agent(session, question, sub)
+    sub = await _trigger_agent(session, question, sub)
     return _submission_out(sub, None)
 
 

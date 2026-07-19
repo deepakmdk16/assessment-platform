@@ -17,17 +17,67 @@ import os
 # developer's real .env (which config loads) can't make the suite send live email.
 os.environ.setdefault("PLATFORM_TESTING", "1")
 
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
+from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
+from assessment_platform import agent_client
 from assessment_platform import db as db_module
 from assessment_platform.api import app
 from assessment_platform.db import get_session
 from assessment_platform.ratelimit import limiter
+
+
+def async_return(value: Any) -> Callable[..., Awaitable[Any]]:
+    """An async stand-in for a mocked agent call that resolves to `value`.
+
+    The agent_client functions are now coroutines the routes `await`, so a plain
+    `lambda` returning a value is not awaitable — use this to patch them."""
+
+    async def _stub(*_a: Any, **_k: Any) -> Any:
+        return value
+
+    return _stub
+
+
+def async_raise(exc: BaseException) -> Callable[..., Awaitable[Any]]:
+    """Like `async_return`, but the awaited call raises `exc`."""
+
+    async def _stub(*_a: Any, **_k: Any) -> Any:
+        raise exc
+
+    return _stub
+
+
+def patch_async_post(
+    monkeypatch: pytest.MonkeyPatch,
+    on_post: Callable[..., httpx.Response],
+) -> None:
+    """Patch `httpx.AsyncClient` so the agent's outbound POST is intercepted.
+
+    `on_post(url, timeout, **post_kwargs)` returns the Response; `timeout` is the
+    value passed to the client constructor (where httpx.AsyncClient takes it),
+    the rest are the `.post()` kwargs (content, headers)."""
+
+    class _FakeAsyncClient:
+        def __init__(self, *_a: Any, **kw: Any) -> None:
+            self._timeout = kw.get("timeout")
+
+        async def __aenter__(self) -> _FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> bool:
+            return False
+
+        async def post(self, url: str, **kw: Any) -> httpx.Response:
+            return on_post(url, self._timeout, **kw)
+
+    monkeypatch.setattr(agent_client.httpx, "AsyncClient", _FakeAsyncClient)
 
 
 @pytest.fixture(autouse=True)
