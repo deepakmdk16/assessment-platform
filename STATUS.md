@@ -7,11 +7,6 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
 
 ## Open items
 
-- **Persist invite delivery status — UI remaining.** Backend done (see `git log`):
-  a `deliveries` JSON column on `Invite` + Alembic migration stores the per-recipient
-  outcome at creation, and every read (create/list/revoke) now returns it instead of
-  an empty list. Still to do, **mockup-first per CLAUDE.md:** surface per-recipient
-  delivery status in the invites table.
 - **Question `difficulty` / `status` field — UI remaining.** Backend done (see `git
   log`): `Question.difficulty`/`status` columns + Alembic migration, `difficulty` on
   create/update, `status` returned, and archive/unarchive endpoints. Still to do,
