@@ -17,9 +17,6 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
 - **HMAC body-signing (cross-repo, deferred).** Hardens the shared-secret
   agent↔platform auth. Must land on **both** sides in one coordinated slice (the
   Agent grows the verify counterpart) or the platform side is inert.
-- **E2E resilience.** Make the E2E suite resilient to a stale local
-  `e2e-platform.db`. (The other half of this item — running the offline gates in
-  CI — is done: `.github/workflows/checks.yml` invokes `scripts/checkpoints.sh`.)
 - **Claude Code tooling follow-ups (global, deferred — not platform code).** Three
   gaps found in the 2026-07-17 setup audit that live outside this repo, so they
   were left alone: the `ship` skill re-implements `scripts/checkpoints.sh` instead
