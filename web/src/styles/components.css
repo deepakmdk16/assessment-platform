@@ -569,6 +569,43 @@ textarea {
   cursor: pointer;
 }
 
+/* Table-footer pager: current range + total on the left, Prev/Next on the right.
+   Lives inside .card, below the .tbl-wrap, so it shares the card's border. */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 1rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+}
+
+.pager-range {
+  font-size: 0.82rem;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pager-range b {
+  color: var(--color-heading);
+  font-weight: 600;
+}
+
+.pager-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pager-page {
+  font-size: 0.82rem;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+  padding: 0 0.3rem;
+}
+
 .t-title {
   font-weight: 600;
   color: var(--color-heading);
@@ -1195,6 +1232,13 @@ button.tab:hover {
   font-size: 0.82rem;
   font-weight: 600;
   text-transform: capitalize;
+}
+
+/* "Draft restored" hint next to the language picker — a quiet reassurance that
+   autosaved work came back; clears on the first edit. */
+.editor-hint {
+  margin-left: auto;
+  font-size: 0.78rem;
 }
 
 .editor-wrapper {

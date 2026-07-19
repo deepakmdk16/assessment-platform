@@ -52,6 +52,8 @@ deterministic grade.
 - `agent_client.py` — the outbound call that triggers the agent (the mock
   boundary in tests).
 - `config.py` — env-driven config. `db.py` — engine + session.
+- `signing.py` — HMAC-SHA256 body signing/verification (mirrored **verbatim** in
+  the agent repo — keep the two identical or every signed request 401s).
 
 ## The agent contract
 
@@ -62,6 +64,11 @@ deterministic grade.
 - **Callback:** the agent POSTs the full result to `/assessments/callback`,
   authenticated with `X-Assess-Token: $CALLBACK_TOKEN` (required when set). The
   payload is stored verbatim in `AssessmentResult.full_result`.
+- **Body signing (defense in depth):** on top of the bearer tokens (which travel
+  in the clear), when the signing secrets are set the platform signs its outbound
+  requests with `ASSESS_SIGNING_SECRET` and verifies the callback with
+  `CALLBACK_SIGNING_SECRET` (`X-Assess-Signature`, HMAC over the exact body +
+  a timestamp window). Both must match the agent's; enforced only when set.
 
 ## Key principles (do not violate)
 

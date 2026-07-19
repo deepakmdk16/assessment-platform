@@ -106,7 +106,7 @@ def test_question_ownership_isolation(anon_client: TestClient) -> None:
     assert resp.status_code == 201
 
     # B sees an empty list and cannot GET/PUT/DELETE A's question.
-    assert anon_client.get("/questions", headers=_auth(tok_b)).json() == []
+    assert anon_client.get("/questions", headers=_auth(tok_b)).json()["items"] == []
     assert anon_client.get("/questions/sum_of_n", headers=_auth(tok_b)).status_code == 403
 
     upd = {
@@ -118,7 +118,7 @@ def test_question_ownership_isolation(anon_client: TestClient) -> None:
     assert anon_client.delete("/questions/sum_of_n", headers=_auth(tok_b)).status_code == 403
 
     # A still sees and owns it.
-    assert len(anon_client.get("/questions", headers=_auth(tok_a)).json()) == 1
+    assert len(anon_client.get("/questions", headers=_auth(tok_a)).json()["items"]) == 1
     assert anon_client.get("/questions/sum_of_n", headers=_auth(tok_a)).status_code == 200
 
 
@@ -307,7 +307,7 @@ def test_dashboard_submissions_owner_scoped(anon_client: TestClient, monkeypatch
     # Owner A sees the candidate's submission.
     resp = anon_client.get("/questions/sum_of_n/submissions", headers=_auth(tok_a))
     assert resp.status_code == 200
-    rows = resp.json()
+    rows = resp.json()["items"]
     assert len(rows) == 1
     row = rows[0]
     assert row["candidate_name"] == "Cand"

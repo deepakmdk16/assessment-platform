@@ -203,7 +203,7 @@ def test_duplicate_submit_race_is_refused_by_the_db(
     assert "already been recorded" in resp.json()["detail"]
 
     # Refused, not duplicated: exactly one attempt is on record.
-    subs = anon_client.get("/questions/sum_of_n/submissions", headers=_auth(tok)).json()
+    subs = anon_client.get("/questions/sum_of_n/submissions", headers=_auth(tok)).json()["items"]
     assert len(subs) == 1
 
 
@@ -259,6 +259,6 @@ def test_submissions_owner_scoped(anon_client: TestClient, monkeypatch) -> None:
 
     # B cannot read A's submission, and B's list is empty.
     assert anon_client.get(f"/submissions/{sub_id}", headers=_auth(tok_b)).status_code == 403
-    assert anon_client.get("/submissions", headers=_auth(tok_b)).json() == []
+    assert anon_client.get("/submissions", headers=_auth(tok_b)).json()["items"] == []
     # A sees exactly its own.
-    assert len(anon_client.get("/submissions", headers=_auth(tok_a)).json()) == 1
+    assert len(anon_client.get("/submissions", headers=_auth(tok_a)).json()["items"]) == 1

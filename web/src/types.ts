@@ -15,6 +15,15 @@ export type Language = (typeof LANGUAGES)[number]
 
 export type TestCaseCategory = 'correctness' | 'performance'
 
+/** A paginated slice of a collection. `total` is the full count (before
+ *  limit/offset), so the UI can show "X–Y of Z" and a pager in one request. */
+export interface Page<T> {
+  items: T[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface TestCaseIn {
   name: string
   stdin: string

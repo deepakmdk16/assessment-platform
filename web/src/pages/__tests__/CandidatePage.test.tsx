@@ -67,6 +67,8 @@ function renderCandidatePage() {
 describe('CandidatePage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Autosave persists to localStorage; isolate each test's drafts.
+    localStorage.clear()
   })
 
   it('walks the candidate through gate -> editor -> submitted', async () => {
@@ -288,6 +290,48 @@ describe('CandidatePage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/too many runs/i)
     expect(screen.getByLabelText(/code editor/i)).toHaveValue('print("hi")')
+  })
+
+  it('restores an autosaved draft when the candidate returns', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem(
+      'assessment-draft:tok123',
+      JSON.stringify({ code: 'saved work', language: 'javascript' }),
+    )
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    const editor = await screen.findByLabelText(/code editor/i)
+    expect(editor).toHaveValue('saved work')
+    // The saved language is still offered, so it's the selected one.
+    expect(screen.getByLabelText(/language/i)).toHaveValue('javascript')
+    expect(screen.getByText(/draft restored/i)).toBeInTheDocument()
+  })
+
+  it('clears the saved draft once the attempt is recorded', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+    await user.type(await screen.findByLabelText(/code editor/i), 'print("hi")')
+    await user.click(screen.getByRole('button', { name: /^submit$/i }))
+
+    expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
+    expect(localStorage.getItem('assessment-draft:tok123')).toBeNull()
   })
 
   it('shows an error for an expired invite', async () => {

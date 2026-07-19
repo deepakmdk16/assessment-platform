@@ -37,7 +37,12 @@ export default defineConfig({
       env: { MOCK_AGENT_PORT: '8000' },
     },
     {
-      command: 'uv run platform-api',
+      // Wipe the SQLite file (and any -wal/-shm sidecars) BEFORE starting so the
+      // DB is genuinely throwaway. AUTO_CREATE_TABLES only builds a *fresh* DB —
+      // it never ALTERs an existing one — so a stale e2e-platform.db left by an
+      // earlier run (from before a later migration) would 500 on a missing column.
+      // CI is already clean via checkout; this makes local runs just as robust.
+      command: 'rm -f e2e-platform.db* && uv run platform-api',
       cwd: repoRoot,
       url: `${PLATFORM_URL}/health`,
       reuseExistingServer: !process.env.CI,
@@ -48,8 +53,9 @@ export default defineConfig({
         DATABASE_URL: 'sqlite:///./e2e-platform.db',
         // Test mode: force SMTP off so invites don't hit real Gmail during E2E.
         PLATFORM_TESTING: '1',
-        // The E2E DB is created on the fly, so opt into startup table creation
-        // (production runs Alembic instead; it's OFF by default).
+        // The E2E DB is wiped and recreated on the fly (see the command above), so
+        // opt into startup table creation (production runs Alembic instead; OFF by
+        // default).
         AUTO_CREATE_TABLES: 'true',
         // Vite may report its Origin as either host; allow both.
         CORS_ORIGINS: `${FRONTEND_URL},http://localhost:5173`,

@@ -2,7 +2,10 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
+import { Pager } from '../components/Pager'
 import type { Invite, InviteDelivery, QuestionOut, SubmissionRow } from '../types'
+
+const SUB_PAGE_SIZE = 100
 
 export function QuestionDetailPage() {
   const navigate = useNavigate()
@@ -11,6 +14,8 @@ export function QuestionDetailPage() {
   const [question, setQuestion] = useState<QuestionOut | null>(null)
   const [invites, setInvites] = useState<Invite[]>([])
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([])
+  const [subTotal, setSubTotal] = useState(0)
+  const [subOffset, setSubOffset] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
   // Inviting is a deliberate action, so the email field lives in a dialog rather
@@ -39,11 +44,20 @@ export function QuestionDetailPage() {
     if (!id) return
     api.getQuestion(id).then(setQuestion).catch(() => setError('Failed to load question'))
     api.listInvites(id).then(setInvites).catch(() => setError('Failed to load invites'))
-    api
-      .listSubmissions(id)
-      .then(setSubmissions)
-      .catch(() => setError('Failed to load submissions'))
   }, [id])
+
+  // Submissions are paged independently so stepping through them doesn't refetch
+  // the question and invites.
+  useEffect(() => {
+    if (!id) return
+    api
+      .listSubmissions(id, subOffset, SUB_PAGE_SIZE)
+      .then((page) => {
+        setSubmissions(page.items)
+        setSubTotal(page.total)
+      })
+      .catch(() => setError('Failed to load submissions'))
+  }, [id, subOffset])
 
   // Consume the nudge: history state survives a reload, so without clearing it
   // the invite dialog would pop open again every time the page is refreshed.
@@ -239,12 +253,13 @@ export function QuestionDetailPage() {
 
           <h2 className="sect-title">
             Submissions
-            {submissions.length > 0 && <span className="count">{submissions.length}</span>}
+            {subTotal > 0 && <span className="count">{subTotal}</span>}
           </h2>
           {submissions.length === 0 ? (
             <p className="empty-state">No submissions yet. Share an invite link to get started.</p>
           ) : (
-            <div className="card tbl-wrap">
+            <div className="card">
+              <div className="tbl-wrap">
               <table className="tbl">
                 <thead>
                   <tr>
@@ -285,6 +300,13 @@ export function QuestionDetailPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
+              <Pager
+                total={subTotal}
+                limit={SUB_PAGE_SIZE}
+                offset={subOffset}
+                onChange={setSubOffset}
+              />
             </div>
           )}
         </div>

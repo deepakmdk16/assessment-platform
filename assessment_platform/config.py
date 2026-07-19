@@ -72,6 +72,14 @@ AUTH_HEADER = "X-Assess-Token"
 CALLBACK_TOKEN = os.getenv("CALLBACK_TOKEN") or None
 ASSESS_API_TOKEN = os.getenv("ASSESS_API_TOKEN") or None
 
+# HMAC body-signing secrets (defense in depth over the bearer tokens above, which
+# travel in the clear). Never transmitted; enforced only when set. Must match the
+# agent's ASSESS_SIGNING_SECRET / CALLBACK_SIGNING_SECRET. See signing.py.
+#   ASSESS_SIGNING_SECRET   — WE sign outbound requests to the agent with it.
+#   CALLBACK_SIGNING_SECRET — the agent signs its callback; we VERIFY with it.
+ASSESS_SIGNING_SECRET = os.getenv("ASSESS_SIGNING_SECRET") or None
+CALLBACK_SIGNING_SECRET = os.getenv("CALLBACK_SIGNING_SECRET") or None
+
 # Interviewer auth (JWT bearer). JWT_SECRET is REQUIRED in production; if unset we
 # fall back to an ephemeral per-process secret so dev/tests work out of the box —
 # tokens then don't survive a restart, hence the warning.

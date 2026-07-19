@@ -67,7 +67,7 @@ describe('QuestionDetailPage', () => {
     vi.clearAllMocks()
     vi.mocked(api.getQuestion).mockResolvedValue(question)
     vi.mocked(api.listInvites).mockResolvedValue([activeInvite])
-    vi.mocked(api.listSubmissions).mockResolvedValue([])
+    vi.mocked(api.listSubmissions).mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 })
   })
 
   it('revokes an active invite and reflects the new status', async () => {
