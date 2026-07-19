@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from conftest import async_raise, async_return, patch_async_post
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import Session
 
@@ -137,7 +138,7 @@ def test_delete_question_with_submissions_409(client, monkeypatch) -> None:
     attached to it — so the delete is refused instead.
     """
     client.post("/questions", json=_sample_question())
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-del")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-del"))
     sub_id = client.post(
         "/submissions",
         json={
@@ -210,7 +211,7 @@ def test_unarchive_restores_to_list(client) -> None:
 def test_archive_retires_a_question_with_submissions(client, monkeypatch) -> None:
     # DELETE 409s once a question has submissions; archive is the retire path.
     client.post("/questions", json=_sample_question())
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-arch")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-arch"))
     client.post(
         "/submissions",
         json={"question_id": "sum_of_n", "candidate": "J", "language": "python", "code": "x"},
@@ -278,7 +279,7 @@ def test_create_submission_mocks_agent(client, monkeypatch) -> None:
 
     captured: dict[str, Any] = {}
 
-    def fake_trigger(question, submission, callback_url, base_url=None):  # noqa: ANN001
+    async def fake_trigger(question, submission, callback_url, base_url=None):  # noqa: ANN001
         captured["question_id"] = question.id
         captured["code"] = submission.code
         captured["callback_url"] = callback_url
@@ -313,7 +314,7 @@ def test_direct_submissions_are_not_constrained_by_the_invite_unique(client, mon
     being distinct, the second insert here would 409 instead.
     """
     client.post("/questions", json=_sample_question())
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     body = {"question_id": "sum_of_n", "candidate": "Jane Doe", "language": "python", "code": "x"}
 
     assert client.post("/submissions", json=body).status_code == 201
@@ -322,7 +323,7 @@ def test_direct_submissions_are_not_constrained_by_the_invite_unique(client, mon
 
 
 def test_submission_unknown_question_404(client, monkeypatch) -> None:
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "x")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("x"))
     resp = client.post(
         "/submissions",
         json={"question_id": "ghost", "candidate": "X", "language": "python", "code": "x"},
@@ -333,10 +334,9 @@ def test_submission_unknown_question_404(client, monkeypatch) -> None:
 def test_agent_call_failure_marks_error(client, monkeypatch) -> None:
     client.post("/questions", json=_sample_question())
 
-    def boom(*a, **k):  # noqa: ANN002, ANN003
-        raise RuntimeError("agent down")
-
-    monkeypatch.setattr(agent_client, "trigger_assessment", boom)
+    monkeypatch.setattr(
+        agent_client, "trigger_assessment", async_raise(RuntimeError("agent down"))
+    )
     resp = client.post(
         "/submissions",
         json={"question_id": "sum_of_n", "candidate": "X", "language": "python", "code": "x"},
@@ -374,7 +374,7 @@ def _callback_payload(job_id: str, verdict: str = "PASS") -> dict[str, Any]:
 
 def _create_running_submission(client, monkeypatch, job_id: str = "job-abc") -> str:
     client.post("/questions", json=_sample_question())
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: job_id)
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return(job_id))
     resp = client.post(
         "/submissions",
         json={"question_id": "sum_of_n", "candidate": "Jane Doe", "language": "python", "code": "x"},
@@ -464,7 +464,7 @@ def test_reaped_submission_becomes_retryable(client, monkeypatch) -> None:
     _age_submission(sub_id, config.REAP_RUNNING_AFTER_S + 60)
     client.get("/submissions")  # reap on the dashboard read
 
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-new")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-new"))
     resp = client.post(f"/submissions/{sub_id}/retry")
     assert resp.status_code == 200
     assert resp.json()["status"] == "running"
@@ -517,7 +517,7 @@ def test_retry_from_error_reruns(client, monkeypatch) -> None:
     sub_id = client.get("/submissions").json()["items"][0]["id"]
 
     # Agent recovers; retry succeeds with a fresh job_id.
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-retry-1")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-retry-1"))
     resp = client.post(f"/submissions/{sub_id}/retry")
     assert resp.status_code == 200
     body = resp.json()
@@ -575,7 +575,7 @@ def test_outbound_call_includes_token_when_set(client, monkeypatch) -> None:
 
     captured: dict[str, Any] = {}
 
-    def fake_post(url, **kw):  # ANN001
+    def fake_post(url, timeout, **kw):  # ANN001
         captured["headers"] = kw["headers"]
         return httpx.Response(
             200,
@@ -583,7 +583,7 @@ def test_outbound_call_includes_token_when_set(client, monkeypatch) -> None:
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr(agent_client.httpx, "post", fake_post)
+    patch_async_post(monkeypatch, fake_post)
 
     resp = client.post(
         "/submissions",
@@ -599,7 +599,7 @@ def test_outbound_request_is_signed_when_configured(client, monkeypatch) -> None
 
     captured: dict[str, Any] = {}
 
-    def fake_post(url, **kw):  # ANN001
+    def fake_post(url, timeout, **kw):  # ANN001
         captured.update(kw)
         return httpx.Response(
             200,
@@ -607,7 +607,7 @@ def test_outbound_request_is_signed_when_configured(client, monkeypatch) -> None
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr(agent_client.httpx, "post", fake_post)
+    patch_async_post(monkeypatch, fake_post)
     client.post(
         "/submissions",
         json={"question_id": "sum_of_n", "candidate": "J", "language": "python", "code": "x"},
@@ -680,7 +680,7 @@ def _http_error(status: int, detail: Any) -> httpx.HTTPStatusError:
 
 
 def test_draft_question_happy_path(client, monkeypatch) -> None:
-    monkeypatch.setattr(agent_client, "draft_question", lambda **k: _draft_payload())
+    monkeypatch.setattr(agent_client, "draft_question", async_return(_draft_payload()))
 
     resp = client.post(
         "/questions/draft",
@@ -703,10 +703,11 @@ def test_draft_question_happy_path(client, monkeypatch) -> None:
 
 
 def test_draft_question_offline_503(client, monkeypatch) -> None:
-    def boom(**k: Any) -> dict:
-        raise _http_error(503, "drafting requires a live model.")
-
-    monkeypatch.setattr(agent_client, "draft_question", boom)
+    monkeypatch.setattr(
+        agent_client,
+        "draft_question",
+        async_raise(_http_error(503, "drafting requires a live model.")),
+    )
     resp = client.post("/questions/draft", json={"brief": "x", "language": "python"})
     assert resp.status_code == 503
     assert "live model" in resp.json()["detail"]
@@ -715,10 +716,9 @@ def test_draft_question_offline_503(client, monkeypatch) -> None:
 def test_draft_question_unusable_422(client, monkeypatch) -> None:
     warnings_detail = {"warnings": ["The draft produced no correctness inputs."]}
 
-    def boom(**k: Any) -> dict:
-        raise _http_error(422, warnings_detail)
-
-    monkeypatch.setattr(agent_client, "draft_question", boom)
+    monkeypatch.setattr(
+        agent_client, "draft_question", async_raise(_http_error(422, warnings_detail))
+    )
     resp = client.post("/questions/draft", json={"brief": "x", "language": "python"})
     assert resp.status_code == 422
     # The dict detail (with `warnings`) is flattened to a readable string for the UI.
@@ -735,15 +735,15 @@ def test_draft_uses_the_longer_draft_timeout(client, monkeypatch) -> None:
     # AGENT_DRAFT_TIMEOUT_S, not the short trigger timeout — else complex drafts 502.
     captured: dict[str, Any] = {}
 
-    def fake_post(url, **kw):  # ANN001
-        captured["timeout"] = kw["timeout"]
+    def fake_post(url, timeout, **kw):  # ANN001
+        captured["timeout"] = timeout
         return httpx.Response(
             200,
             json={"engine": "x", "question": _draft_payload()["question"], "warnings": []},
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr(agent_client.httpx, "post", fake_post)
+    patch_async_post(monkeypatch, fake_post)
     resp = client.post("/questions/draft", json={"brief": "x", "language": "python"})
     assert resp.status_code == 200
     assert captured["timeout"] == config.AGENT_DRAFT_TIMEOUT_S
@@ -782,7 +782,7 @@ def test_questions_pagination_bounds_and_cover(client) -> None:
 
 def test_submissions_list_is_lean(client, monkeypatch) -> None:
     client.post("/questions", json=_sample_question())
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     body = {"question_id": "sum_of_n", "candidate": "Jane", "language": "python", "code": "print(1)"}
     assert client.post("/submissions", json=body).status_code == 201
 

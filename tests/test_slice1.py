@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from conftest import register_interviewer  # pytest adds tests/ to sys.path
+from conftest import async_return, register_interviewer  # pytest adds tests/ to sys.path
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -234,7 +234,7 @@ def test_candidate_submit_triggers_agent(anon_client: TestClient, monkeypatch) -
     tok = register_interviewer(anon_client, "iv3@x.io")
     inv = _make_invite(anon_client, tok, recipients=["jane@x.io"])
 
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-cand")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-cand"))
 
     resp = anon_client.post(
         f"/invite/{inv['token']}/submit",
@@ -273,7 +273,7 @@ def test_expired_invite_410(anon_client: TestClient, monkeypatch) -> None:
 
     assert anon_client.get(f"/invite/{inv['token']}").status_code == 410
 
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-x")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-x"))
     resp = anon_client.post(
         f"/invite/{inv['token']}/submit",
         json={"candidate_name": "X", "candidate_email": "x@x.io", "language": "python", "code": "x"},
@@ -298,7 +298,7 @@ def test_dashboard_submissions_owner_scoped(anon_client: TestClient, monkeypatch
     tok_b = register_interviewer(anon_client, "dash-b@x.io")
     inv = _make_invite(anon_client, tok_a, recipients=["c@x.io"])
 
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-d")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-d"))
     anon_client.post(
         f"/invite/{inv['token']}/submit",
         json={"candidate_name": "Cand", "candidate_email": "c@x.io", "language": "python", "code": "x"},

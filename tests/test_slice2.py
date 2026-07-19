@@ -4,7 +4,7 @@ routes. Fully offline (agent mocked)."""
 
 from __future__ import annotations
 
-from conftest import register_interviewer  # pytest adds tests/ to sys.path
+from conftest import async_return, register_interviewer  # pytest adds tests/ to sys.path
 from fastapi import Request
 from fastapi.testclient import TestClient
 from test_slice1 import _auth, _make_invite, _sample_question
@@ -84,7 +84,7 @@ def test_register_rate_limited(anon_client: TestClient, monkeypatch) -> None:
     assert anon_client.post("/auth/register", json=_register_body(3)).status_code == 429
 
 
-def _fake_draft(**_kwargs: object) -> dict[str, object]:
+async def _fake_draft(**_kwargs: object) -> dict[str, object]:
     return {
         "question": {"id": "q1", "title": "T", "prompt": "P", "constraints": "", "test_cases": []},
         "warnings": [],
@@ -128,7 +128,7 @@ def test_client_ip_uses_rightmost_forwarded_hop_when_trusted(monkeypatch) -> Non
 
 def test_candidate_submit_rate_limited(anon_client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(config, "SUBMIT_RATE_LIMIT_MAX", 1)
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     tok = register_interviewer(anon_client, "rl2@x.io")
     inv = _make_invite(anon_client, tok, recipients=["a@x.io", "b@x.io"])
 
@@ -143,7 +143,7 @@ def test_candidate_submit_rate_limited(anon_client: TestClient, monkeypatch) -> 
 
 
 def test_revoke_invite_blocks_candidate(anon_client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     tok = register_interviewer(anon_client, "rv@x.io")
     inv = _make_invite(anon_client, tok, recipients=["c@x.io"])
 
@@ -168,7 +168,7 @@ def test_revoke_invite_owner_scoped(anon_client: TestClient) -> None:
 
 
 def test_one_submission_per_email(anon_client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     tok = register_interviewer(anon_client, "1p@x.io")
     inv = _make_invite(anon_client, tok, recipients=["jane@x.io", "john@x.io"])
 
@@ -190,7 +190,7 @@ def test_duplicate_submit_race_is_refused_by_the_db(
     insert — and the unique constraint must still refuse the second. Without the
     constraint this test stores two attempts and triggers two paid agent jobs.
     """
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     monkeypatch.setattr(api, "_check_not_already_submitted", lambda *a, **k: None)
     tok = register_interviewer(anon_client, "race@x.io")
     inv = _make_invite(anon_client, tok, recipients=["jane@x.io"])
@@ -244,7 +244,7 @@ def test_submissions_routes_require_auth(anon_client: TestClient) -> None:
 
 
 def test_submissions_owner_scoped(anon_client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     tok_a = register_interviewer(anon_client, "sub-a@x.io")
     tok_b = register_interviewer(anon_client, "sub-b@x.io")
     anon_client.post("/questions", json=_sample_question(), headers=_auth(tok_a))

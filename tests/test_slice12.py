@@ -12,6 +12,7 @@ retrying them only makes the interviewer wait longer for the same error.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -39,26 +40,33 @@ def _ok_response() -> httpx.Response:
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     """Don't actually back off — these tests assert call counts, not wall clock."""
-    monkeypatch.setattr(agent_client.time, "sleep", lambda _s: None)
+
+    async def _noop(_s: float) -> None:
+        return None
+
+    monkeypatch.setattr(agent_client.asyncio, "sleep", _noop)
 
 
 def _post_returning(monkeypatch: pytest.MonkeyPatch, outcomes: list[Any]) -> list[int]:
-    """Stub httpx.post to yield `outcomes` in order (exceptions are raised)."""
+    """Stub the signed POST to yield `outcomes` in order (exceptions are raised).
+
+    Patches at `_signed_post` — the seam just under the retry loop — so these
+    tests exercise draft_question's retry policy without a real HTTP transport."""
     calls: list[int] = []
 
-    def _fake(*a: Any, **k: Any) -> httpx.Response:
+    async def _fake(*a: Any, **k: Any) -> httpx.Response:
         item = outcomes[len(calls)]
         calls.append(1)
         if isinstance(item, Exception):
             raise item
         return item
 
-    monkeypatch.setattr(agent_client.httpx, "post", _fake)
+    monkeypatch.setattr(agent_client, "_signed_post", _fake)
     return calls
 
 
 def _draft() -> dict:
-    return agent_client.draft_question(brief="b", language="python")
+    return asyncio.run(agent_client.draft_question(brief="b", language="python"))
 
 
 # --------------------------------------------------------------------------- #

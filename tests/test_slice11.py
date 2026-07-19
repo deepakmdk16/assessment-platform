@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
-from conftest import register_interviewer  # pytest adds tests/ to sys.path
+from conftest import async_return, register_interviewer  # pytest adds tests/ to sys.path
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 from test_slice1 import _auth, _make_invite
@@ -68,7 +68,7 @@ def test_run_returns_program_output(
 ) -> None:
     seen: dict[str, Any] = {}
 
-    def _fake(code: str, language: str, stdin: str, **k: Any) -> dict:
+    async def _fake(code: str, language: str, stdin: str, **k: Any) -> dict:
         seen["code"], seen["language"], seen["stdin"] = code, language, stdin
         return RUN_OK
 
@@ -85,7 +85,7 @@ def test_run_does_not_create_a_submission(
     anon_client: TestClient, invite: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Running is a rehearsal — it must not spend the candidate's one attempt."""
-    monkeypatch.setattr(agent_client, "run_code", lambda *a, **k: RUN_OK)
+    monkeypatch.setattr(agent_client, "run_code", async_return(RUN_OK))
     assert _run(anon_client, invite["token"]).status_code == 200
 
     with Session(db_module.engine) as s:
@@ -100,15 +100,15 @@ def test_run_rejects_an_uninvited_email(
     anon_client: TestClient, invite: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Otherwise the link would be free compute for anyone holding it."""
-    monkeypatch.setattr(agent_client, "run_code", lambda *a, **k: RUN_OK)
+    monkeypatch.setattr(agent_client, "run_code", async_return(RUN_OK))
     assert _run(anon_client, invite["token"], email="mallory@x.io").status_code == 403
 
 
 def test_run_rejects_a_candidate_who_already_submitted(
     anon_client: TestClient, invite: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
-    monkeypatch.setattr(agent_client, "run_code", lambda *a, **k: RUN_OK)
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
+    monkeypatch.setattr(agent_client, "run_code", async_return(RUN_OK))
     anon_client.post(
         f"/invite/{invite['token']}/submit",
         json={
@@ -124,7 +124,7 @@ def test_run_rejects_a_candidate_who_already_submitted(
 def test_run_on_unknown_or_revoked_invite(
     anon_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(agent_client, "run_code", lambda *a, **k: RUN_OK)
+    monkeypatch.setattr(agent_client, "run_code", async_return(RUN_OK))
     assert _run(anon_client, "no-such-token").status_code == 404
 
     tok = register_interviewer(anon_client, "s11-rv@x.io")
@@ -138,7 +138,7 @@ def test_run_surfaces_a_compile_error_as_a_normal_response(
 ) -> None:
     """Broken code is an expected outcome of Run, not a server error."""
     monkeypatch.setattr(
-        agent_client, "run_code", lambda *a, **k: {**RUN_OK, "compile_error": "syntax error"}
+        agent_client, "run_code", async_return({**RUN_OK, "compile_error": "syntax error"})
     )
     resp = _run(anon_client, invite["token"])
     assert resp.status_code == 200
@@ -158,7 +158,7 @@ def test_run_maps_agent_infra_error_to_502(
 def test_run_maps_agent_unreachable_to_502(
     anon_client: TestClient, invite: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def _boom(*a: Any, **k: Any) -> dict:
+    async def _boom(*a: Any, **k: Any) -> dict:
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr(agent_client, "run_code", _boom)
@@ -169,7 +169,7 @@ def test_run_is_rate_limited(
     anon_client: TestClient, invite: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(config, "RUN_RATE_LIMIT_MAX", 2)
-    monkeypatch.setattr(agent_client, "run_code", lambda *a, **k: RUN_OK)
+    monkeypatch.setattr(agent_client, "run_code", async_return(RUN_OK))
     assert _run(anon_client, invite["token"]).status_code == 200
     assert _run(anon_client, invite["token"]).status_code == 200
     assert _run(anon_client, invite["token"]).status_code == 429
@@ -183,7 +183,7 @@ def test_run_is_rate_limited(
 def test_run_tests_summarises_pass_fail(
     anon_client: TestClient, invite: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(agent_client, "run_tests", lambda *a, **k: TESTS_OK)
+    monkeypatch.setattr(agent_client, "run_tests", async_return(TESTS_OK))
     resp = _run_tests(anon_client, invite["token"])
 
     assert resp.status_code == 200
@@ -198,7 +198,7 @@ def test_run_tests_never_leaks_the_answer_key(
     anon_client: TestClient, invite: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The point of the whole endpoint: counts, not contents."""
-    monkeypatch.setattr(agent_client, "run_tests", lambda *a, **k: TESTS_OK)
+    monkeypatch.setattr(agent_client, "run_tests", async_return(TESTS_OK))
     body = _run_tests(anon_client, invite["token"]).json()
 
     for case in body["test_cases"]:
@@ -211,7 +211,7 @@ def test_run_tests_never_leaks_the_answer_key(
 def test_run_tests_does_not_create_a_submission(
     anon_client: TestClient, invite: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(agent_client, "run_tests", lambda *a, **k: TESTS_OK)
+    monkeypatch.setattr(agent_client, "run_tests", async_return(TESTS_OK))
     assert _run_tests(anon_client, invite["token"]).status_code == 200
     with Session(db_module.engine) as s:
         assert s.exec(select(Submission)).all() == []
@@ -220,7 +220,7 @@ def test_run_tests_does_not_create_a_submission(
 def test_run_tests_rejects_an_uninvited_email(
     anon_client: TestClient, invite: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(agent_client, "run_tests", lambda *a, **k: TESTS_OK)
+    monkeypatch.setattr(agent_client, "run_tests", async_return(TESTS_OK))
     assert _run_tests(anon_client, invite["token"], email="mallory@x.io").status_code == 403
 
 
@@ -230,7 +230,7 @@ def test_run_tests_reports_a_compile_error_with_no_cases(
     monkeypatch.setattr(
         agent_client,
         "run_tests",
-        lambda *a, **k: {"compile_error": "boom", "infra_error": None, "test_cases": []},
+        async_return({"compile_error": "boom", "infra_error": None, "test_cases": []}),
     )
     resp = _run_tests(anon_client, invite["token"])
     assert resp.status_code == 200
@@ -244,7 +244,7 @@ def test_run_tests_passes_the_stored_question_to_the_agent(
 ) -> None:
     seen: dict[str, Any] = {}
 
-    def _fake(question: Any, code: str, language: str, **k: Any) -> dict:
+    async def _fake(question: Any, code: str, language: str, **k: Any) -> dict:
         seen["question_id"] = question.id
         return TESTS_OK
 
@@ -258,6 +258,6 @@ def test_run_tests_is_rate_limited(
 ) -> None:
     """Unlimited, this is a pass/fail oracle for reverse-engineering the suite."""
     monkeypatch.setattr(config, "RUN_RATE_LIMIT_MAX", 1)
-    monkeypatch.setattr(agent_client, "run_tests", lambda *a, **k: TESTS_OK)
+    monkeypatch.setattr(agent_client, "run_tests", async_return(TESTS_OK))
     assert _run_tests(anon_client, invite["token"]).status_code == 200
     assert _run_tests(anon_client, invite["token"]).status_code == 429

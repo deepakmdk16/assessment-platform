@@ -17,10 +17,10 @@ carries a nested `example: {input, output}`).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
-import time
 
 import httpx
 
@@ -32,15 +32,19 @@ from .signing import SIGNATURE_HEADER, sign
 logger = logging.getLogger(__name__)
 
 
-def _signed_post(url: str, body: dict, *, timeout: float) -> httpx.Response:
+async def _signed_post(url: str, body: dict, *, timeout: float) -> httpx.Response:
     """POST `body` to the agent as JSON bytes with the bearer token and, when
     ASSESS_SIGNING_SECRET is configured, an HMAC signature over the exact bytes
-    (serialize once so the signed bytes are the bytes sent). See signing.py."""
+    (serialize once so the signed bytes are the bytes sent). See signing.py.
+
+    Async so the calling route awaits the (slow) agent I/O without holding a
+    thread from FastAPI's pool — the whole point of these being agent calls."""
     content = json.dumps(body).encode()
     headers = {"Content-Type": "application/json", **_auth_headers()}
     if config.ASSESS_SIGNING_SECRET:
         headers[SIGNATURE_HEADER] = sign(config.ASSESS_SIGNING_SECRET, content)
-    return httpx.post(url, content=content, headers=headers, timeout=timeout)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        return await client.post(url, content=content, headers=headers)
 
 
 def _auth_headers() -> dict[str, str]:
@@ -100,7 +104,7 @@ def _draft_is_retryable(exc: Exception) -> bool:
     return isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
 
 
-def draft_question(
+async def draft_question(
     brief: str,
     language: str,
     difficulty: str | None = None,
@@ -130,7 +134,7 @@ def draft_question(
     last: Exception
     for attempt in range(1, max(1, _DRAFT_TRANSPORT_ATTEMPTS) + 1):
         try:
-            resp = _signed_post(
+            resp = await _signed_post(
                 f"{base_url}/questions/draft", body, timeout=AGENT_DRAFT_TIMEOUT_S
             )
             resp.raise_for_status()
@@ -146,11 +150,11 @@ def draft_question(
                 _DRAFT_TRANSPORT_ATTEMPTS,
                 exc,
             )
-            time.sleep(_DRAFT_RETRY_BACKOFF_S * attempt)  # linear backoff
+            await asyncio.sleep(_DRAFT_RETRY_BACKOFF_S * attempt)  # linear backoff
     raise last  # unreachable; keeps the type checker happy
 
 
-def run_code(
+async def run_code(
     code: str,
     language: str,
     stdin: str,
@@ -158,17 +162,17 @@ def run_code(
 ) -> dict:
     """Execute `code` once against `stdin` on the agent; return what it printed.
 
-    The candidate's "Run" button. Synchronous and non-grading: no verdict, no
-    LLM, nothing stored on either side. Raises on transport/HTTP error.
+    The candidate's "Run" button. Non-grading: no verdict, no LLM, nothing stored
+    on either side. Raises on transport/HTTP error.
     """
     body = {"code": code, "language": language, "stdin": stdin}
-    resp = _signed_post(f"{base_url}/run", body, timeout=AGENT_RUN_TIMEOUT_S)
+    resp = await _signed_post(f"{base_url}/run", body, timeout=AGENT_RUN_TIMEOUT_S)
     resp.raise_for_status()
     result: dict = resp.json()
     return result
 
 
-def run_tests(
+async def run_tests(
     question: Question,
     code: str,
     language: str,
@@ -185,13 +189,13 @@ def run_tests(
         "code": code,
         "language": language,
     }
-    resp = _signed_post(f"{base_url}/run/tests", body, timeout=AGENT_RUN_TIMEOUT_S)
+    resp = await _signed_post(f"{base_url}/run/tests", body, timeout=AGENT_RUN_TIMEOUT_S)
     resp.raise_for_status()
     result: dict = resp.json()
     return result
 
 
-def trigger_assessment(
+async def trigger_assessment(
     question: Question,
     submission: Submission,
     callback_url: str,
@@ -206,6 +210,6 @@ def trigger_assessment(
         "callback_url": callback_url,
         "email_to": None,
     }
-    resp = _signed_post(f"{base_url}/assessments", body, timeout=AGENT_TIMEOUT_S)
+    resp = await _signed_post(f"{base_url}/assessments", body, timeout=AGENT_TIMEOUT_S)
     resp.raise_for_status()
     return resp.json()["job_id"]

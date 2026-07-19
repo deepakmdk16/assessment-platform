@@ -16,7 +16,7 @@ import smtplib
 from typing import Any
 
 import pytest
-from conftest import register_interviewer  # pytest adds tests/ to sys.path
+from conftest import async_return, register_interviewer  # pytest adds tests/ to sys.path
 from fastapi.testclient import TestClient
 from test_slice1 import _auth, _make_invite, _sample_question
 
@@ -95,7 +95,7 @@ def test_start_allows_any_of_several_recipients(anon_client: TestClient) -> None
 def test_start_blocks_a_candidate_who_already_submitted(
     anon_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     tok = register_interviewer(anon_client, "s9-done@x.io")
     inv = _make_invite(anon_client, tok, recipients=["cand@x.io"])
 
@@ -113,7 +113,7 @@ def test_start_gate_is_per_email_not_per_invite(
     anon_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One candidate finishing must not lock the other invitee out."""
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     tok = register_interviewer(anon_client, "s9-per@x.io")
     inv = _make_invite(anon_client, tok, recipients=["a@x.io", "b@x.io"])
 
@@ -140,7 +140,7 @@ def test_submit_rejects_uninvited_email_even_without_start(
     anon_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """POSTing straight to /submit must not bypass the binding."""
-    monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job")
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     tok = register_interviewer(anon_client, "s9-bypass@x.io")
     inv = _make_invite(anon_client, tok, recipients=["cand@x.io"])
 

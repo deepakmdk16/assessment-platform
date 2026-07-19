@@ -27,12 +27,16 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
 ## From the 2026-07-17 audit — remaining, highest value first
 
 A full read of the codebase on 2026-07-17 found these. Correctness (question-delete
-orphans, the submit race) and security/cost (draft + register caps, proxy-aware
-limits, constant-time compares) are **done** — see `git log`. What it found and we
-have *not* fixed yet:
+orphans, the submit race), security/cost (draft + register caps, proxy-aware
+limits, constant-time compares), and the blocking agent calls are **done** — see
+`git log`. What it found and we have *not* fully closed yet:
 
-- **Sync routes + blocking agent calls.** Every route is `def`, so FastAPI runs it in
-  a ~40-thread pool, and `draft_question` blocks a thread for up to
-  `AGENT_DRAFT_TIMEOUT_S` (240s) × 3 transport retries; run/run-tests up to 60s. ~40
-  concurrent drafts wedge the entire API, `/health` included. The rate limits now cap
-  the easy trigger, but the shape is unchanged.
+- **DB calls run on the event loop in the async agent routes (residual).** The six
+  agent-calling routes are now `async def` and `await` the agent over
+  `httpx.AsyncClient`, so slow agent I/O no longer holds a pooled thread — the
+  thread-exhaustion bug is fixed. But the DB is still synchronous SQLModel, so the
+  small per-request queries in those routes now run on the event loop rather than in
+  the threadpool. Fine at this scale (indexed single-row ops, ms-scale) and on SQLite;
+  if a slow Postgres query ever shows up on these paths, wrap the DB work in
+  `fastapi.concurrency.run_in_threadpool` or move to an async engine. Not worth doing
+  pre-emptively.
