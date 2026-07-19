@@ -51,11 +51,12 @@ have *not* fixed yet:
   **pager UI** (Prev/Next + a total count) — the dashboard currently shows only the
   first 100 rows, silently. Needs a totals envelope or a count endpoint plus pager
   controls, **mockup-first per CLAUDE.md.**
-- **Frontend: no `ErrorBoundary`.** Any render throw (Monaco failing to load, an
-  unexpected `full_result` shape) is a white screen for a candidate mid-assessment
-  with their code in the editor — the worst failure location in the product.
-  Mockup-first per CLAUDE.md.
 - **Frontend: no result polling.** No `setInterval` anywhere: after a submit the
   status reads `running` until someone presses F5, so the product's payoff moment
   needs a manual refresh. Poll `GET /submissions/{id}` while pending/running.
   Mockup-first per CLAUDE.md.
+- **Candidate IDE: autosave in-progress code to `localStorage`.** The `ErrorBoundary`
+  around the candidate editor (see `git log`) can't recover the editor's unsaved
+  buffer on a render throw — its fallback is honest about that. Persisting the
+  candidate's code to `localStorage` as they type would let a reload restore it,
+  closing the one gap the boundary can't. Small, self-contained follow-up.

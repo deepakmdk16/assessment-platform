@@ -1396,6 +1396,70 @@ button.tab:hover {
   text-align: center;
 }
 
+/* ------------------------------------------------- error boundary fallback */
+.boundary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.9rem;
+  padding: 3rem 1.5rem;
+  background: var(--color-surface);
+  min-height: 60vh;
+  justify-content: center;
+}
+
+.boundary-icon {
+  width: 3rem;
+  height: 3rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-bad-soft);
+  color: var(--color-bad);
+}
+
+.boundary-icon svg {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.boundary h2 {
+  font-size: 1.15rem;
+}
+
+.boundary p {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+
+.boundary-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.boundary-detail {
+  margin-top: 0.6rem;
+  width: 100%;
+  max-width: 40rem;
+  text-align: left;
+}
+
+.boundary-detail summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--color-faint);
+}
+
+.boundary-detail .code {
+  margin-top: 0.5rem;
+}
+
 /* ---------------------------------------------------------- responsive */
 @media (max-width: 900px) {
   .app {
