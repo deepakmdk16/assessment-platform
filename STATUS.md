@@ -39,12 +39,3 @@ have *not* fixed yet:
   `AGENT_DRAFT_TIMEOUT_S` (240s) × 3 transport retries; run/run-tests up to 60s. ~40
   concurrent drafts wedge the entire API, `/health` included. The rate limits now cap
   the easy trigger, but the shape is unchanged.
-- **Pagination — bounded now, pager UI deferred.** Done (see `git log`): all three
-  list endpoints (`GET /questions`, `GET /submissions`, `/questions/{id}/submissions`)
-  take `limit` (default 100, cap 200) + `offset` with deterministic ordering (newest
-  first, id tiebreaker), so no response can be forced to serialize the whole table;
-  and `GET /submissions` rows are now the lean `SubmissionSummaryOut` — no `code` /
-  `full_result` (fetch the full `SubmissionOut` per-id for detail). Still to do: a real
-  **pager UI** (Prev/Next + a total count) — the dashboard currently shows only the
-  first 100 rows, silently. Needs a totals envelope or a count endpoint plus pager
-  controls, **mockup-first per CLAUDE.md.**

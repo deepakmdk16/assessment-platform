@@ -96,7 +96,7 @@ def test_question_crud_roundtrip(client) -> None:
     assert got.json()["title"] == "Sum of N"
 
     # List
-    assert len(client.get("/questions").json()) == 1
+    assert len(client.get("/questions").json()["items"]) == 1
 
     # Update (full replace, fewer test cases)
     upd = {
@@ -193,9 +193,9 @@ def test_archive_hides_from_list_but_keeps_reachable(client) -> None:
     assert client.post("/questions/sum_of_n/archive").json()["status"] == "archived"
 
     # Hidden from the default dashboard list...
-    assert [q["id"] for q in client.get("/questions").json()] == []
+    assert [q["id"] for q in client.get("/questions").json()["items"]] == []
     # ...but still returned with ?include_archived=true, and directly reachable.
-    assert [q["id"] for q in client.get("/questions?include_archived=true").json()] == ["sum_of_n"]
+    assert [q["id"] for q in client.get("/questions?include_archived=true").json()["items"]] == ["sum_of_n"]
     assert client.get("/questions/sum_of_n").json()["status"] == "archived"
 
 
@@ -203,7 +203,7 @@ def test_unarchive_restores_to_list(client) -> None:
     client.post("/questions", json=_sample_question())
     client.post("/questions/sum_of_n/archive")
     assert client.post("/questions/sum_of_n/unarchive").json()["status"] == "active"
-    assert [q["id"] for q in client.get("/questions").json()] == ["sum_of_n"]
+    assert [q["id"] for q in client.get("/questions").json()["items"]] == ["sum_of_n"]
 
 
 def test_archive_retires_a_question_with_submissions(client, monkeypatch) -> None:
@@ -217,7 +217,7 @@ def test_archive_retires_a_question_with_submissions(client, monkeypatch) -> Non
     assert client.delete("/questions/sum_of_n").status_code == 409
     assert client.post("/questions/sum_of_n/archive").json()["status"] == "archived"
     # The submission is untouched.
-    assert len(client.get("/questions/sum_of_n/submissions").json()) == 1
+    assert len(client.get("/questions/sum_of_n/submissions").json()["items"]) == 1
 
 
 def test_delete_question_cascades_invites(client) -> None:
@@ -317,7 +317,7 @@ def test_direct_submissions_are_not_constrained_by_the_invite_unique(client, mon
 
     assert client.post("/submissions", json=body).status_code == 201
     assert client.post("/submissions", json=body).status_code == 201
-    assert len(client.get("/submissions").json()) == 2
+    assert len(client.get("/submissions").json()["items"]) == 2
 
 
 def test_submission_unknown_question_404(client, monkeypatch) -> None:
@@ -342,7 +342,7 @@ def test_agent_call_failure_marks_error(client, monkeypatch) -> None:
     )
     assert resp.status_code == 502
     # The submission row still exists, flipped to error.
-    subs = client.get("/submissions").json()
+    subs = client.get("/submissions").json()["items"]
     assert len(subs) == 1 and subs[0]["status"] == "error"
 
 
@@ -513,7 +513,7 @@ def test_retry_from_error_reruns(client, monkeypatch) -> None:
         json={"question_id": "sum_of_n", "candidate": "Jane", "language": "python", "code": "x"},
     )
     assert resp.status_code == 502
-    sub_id = client.get("/submissions").json()[0]["id"]
+    sub_id = client.get("/submissions").json()["items"][0]["id"]
 
     # Agent recovers; retry succeeds with a fresh job_id.
     monkeypatch.setattr(agent_client, "trigger_assessment", lambda *a, **k: "job-retry-1")
@@ -648,7 +648,7 @@ def test_draft_question_happy_path(client, monkeypatch) -> None:
     assert body["reference_solution"] == "print('ref')"
 
     # Stateless: nothing was persisted.
-    assert client.get("/questions").json() == []
+    assert client.get("/questions").json()["items"] == []
 
 
 def test_draft_question_offline_503(client, monkeypatch) -> None:
@@ -703,19 +703,25 @@ def test_questions_pagination_bounds_and_cover(client) -> None:
     for i in range(3):
         assert client.post("/questions", json=_sample_question(f"q{i}")).status_code == 201
 
-    all_ids = [q["id"] for q in client.get("/questions").json()]
+    all_ids = [q["id"] for q in client.get("/questions").json()["items"]]
     assert sorted(all_ids) == ["q0", "q1", "q2"]
 
+    # The envelope reports the FULL count and the slice params, so a client can
+    # render "showing 1-2 of 3" and a pager without a second request.
+    first = client.get("/questions?limit=2&offset=0").json()
+    assert first["total"] == 3 and first["limit"] == 2 and first["offset"] == 0
+    assert len(first["items"]) == 2
+
     # limit + offset partition the full set with no overlap and no gaps.
-    page1 = [q["id"] for q in client.get("/questions?limit=2&offset=0").json()]
-    page2 = [q["id"] for q in client.get("/questions?limit=2&offset=2").json()]
+    page1 = [q["id"] for q in first["items"]]
+    page2 = [q["id"] for q in client.get("/questions?limit=2&offset=2").json()["items"]]
     assert len(page1) == 2 and len(page2) == 1
     assert set(page1).isdisjoint(page2)
     assert set(page1) | set(page2) == {"q0", "q1", "q2"}
 
     # Ordering is deterministic: the same request returns the same order twice,
     # so paging over it never repeats or skips a row.
-    assert [q["id"] for q in client.get("/questions").json()] == all_ids
+    assert [q["id"] for q in client.get("/questions").json()["items"]] == all_ids
 
     # Bounds are enforced (limit 1..200, offset >= 0).
     assert client.get("/questions?limit=0").status_code == 422
@@ -729,7 +735,7 @@ def test_submissions_list_is_lean(client, monkeypatch) -> None:
     body = {"question_id": "sum_of_n", "candidate": "Jane", "language": "python", "code": "print(1)"}
     assert client.post("/submissions", json=body).status_code == 201
 
-    rows = client.get("/submissions").json()
+    rows = client.get("/submissions").json()["items"]
     assert len(rows) == 1
     row = rows[0]
     # The list is a summary: the heavy per-row blobs must not ship.

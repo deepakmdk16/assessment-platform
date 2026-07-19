@@ -8,7 +8,7 @@ cases and return a submission-plus-result view without leaking ORM internals.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -17,6 +17,20 @@ from .models import as_utc
 Category = Literal["correctness", "performance"]
 Difficulty = Literal["easy", "medium", "hard"]
 QuestionStatus = Literal["active", "archived"]
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    """A paginated slice of a collection. `total` is the full count matching the
+    query (before limit/offset), so a client can render "showing X-Y of Z" and a
+    pager without a second request. Envelope over a bare array so the metadata
+    travels with the data — no custom headers to expose through CORS."""
+
+    items: list[T]
+    total: int
+    limit: int
+    offset: int
 
 
 class TestCaseIn(BaseModel):

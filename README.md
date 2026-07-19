@@ -143,6 +143,11 @@ forwarded link, not deliberate impersonation.
 \* The pre-existing internal `/submissions*` routes are not yet behind interviewer
 auth — see the security TODO.
 
+The list endpoints (`GET /questions`, `GET /submissions`, `GET
+/questions/{id}/submissions`) are paginated: `?limit` (default 100, max 200) +
+`?offset`, returning an envelope `{ items, total, limit, offset }` where `total`
+is the full count, so a client can render a pager in one request.
+
 Interactive docs at `/docs` when running.
 
 ## Data model

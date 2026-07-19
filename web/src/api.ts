@@ -3,6 +3,7 @@ import type {
   InviteStartResponse,
   InviteStatusResponse,
   LoginResponse,
+  Page,
   QuestionDraftIn,
   QuestionDraftOut,
   QuestionIn,
@@ -107,10 +108,11 @@ export const api = {
 
   me: () => request<User>('/auth/me', { auth: true }),
 
-  listQuestions: (includeArchived = false) =>
-    request<QuestionOut[]>(`/questions${includeArchived ? '?include_archived=true' : ''}`, {
-      auth: true,
-    }),
+  listQuestions: (includeArchived = false, offset = 0, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (includeArchived) params.set('include_archived', 'true')
+    return request<Page<QuestionOut>>(`/questions?${params}`, { auth: true })
+  },
 
   archiveQuestion: (id: string) =>
     request<QuestionOut>(`/questions/${id}/archive`, { method: 'POST', auth: true }),
@@ -151,8 +153,12 @@ export const api = {
       auth: true,
     }),
 
-  listSubmissions: (questionId: string) =>
-    request<SubmissionRow[]>(`/questions/${questionId}/submissions`, { auth: true }),
+  listSubmissions: (questionId: string, offset = 0, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    return request<Page<SubmissionRow>>(`/questions/${questionId}/submissions?${params}`, {
+      auth: true,
+    })
+  },
 
   getSubmission: (submissionId: string) =>
     request<SubmissionDetail>(`/submissions/${submissionId}`, { auth: true }),

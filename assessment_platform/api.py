@@ -65,6 +65,7 @@ from .schemas import (
     InvitePublicOut,
     InviteStatusOut,
     LoginIn,
+    Page,
     QuestionCreate,
     QuestionDraftIn,
     QuestionDraftOut,
@@ -475,23 +476,31 @@ def draft_question(
     )
 
 
-@app.get("/questions", response_model=list[QuestionOut])
+@app.get("/questions", response_model=Page[QuestionOut])
 def list_questions(
     include_archived: bool = False,
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
-) -> list[QuestionOut]:
-    stmt = select(Question).where(Question.owner_id == current.id)
+) -> Page[QuestionOut]:
+    where = [Question.owner_id == current.id]
     if not include_archived:
         # Archived questions are retired: hidden from the dashboard by default but
         # still reachable (and their submissions kept) via ?include_archived=true.
-        stmt = stmt.where(Question.status == "active")
+        where.append(Question.status == "active")
+    total = session.exec(select(func.count()).select_from(Question).where(*where)).one()
     # Newest first, id as a stable tiebreaker so paging over equal timestamps
     # (common in tests / bulk imports) is deterministic.
-    stmt = stmt.order_by(col(Question.created_at).desc(), col(Question.id)).offset(offset).limit(limit)
-    return [_question_out(q) for q in session.exec(stmt).all()]
+    stmt = (
+        select(Question)
+        .where(*where)
+        .order_by(col(Question.created_at).desc(), col(Question.id))
+        .offset(offset)
+        .limit(limit)
+    )
+    items = [_question_out(q) for q in session.exec(stmt).all()]
+    return Page(items=items, total=total, limit=limit, offset=offset)
 
 
 @app.get("/questions/{question_id}", response_model=QuestionOut)
@@ -1065,17 +1074,23 @@ def retry_submission(
     return _submission_out(sub, None)
 
 
-@app.get("/submissions", response_model=list[SubmissionSummaryOut])
+@app.get("/submissions", response_model=Page[SubmissionSummaryOut])
 def list_submissions(
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
-) -> list[SubmissionSummaryOut]:
+) -> Page[SubmissionSummaryOut]:
     _reap_stale_running(session)  # heal submissions stranded in "running" on view
     # Only submissions for the caller's own questions. Lean rows: the full `code`
     # and `full_result` blobs are fetched per-id via GET /submissions/{id}, so a
     # page here stays small even at hundreds of rows.
+    total = session.exec(
+        select(func.count())
+        .select_from(Submission)
+        .join(Question)
+        .where(Question.owner_id == current.id)
+    ).one()
     subs = session.exec(
         select(Submission)
         .join(Question)  # FK Submission.question_id -> Question.id infers the ON clause
@@ -1085,7 +1100,8 @@ def list_submissions(
         .limit(limit)
     ).all()
     results = _results_by_submission(subs, session)
-    return [_submission_summary(sub, results.get(sub.id)) for sub in subs]
+    items = [_submission_summary(sub, results.get(sub.id)) for sub in subs]
+    return Page(items=items, total=total, limit=limit, offset=offset)
 
 
 @app.get("/submissions/{submission_id}", response_model=SubmissionOut)
@@ -1107,16 +1123,21 @@ def get_submission(
 # --------------------------------------------------------------------------- #
 
 
-@app.get("/questions/{question_id}/submissions", response_model=list[DashboardSubmissionOut])
+@app.get("/questions/{question_id}/submissions", response_model=Page[DashboardSubmissionOut])
 def question_submissions(
     question_id: str,
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
-) -> list[DashboardSubmissionOut]:
+) -> Page[DashboardSubmissionOut]:
     _reap_stale_running(session)  # heal submissions stranded in "running" on view
     _owned_question(question_id, current, session)  # 404/403 guard
+    total = session.exec(
+        select(func.count())
+        .select_from(Submission)
+        .where(Submission.question_id == question_id)
+    ).one()
     subs = session.exec(
         select(Submission)
         .where(Submission.question_id == question_id)
@@ -1125,10 +1146,10 @@ def question_submissions(
         .limit(limit)
     ).all()
     results = _results_by_submission(subs, session)
-    out = []
+    items = []
     for sub in subs:
         result = results.get(sub.id)
-        out.append(
+        items.append(
             DashboardSubmissionOut(
                 submission_id=sub.id,
                 candidate_name=sub.candidate,
@@ -1140,7 +1161,7 @@ def question_submissions(
                 created_at=sub.created_at,
             )
         )
-    return out
+    return Page(items=items, total=total, limit=limit, offset=offset)
 
 
 # --------------------------------------------------------------------------- #
