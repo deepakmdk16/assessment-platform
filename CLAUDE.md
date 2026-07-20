@@ -53,7 +53,8 @@ deterministic grade.
   boundary in tests).
 - `config.py` — env-driven config. `db.py` — engine + session.
 - `signing.py` — HMAC-SHA256 body signing/verification (mirrored **verbatim** in
-  the agent repo — keep the two identical or every signed request 401s).
+  the agent repo — keep the two identical or every signed request 401s; enforced
+  by `scripts/checkpoints.sh`, which fails the push if they diverge).
 
 ## The agent contract
 

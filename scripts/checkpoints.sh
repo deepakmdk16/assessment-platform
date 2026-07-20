@@ -62,4 +62,24 @@ if grep -InE '^[[:space:]]*SMTP_PASSWORD[[:space:]]*=[[:space:]]*[a-z]{16}[[:spa
   echo "❌ .env.example looks like it holds a REAL app password (above) — it must only ever hold placeholders"; exit 1
 fi
 
+echo "==> signing.py parity (cross-repo)"
+# signing.py is mirrored byte-for-byte in the companion repo; if the two diverge,
+# every signed request 401s. This is the "keep them identical" comment turned into
+# a gate. Only runs when the companion repo is checked out beside this one — the
+# local pre-push case, where the edit is actually made — and skips with a notice
+# otherwise (e.g. CI checks out a single repo). See CLAUDE.md → signing.py.
+_own_signing="assessment_platform/signing.py"
+_companion_signing="../AssesmentAgent/assessment_agent/signing.py"
+if [ -f "$_companion_signing" ]; then
+  if cmp -s "$_own_signing" "$_companion_signing"; then
+    echo "  ✓ identical to companion repo"
+  else
+    echo "  ❌ $_own_signing differs from the companion repo's signing.py:"
+    diff "$_own_signing" "$_companion_signing" | sed 's/^/     /' || true
+    echo "  keep them byte-identical or signed requests 401 — update BOTH."; exit 1
+  fi
+else
+  echo "  ℹ️  companion repo not checked out beside this one — parity check skipped"
+fi
+
 echo "✅ checkpoints passed"
