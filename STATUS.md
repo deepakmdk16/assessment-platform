@@ -14,13 +14,14 @@ Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
   direct dev setup, wrong the moment there's a load balancer in front. Not code:
   a deploy-time checklist item. Chained proxies (CDN → LB) need `client_ip()`
   revisited, as it trusts exactly one hop.
-- **Claude Code tooling follow-ups (global, deferred — not platform code).** Three
-  gaps found in the 2026-07-17 setup audit that live outside this repo, so they
-  were left alone: the `ship` skill re-implements `scripts/checkpoints.sh` instead
-  of calling it (both then drift); `~/.claude/CLAUDE.md` §8 and the "Use
-  PROACTIVELY" agent descriptions contradict the harness's don't-auto-spawn rule;
-  serena has no auto-activation (worked around by a note in CLAUDE.md, not fixed).
-  All touch `~/.claude/`, shared with `../AssesmentAgent`.
+- **Claude Code tooling follow-ups (global, deferred — not platform code).** Gaps
+  found in the 2026-07-17 setup audit that live outside this repo, so they were
+  left alone: `~/.claude/CLAUDE.md` §8 and the "Use PROACTIVELY" agent descriptions
+  contradict the harness's don't-auto-spawn rule; serena has no auto-activation
+  (worked around by a note in CLAUDE.md, not fixed). All touch `~/.claude/`, shared
+  with `../AssesmentAgent`. (The audit's third item — the `ship` skill re-implementing
+  `scripts/checkpoints.sh` — is resolved: the skill now runs `checkpoints.sh` when
+  present, 2026-07-20.)
 - **Candidate-feedback agent (cross-repo, not yet chosen).** Surface actionable
   feedback to candidates; spans both repos.
 
