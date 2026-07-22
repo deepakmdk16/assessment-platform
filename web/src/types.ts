@@ -47,6 +47,8 @@ export interface QuestionIn {
   example_input: string
   example_output: string
   difficulty?: string
+  reference_solution?: string | null
+  reference_language?: string | null
   test_cases: TestCaseIn[]
 }
 

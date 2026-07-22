@@ -58,6 +58,10 @@ class QuestionCreate(BaseModel):
     example_input: str | None = None
     example_output: str | None = None
     difficulty: Difficulty | None = None
+    # The AI-drafted reference solution, carried through from a draft so it can be
+    # persisted. Null (and absent from the payload) for hand-authored questions.
+    reference_solution: str | None = None
+    reference_language: str | None = None
     test_cases: list[TestCaseIn] = Field(default_factory=list)
 
 
@@ -75,6 +79,8 @@ class QuestionUpdate(BaseModel):
     example_input: str | None = None
     example_output: str | None = None
     difficulty: Difficulty | None = None
+    reference_solution: str | None = None
+    reference_language: str | None = None
     test_cases: list[TestCaseIn] = Field(default_factory=list)
 
 
@@ -89,6 +95,8 @@ class QuestionOut(BaseModel):
     example_input: str | None
     example_output: str | None
     difficulty: str | None
+    reference_solution: str | None
+    reference_language: str | None
     status: str
     created_at: datetime
     updated_at: datetime

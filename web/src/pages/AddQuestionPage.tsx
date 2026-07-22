@@ -92,6 +92,7 @@ export function AddQuestionPage() {
   const [draftError, setDraftError] = useState<DraftFailure | null>(null)
   const [draftWarnings, setDraftWarnings] = useState<string[]>([])
   const [referenceSolution, setReferenceSolution] = useState<string | null>(null)
+  const [referenceLanguage, setReferenceLanguage] = useState<string | null>(null)
 
   async function handleDraft() {
     if (!brief.trim()) {
@@ -103,6 +104,7 @@ export function AddQuestionPage() {
     // warnings / reference solution on screen.
     setDraftWarnings([])
     setReferenceSolution(null)
+    setReferenceLanguage(null)
     setDrafting(true)
     try {
       const res = await api.draftQuestion({
@@ -125,6 +127,7 @@ export function AddQuestionPage() {
       setTestCases(q.test_cases.length > 0 ? q.test_cases : [emptyTestCase()])
       setDraftWarnings(res.warnings)
       setReferenceSolution(res.reference_solution)
+      setReferenceLanguage(res.reference_language)
     } catch (err) {
       setDraftError(describeDraftFailure(err))
     } finally {
@@ -202,6 +205,10 @@ export function AddQuestionPage() {
         example_input: exampleInput,
         example_output: exampleOutput,
         difficulty: difficulty.trim() || undefined,
+        // Persist the AI reference (if this question was drafted) so it survives
+        // past draft time; null for a hand-authored question.
+        reference_solution: referenceSolution,
+        reference_language: referenceLanguage,
         test_cases: testCases,
       })
       // `justCreated` opens the invite dialog once, as a nudge — inviting is
@@ -347,7 +354,10 @@ export function AddQuestionPage() {
                 )}
                 {referenceSolution && (
                   <details className="draft-reference">
-                    <summary>Reference solution (context only — not saved)</summary>
+                    <summary>
+                      Reference solution{referenceLanguage ? ` (${referenceLanguage})` : ''} — saved
+                      with the question
+                    </summary>
                     <pre className="code">{referenceSolution}</pre>
                   </details>
                 )}

@@ -20,10 +20,9 @@ _None open. B1 (dashboard archive dead-end) and B2 (stable `JWT_SECRET`) are don
 
 | ID | Symptom | Root cause | Fix shape | Repo | Effort |
 |----|---------|-----------|-----------|------|--------|
-| F1 | The AI reference solution shows once at draft time, then vanishes — invisible on the question page and on any submission. | Agent returns it (`schemas.py:113`), but `Question` has **no such column** (`models.py:52-83`) and `authoring._to_loader_dict` drops it. | Add `reference_solution` + `reference_language` columns (Alembic migration); persist on save; add a collapsed "Show reference solution" panel to `QuestionDetailPage` + `SubmissionDetailPage`. | platform (+web) | M |
 | F4 | A question can be saved with as few as 1 test case; "8 minimum" is only aspirational. | Prompt says ">=6 aim 8-10"; draft-eval floor is 4; the loader enforces only `min_length=1` (`AssesmentAgent/.../loader.py:52`). | Raise the loader/`validate_question` floor to a hard minimum of correctness cases (exempt the performance case); holds for AI **and** hand-authored paths. | agent | S |
 
-_Done: F2 (difficulty row on the question detail page), F3 (difficulty select moved above the "Draft with AI" action, defaults `medium`) — see `git log`._
+_Done: F1 (reference solution persisted — `reference_solution`/`reference_language` columns + migration, shown collapsed on the question and submission pages), F2 (difficulty row on the question detail page), F3 (difficulty select moved above the "Draft with AI" action, defaults `medium`) — see `git log`._
 
 ## P2 — Table-stakes to compete with HackerRank
 
@@ -132,7 +131,7 @@ Moats 1–3 are architectural, not features a competitor bolts on.
 ## Suggested sequencing
 
 1. ~~**Quick-win batch** (one branch): **B1, F2, F3** + **B2** (env).~~ **Done.**
-2. **F1** (reference persistence) — its own small batch; needs a migration.
+2. ~~**F1** (reference persistence) — needs a migration.~~ **Done.**
 3. **T2** (Submissions tab) — web-only now that the endpoint's confirmed present.
 4. **T1** (timer) — first heavy item; the loudest table-stakes gap.
 

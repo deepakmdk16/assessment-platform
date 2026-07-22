@@ -141,6 +141,8 @@ def _question_out(q: Question) -> QuestionOut:
         example_input=q.example_input,
         example_output=q.example_output,
         difficulty=q.difficulty,
+        reference_solution=q.reference_solution,
+        reference_language=q.reference_language,
         status=q.status,
         created_at=q.created_at,
         updated_at=q.updated_at,
@@ -377,6 +379,8 @@ def create_question(
         example_input=body.example_input,
         example_output=body.example_output,
         difficulty=body.difficulty,
+        reference_solution=body.reference_solution,
+        reference_language=body.reference_language,
         test_cases=[
             QuestionTestCase(
                 name=tc.name,
@@ -529,6 +533,8 @@ def update_question(
     q.example_input = body.example_input
     q.example_output = body.example_output
     q.difficulty = body.difficulty
+    q.reference_solution = body.reference_solution
+    q.reference_language = body.reference_language
     q.updated_at = datetime.now(timezone.utc)
     # Replace the whole test-case set (PUT = full replace). cascade delete-orphan
     # cleans up the old rows.

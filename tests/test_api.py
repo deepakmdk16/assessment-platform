@@ -183,6 +183,27 @@ def test_invalid_difficulty_rejected(client) -> None:
     assert client.post("/questions", json=q).status_code == 422
 
 
+def test_reference_solution_persists_on_create_and_get(client) -> None:
+    # A drafted question carries its AI reference solution + language; both must
+    # survive the create and come back on the question (F1 — the answer key was
+    # dropped after draft time before this).
+    q = _sample_question()
+    q["reference_solution"] = "def solve():\n    return 42\n"
+    q["reference_language"] = "python"
+    created = client.post("/questions", json=q).json()
+    assert created["reference_solution"] == "def solve():\n    return 42\n"
+    assert created["reference_language"] == "python"
+    got = client.get("/questions/sum_of_n").json()
+    assert got["reference_solution"] == "def solve():\n    return 42\n"
+    assert got["reference_language"] == "python"
+
+
+def test_reference_solution_absent_for_hand_authored(client) -> None:
+    body = client.post("/questions", json=_sample_question()).json()
+    assert body["reference_solution"] is None
+    assert body["reference_language"] is None
+
+
 def test_update_sets_difficulty(client) -> None:
     client.post("/questions", json=_sample_question())
     upd = {k: v for k, v in _sample_question().items() if k != "id"}

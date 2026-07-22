@@ -64,6 +64,11 @@ class Question(SQLModel, table=True):
     # hard); status retires a question without deleting it — "archived" hides it
     # from the dashboard while keeping its submissions (which are the record).
     difficulty: str | None = None
+    # The AI-drafted reference solution (and the language it's written in), kept so
+    # the answer key survives past draft time — shown to the interviewer on the
+    # question and submission pages. Null for hand-authored questions.
+    reference_solution: str | None = None
+    reference_language: str | None = None
     status: str = Field(default="active", index=True)
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()

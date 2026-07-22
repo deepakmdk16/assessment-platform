@@ -126,6 +126,15 @@ export function SubmissionDetailPage() {
                     )}
                   </div>
                 )}
+                {question.reference_solution && (
+                  <details className="draft-reference">
+                    <summary>
+                      Show reference solution
+                      {question.reference_language ? ` (${question.reference_language})` : ''}
+                    </summary>
+                    <pre className="code">{question.reference_solution}</pre>
+                  </details>
+                )}
               </>
             ) : (
               <p className="muted">Loading problem…</p>
