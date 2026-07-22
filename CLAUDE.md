@@ -70,6 +70,12 @@ deterministic grade.
   requests with `ASSESS_SIGNING_SECRET` and verifies the callback with
   `CALLBACK_SIGNING_SECRET` (`X-Assess-Signature`, HMAC over the exact body +
   a timestamp window). Both must match the agent's; enforced only when set.
+- **Callback envelope contract:** the narrow set of fields the callback handler
+  reads by name (`job_id`, `verdict`, `score_pct`, `reason`) is pinned in
+  [contract/callback_contract.py](contract/callback_contract.py) — mirrored
+  byte-for-byte in the agent repo (parity-gated by `scripts/checkpoints.sh`, like
+  `signing.py`) and asserted by `tests/test_contract.py`. Everything else in the
+  payload is opaque and stored verbatim in `full_result`.
 
 ## Key principles (do not violate)
 
