@@ -39,6 +39,7 @@ from .config import PLATFORM_BASE_URL
 from .db import get_session, init_db
 from .models import (
     AssessmentResult,
+    CandidateAttempt,
     Interviewer,
     Invite,
     Question,
@@ -143,6 +144,7 @@ def _question_out(q: Question) -> QuestionOut:
         difficulty=q.difficulty,
         reference_solution=q.reference_solution,
         reference_language=q.reference_language,
+        duration_minutes=q.duration_minutes,
         status=q.status,
         created_at=q.created_at,
         updated_at=q.updated_at,
@@ -382,6 +384,7 @@ def create_question(
         difficulty=body.difficulty,
         reference_solution=body.reference_solution,
         reference_language=body.reference_language,
+        duration_minutes=body.duration_minutes,
         test_cases=[
             QuestionTestCase(
                 name=tc.name,
@@ -536,6 +539,7 @@ def update_question(
     q.difficulty = body.difficulty
     q.reference_solution = body.reference_solution
     q.reference_language = body.reference_language
+    q.duration_minutes = body.duration_minutes
     q.updated_at = datetime.now(timezone.utc)
     # Replace the whole test-case set (PUT = full replace). cascade delete-orphan
     # cleans up the old rows.
@@ -754,11 +758,76 @@ def _check_not_already_submitted(invite: Invite, email: str, session: Session) -
         raise HTTPException(status_code=409, detail=_ALREADY_SUBMITTED_DETAIL)
 
 
-def _candidate_question_view(invite: Invite, session: Session) -> InvitePublicOut:
+def _deadline_for(started_at: datetime, duration_minutes: int | None) -> datetime | None:
+    """Absolute submit deadline for a timed attempt, or None when untimed."""
+    if duration_minutes is None:
+        return None
+    return as_utc(started_at) + timedelta(minutes=duration_minutes)
+
+
+def _get_or_start_attempt(invite: Invite, email: str, session: Session) -> CandidateAttempt:
+    """Return this candidate's attempt for the invite, creating it (stamping
+    started_at = now) on first call. The started_at is never moved once set, so
+    re-opening the link can't reset a timed assessment's clock. The unique
+    constraint makes the get-or-create race-safe: a loser re-reads the winner's row.
+    """
+    existing = session.exec(
+        select(CandidateAttempt).where(
+            CandidateAttempt.invite_id == invite.id,
+            CandidateAttempt.candidate_email == email,
+        )
+    ).first()
+    if existing is not None:
+        return existing
+    attempt = CandidateAttempt(invite_id=_require_id(invite.id), candidate_email=email)
+    session.add(attempt)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raced = session.exec(
+            select(CandidateAttempt).where(
+                CandidateAttempt.invite_id == invite.id,
+                CandidateAttempt.candidate_email == email,
+            )
+        ).first()
+        if raced is None:  # pragma: no cover — the constraint guarantees a row here
+            raise
+        return raced
+    session.refresh(attempt)
+    return attempt
+
+
+def _enforce_deadline(
+    invite: Invite, question: Question, email: str, session: Session
+) -> None:
+    """Reject a submit that arrives after a timed assessment's window has closed.
+
+    Server-authoritative: the deadline is started_at (stamped at /start) + the
+    question's duration, plus a grace window for the auto-submit round-trip. An
+    untimed question, or a submit with no attempt on record (the candidate never
+    opened it via /start), is left to pass — the latter is anchored now so at least
+    the clock exists.
+    """
+    if question.duration_minutes is None:
+        return
+    attempt = _get_or_start_attempt(invite, email, session)
+    deadline = _deadline_for(attempt.started_at, question.duration_minutes)
+    assert deadline is not None  # duration_minutes is not None here
+    if datetime.now(timezone.utc) > deadline + timedelta(seconds=config.SUBMIT_GRACE_SECONDS):
+        raise HTTPException(
+            status_code=410, detail="time's up — the assessment window has closed."
+        )
+
+
+def _candidate_question_view(
+    invite: Invite, session: Session, attempt: CandidateAttempt | None = None
+) -> InvitePublicOut:
     q = session.get(Question, invite.question_id)
     if q is None:  # question deleted after the invite was issued
         raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
     # Candidate-facing view only — never expose test_cases or expected outputs.
+    deadline = _deadline_for(attempt.started_at, q.duration_minutes) if attempt else None
     return InvitePublicOut(
         question=CandidateQuestionView(
             title=q.title,
@@ -769,6 +838,7 @@ def _candidate_question_view(invite: Invite, session: Session) -> InvitePublicOu
             time_limit_s=q.time_limit_s,
         ),
         languages=config.SUPPORTED_LANGUAGES,
+        deadline=deadline,
     )
 
 
@@ -805,7 +875,10 @@ def start_invite(
     email = _normalize_email(body.candidate_email)
     _check_invited(invite, email)
     _check_not_already_submitted(invite, email, session)
-    return _candidate_question_view(invite, session)
+    # Stamp (or re-read) the clock start for this candidate, so the returned
+    # deadline is stable across reloads and device switches.
+    attempt = _get_or_start_attempt(invite, email, session)
+    return _candidate_question_view(invite, session, attempt)
 
 
 def _load_invite_for_candidate(token: str, email: str, session: Session) -> tuple[Invite, Question]:
@@ -932,6 +1005,9 @@ async def candidate_submit(
     email = _normalize_email(body.candidate_email)
     _check_invited(invite, email)
     _check_not_already_submitted(invite, email, session)
+    # Server-enforced timer: refuse a submit that missed the window (past the
+    # deadline + grace). No-op for an untimed question.
+    _enforce_deadline(invite, question, email, session)
 
     sub = Submission(
         id=uuid.uuid4().hex,

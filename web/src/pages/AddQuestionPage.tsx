@@ -59,6 +59,10 @@ function describeDraftFailure(err: unknown): DraftFailure {
 const STEPS = ['Basics', 'Grading', 'Test cases', 'Example', 'Review'] as const
 const LAST_STEP = STEPS.length - 1
 
+// Default assessment length per difficulty (minutes). The interviewer can change
+// it or make the assessment indefinite; this only seeds the field.
+const DURATION_BY_DIFFICULTY: Record<string, number> = { easy: 20, medium: 30, hard: 60 }
+
 export function AddQuestionPage() {
   const navigate = useNavigate()
 
@@ -72,6 +76,11 @@ export function AddQuestionPage() {
   const [timeLimitS, setTimeLimitS] = useState(2)
   const [passThreshold, setPassThreshold] = useState(70)
   const [requiredComplexity, setRequiredComplexity] = useState('')
+  // Timer. Seeds from the difficulty default (medium => 30) until the interviewer
+  // edits it; `indefinite` makes the assessment untimed (duration_minutes = null).
+  const [durationMinutes, setDurationMinutes] = useState(DURATION_BY_DIFFICULTY.medium)
+  const [indefinite, setIndefinite] = useState(false)
+  const [durationTouched, setDurationTouched] = useState(false)
 
   const [testCases, setTestCases] = useState<TestCaseIn[]>([emptyTestCase()])
 
@@ -209,6 +218,7 @@ export function AddQuestionPage() {
         // past draft time; null for a hand-authored question.
         reference_solution: referenceSolution,
         reference_language: referenceLanguage,
+        duration_minutes: indefinite ? null : durationMinutes,
         test_cases: testCases,
       })
       // `justCreated` opens the invite dialog once, as a nudge — inviting is
@@ -323,7 +333,15 @@ export function AddQuestionPage() {
                   <select
                     id="difficulty"
                     value={difficulty}
-                    onChange={(e) => setDifficulty(e.target.value)}
+                    onChange={(e) => {
+                      const d = e.target.value
+                      setDifficulty(d)
+                      // Re-seed the timer from the new difficulty unless the
+                      // interviewer has already set a duration by hand.
+                      if (!durationTouched && DURATION_BY_DIFFICULTY[d]) {
+                        setDurationMinutes(DURATION_BY_DIFFICULTY[d])
+                      }
+                    }}
                   >
                     <option value="easy">easy</option>
                     <option value="medium">medium</option>
@@ -431,6 +449,35 @@ export function AddQuestionPage() {
                   value={requiredComplexity}
                   onChange={(e) => setRequiredComplexity(e.target.value)}
                 />
+              </div>
+              <div className="field">
+                <label htmlFor="duration_minutes">Time allowed</label>
+                <div className="inline-field">
+                  <input
+                    id="duration_minutes"
+                    type="number"
+                    min={1}
+                    value={durationMinutes}
+                    disabled={indefinite}
+                    onChange={(e) => {
+                      setDurationMinutes(Number(e.target.value))
+                      setDurationTouched(true)
+                    }}
+                  />
+                  <span className="muted">minutes</span>
+                </div>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={indefinite}
+                    onChange={(e) => setIndefinite(e.target.checked)}
+                  />
+                  Indefinite (no timer)
+                </label>
+                <p className="cellsub">
+                  The candidate&rsquo;s attempt auto-submits when this runs out. Defaults from
+                  difficulty; change it any time.
+                </p>
               </div>
             </div>
           </div>

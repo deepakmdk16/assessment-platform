@@ -28,11 +28,10 @@ _Done: F1 (reference solution persisted — `reference_solution`/`reference_lang
 
 | ID | Symptom | Root cause / note | Fix shape | Repo | Effort |
 |----|---------|-------------------|-----------|------|--------|
-| T1 | No candidate timer; an attempt never auto-ends. | `Submission` has only `created_at` (no `started_at`/deadline); `Invite.expires_at` is link expiry; `CandidatePage` has no timer; `time_limit_s` is per-test execution. | Duration on question/invite; **server-authoritative** `started_at` on first load; server-enforced deadline on submit; countdown UI. Client clock is untrusted. | platform (data+API+web) | L |
 | T3 | Difficulty barely changes the generated question. | Prompt injects a bare `DIFFICULTY: hard` label (`authoring.py:507`); `question_draft.md` has no difficulty semantics. | Prompt section tying easy/medium/hard to concrete levers (constraint sizes → complexity, algorithmic depth, edge-case count). Re-baseline draft eval (checkpoint #4). | agent | M |
 | T4 | One question per assessment; no multi-question tests/sections. | `Invite.question_id` is singular. | Model an assessment as an ordered set of questions; thread through invite, candidate flow, results. | platform | L |
 
-_Done: T2 (global Submissions page + route + sidebar link; rows link to the submission detail; question titles mapped from id; `candidate_email` added to the lean list row) — see `git log`._
+_Done: T1 (assessment timer — nullable `Question.duration_minutes` defaulting from difficulty in the wizard; server-authoritative `started_at` stamped once per candidate on `/start` via a `CandidateAttempt` row; `/start` returns a stable deadline; `/submit` enforces deadline + grace; candidate countdown with warn/critical states that auto-submits at zero), T2 (global Submissions page + route + sidebar link; rows link to the submission detail; question titles mapped from id; `candidate_email` added to the lean list row) — see `git log`._
 | AR3 | The agent renders a PDF report but the platform never lets you download it. | `AssesmentAgent/.../report.py` exists; `SubmissionDetailPage` "report" tab is an on-screen card, not the PDF. | Add a platform endpoint that fetches/serves the agent PDF; a download button on the submission page. | platform (+web) | S–M |
 
 ## P3 — Polish, UX parity & candidate experience
@@ -134,7 +133,7 @@ Moats 1–3 are architectural, not features a competitor bolts on.
 1. ~~**Quick-win batch** (one branch): **B1, F2, F3** + **B2** (env).~~ **Done.**
 2. ~~**F1** (reference persistence) — needs a migration.~~ **Done.**
 3. ~~**T2** (Submissions tab) — web-only now that the endpoint's confirmed present.~~ **Done.**
-4. **T1** (timer) — first heavy item; the loudest table-stakes gap.
+4. ~~**T1** (timer) — first heavy item; the loudest table-stakes gap.~~ **Done.**
 
 **Process note:** `CLAUDE.md` requires **mockup-first sign-off for non-trivial
 visual changes** (copy/one-liners exempt). B1/F2/F3 reuse existing components;

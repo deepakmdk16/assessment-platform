@@ -62,6 +62,8 @@ class QuestionCreate(BaseModel):
     # persisted. Null (and absent from the payload) for hand-authored questions.
     reference_solution: str | None = None
     reference_language: str | None = None
+    # Assessment time budget in minutes; None = untimed. Positive when set.
+    duration_minutes: int | None = Field(default=None, gt=0)
     test_cases: list[TestCaseIn] = Field(default_factory=list)
 
 
@@ -81,6 +83,7 @@ class QuestionUpdate(BaseModel):
     difficulty: Difficulty | None = None
     reference_solution: str | None = None
     reference_language: str | None = None
+    duration_minutes: int | None = Field(default=None, gt=0)
     test_cases: list[TestCaseIn] = Field(default_factory=list)
 
 
@@ -97,6 +100,7 @@ class QuestionOut(BaseModel):
     difficulty: str | None
     reference_solution: str | None
     reference_language: str | None
+    duration_minutes: int | None
     status: str
     created_at: datetime
     updated_at: datetime
@@ -279,6 +283,10 @@ class CandidateStartIn(BaseModel):
 class InvitePublicOut(BaseModel):
     question: CandidateQuestionView
     languages: list[str]
+    # Server-authoritative moment the attempt must be submitted by (started_at +
+    # the question's duration). None when the question is untimed. The candidate
+    # UI counts down to this off the server clock, not the browser's.
+    deadline: datetime | None = None
 
 
 class CandidateSubmitIn(BaseModel):

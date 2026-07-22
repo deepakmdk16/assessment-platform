@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
@@ -24,6 +24,20 @@ interface Draft {
 }
 
 const DRAFT_PREFIX = 'assessment-draft:'
+
+// Countdown urgency thresholds (ms): amber under 5 min, red under 1 min.
+const WARN_MS = 5 * 60 * 1000
+const CRIT_MS = 60 * 1000
+
+/** Remaining time as m:ss (or h:mm:ss past an hour), floored at zero. */
+function formatRemaining(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
+}
 
 function loadDraft(token: string): Draft | null {
   try {
@@ -65,6 +79,14 @@ export function CandidatePage() {
   const [draftRestored, setDraftRestored] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  // Server-authoritative deadline (ISO) from /start; null = untimed. The
+  // countdown ticks to it, and `timeUp` flips once when it passes, triggering the
+  // one-shot auto-submit below.
+  const [deadline, setDeadline] = useState<string | null>(null)
+  const [remainingMs, setRemainingMs] = useState<number | null>(null)
+  const [timeUp, setTimeUp] = useState(false)
+  const autoSubmitFired = useRef(false)
 
   const [consoleTab, setConsoleTab] = useState<'testcase' | 'result'>('testcase')
   const [stdin, setStdin] = useState('')
@@ -108,6 +130,7 @@ export function CandidatePage() {
     try {
       const data = await api.startInvite(token, candidateEmail)
       setInvite(data)
+      setDeadline(data.deadline ?? null)
       // Restore an autosaved draft for this invite, if any; only keep a saved
       // language that's still offered, else fall back to the first choice.
       const saved = loadDraft(token)
@@ -173,8 +196,7 @@ export function CandidatePage() {
     }
   }
 
-  async function handleSubmitCode(e: FormEvent) {
-    e.preventDefault()
+  async function doSubmit() {
     if (!token || !language) return
     setSubmitError(null)
     setSubmitting(true)
@@ -195,6 +217,36 @@ export function CandidatePage() {
       setSubmitting(false)
     }
   }
+
+  function handleSubmitCode(e: FormEvent) {
+    e.preventDefault()
+    void doSubmit()
+  }
+
+  // Tick the countdown once a second while the editor is open and the assessment
+  // is timed. Reads the server deadline against the local clock — the server is
+  // the real authority (it enforces the deadline on submit); this is the display.
+  useEffect(() => {
+    if (stage !== 'editor' || !deadline) return
+    const tick = () => {
+      const ms = new Date(deadline).getTime() - Date.now()
+      setRemainingMs(ms)
+      if (ms <= 0) setTimeUp(true)
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [stage, deadline])
+
+  // At zero, auto-submit whatever's in the editor — exactly once — so time running
+  // out records the attempt rather than losing it.
+  useEffect(() => {
+    if (!timeUp || autoSubmitFired.current) return
+    autoSubmitFired.current = true
+    void doSubmit()
+    // doSubmit reads the latest code/language via closure at fire time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeUp])
 
   if (stage === 'loading') return <p className="page-loading">Loading…</p>
   if (stage === 'invalid')
@@ -278,7 +330,32 @@ export function CandidatePage() {
       <header className="ide-top">
         <span className="ide-mark" aria-hidden="true" />
         <span className="ide-title">{q?.title}</span>
-        <span className="chip chip-neutral">Time limit {q?.time_limit_s}s</span>
+        <div className="ide-top-right">
+          <span className="chip chip-neutral">Per-test limit {q?.time_limit_s}s</span>
+          {deadline && !timeUp && remainingMs !== null && (
+            <span
+              className={
+                remainingMs <= CRIT_MS ? 'timer crit' : remainingMs <= WARN_MS ? 'timer warn' : 'timer'
+              }
+              role="timer"
+              title="Time remaining"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="13" r="8" />
+                <path d="M12 9v4l2 2M9 2h6" />
+              </svg>
+              {formatRemaining(remainingMs)} left
+            </span>
+          )}
+          {deadline && timeUp && (
+            <span className="timer-done" role="status">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+              Time&rsquo;s up — submitting…
+            </span>
+          )}
+        </div>
       </header>
 
       <div className="ide-split">
@@ -345,7 +422,12 @@ export function CandidatePage() {
                 if (draftRestored) setDraftRestored(false)
               }}
               theme="vs-dark"
-              options={{ minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }}
+              options={{
+                minimap: { enabled: false },
+                fontSize: 13,
+                scrollBeyondLastLine: false,
+                readOnly: timeUp,
+              }}
             />
           </div>
 
@@ -413,7 +495,7 @@ export function CandidatePage() {
               type="button"
               className="btn sec"
               onClick={() => doRun('run')}
-              disabled={running !== null || submitting || !code}
+              disabled={running !== null || submitting || timeUp || !code}
             >
               {running === 'run' ? 'Running…' : 'Run'}
             </button>
@@ -421,11 +503,15 @@ export function CandidatePage() {
               type="button"
               className="btn sec"
               onClick={() => doRun('tests')}
-              disabled={running !== null || submitting || !code}
+              disabled={running !== null || submitting || timeUp || !code}
             >
               {running === 'tests' ? 'Running tests…' : 'Run against test cases'}
             </button>
-            <button type="submit" className="btn submit" disabled={submitting || running !== null}>
+            <button
+              type="submit"
+              className="btn submit"
+              disabled={submitting || running !== null || timeUp}
+            >
               {submitting ? 'Submitting…' : 'Submit'}
             </button>
           </form>

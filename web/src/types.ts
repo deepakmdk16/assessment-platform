@@ -49,6 +49,7 @@ export interface QuestionIn {
   difficulty?: string
   reference_solution?: string | null
   reference_language?: string | null
+  duration_minutes?: number | null
   test_cases: TestCaseIn[]
 }
 
@@ -125,6 +126,9 @@ export interface InviteStatusResponse {
 export interface InviteStartResponse {
   question: InviteQuestionPublic
   languages: Language[]
+  /** Server-authoritative submit deadline (ISO). null when the question is
+   *  untimed. The countdown runs to this, and the server enforces it on submit. */
+  deadline?: string | null
 }
 
 export interface SubmitResponse {

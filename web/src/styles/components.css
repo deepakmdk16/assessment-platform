@@ -396,6 +396,17 @@ textarea {
   gap: 0.4rem;
 }
 
+/* A number/short input sitting inline with a unit label (e.g. "30 minutes"). */
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.inline-field input {
+  max-width: 120px;
+}
+
 .stack {
   display: flex;
   flex-direction: column;
@@ -1144,6 +1155,46 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+}
+
+.timer svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+/* Escalating urgency as the clock runs down (thresholds set in CandidatePage). */
+.timer.warn {
+  color: var(--color-warn);
+  font-weight: 600;
+}
+
+.timer.crit {
+  color: var(--color-bad);
+  font-weight: 700;
+}
+
+.timer.crit svg {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+/* Shown in place of the timer once time is up and the attempt is auto-submitting. */
+.timer-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--color-bad);
+}
+
+.timer-done svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timer.crit svg {
+    animation: none;
+  }
 }
 
 .ide-split {

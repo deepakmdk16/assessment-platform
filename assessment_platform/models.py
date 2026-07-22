@@ -69,6 +69,10 @@ class Question(SQLModel, table=True):
     # question and submission pages. Null for hand-authored questions.
     reference_solution: str | None = None
     reference_language: str | None = None
+    # Assessment time budget in minutes. None = untimed (indefinite) — the default,
+    # so questions authored before timing existed stay untimed. The candidate
+    # countdown and the server-enforced submit deadline both key off this.
+    duration_minutes: int | None = None
     status: str = Field(default="active", index=True)
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
@@ -117,6 +121,28 @@ class Invite(SQLModel, table=True):
     updated_at: datetime = _updated_at()
 
     question: Question | None = Relationship(back_populates="invites")
+
+
+class CandidateAttempt(SQLModel, table=True):
+    """When a candidate first opened a given invite — the server-authoritative
+    clock start for a timed assessment.
+
+    Stamped once on the first `/start` for an (invite, candidate_email) pair and
+    never moved, so the deadline (started_at + question.duration_minutes) survives
+    a reload or a device switch and can't be reset by re-opening the link. Only
+    the timer needs this; the attempt of record is still the `Submission`.
+    """
+
+    __table_args__ = (
+        UniqueConstraint("invite_id", "candidate_email", name="uq_attempt_invite_candidate"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    invite_id: int = Field(foreign_key="invite.id", index=True)
+    candidate_email: str = Field(index=True)
+    started_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
 
 
 class Submission(SQLModel, table=True):

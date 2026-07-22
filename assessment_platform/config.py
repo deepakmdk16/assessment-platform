@@ -159,6 +159,12 @@ RUN_RATE_LIMIT_MAX = int(os.getenv("RUN_RATE_LIMIT_MAX", "60"))
 # 0 to disable reaping.
 REAP_RUNNING_AFTER_S = int(os.getenv("REAP_RUNNING_AFTER_S", "900"))
 
+# Grace window past a timed assessment's deadline within which a submit is still
+# accepted. Covers clock skew, network latency, and the round-trip of the client's
+# auto-submit fired at 0:00 — without it, an on-time auto-submit could just miss.
+# A submit later than deadline + this is refused as "time's up".
+SUBMIT_GRACE_SECONDS = int(os.getenv("SUBMIT_GRACE_SECONDS", "15"))
+
 # Languages offered to candidates (UI-facing; the agent enforces what it supports).
 SUPPORTED_LANGUAGES = [
     "python",
