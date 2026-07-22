@@ -20,7 +20,7 @@ _None open. B1 (dashboard archive dead-end) and B2 (stable `JWT_SECRET`) are don
 
 | ID | Symptom | Root cause | Fix shape | Repo | Effort |
 |----|---------|-----------|-----------|------|--------|
-| F4 | A question can be saved with as few as 1 test case; "8 minimum" is only aspirational. | Prompt says ">=6 aim 8-10"; draft-eval floor is 4; the loader enforces only `min_length=1` (`AssesmentAgent/.../loader.py:52`). | Raise the loader/`validate_question` floor to a hard minimum of correctness cases (exempt the performance case); holds for AI **and** hand-authored paths. | agent | S |
+| F4 | A question can be saved with as few as 1 test case; "8 minimum" is only aspirational. | Prompt says ">=6 aim 8-10"; draft-eval floor is 4; the loader enforces only `min_length=1` (`AssesmentAgent/.../loader.py:52`). | Bigger than "S": `validate_question` is the shared invariant, so a floor-of-4 breaks ~32 tests and, more importantly, **changes AI-authoring semantics** (a draft must now yield ≥4 surviving correctness cases or hard-fail) — needs an `assess-draft-eval` re-baseline that SKIPs offline, so it must be done in a session with a real key. Built-ins already satisfy 4; the number itself is fine. | agent | M |
 
 _Done: F1 (reference solution persisted — `reference_solution`/`reference_language` columns + migration, shown collapsed on the question and submission pages), F2 (difficulty row on the question detail page), F3 (difficulty select moved above the "Draft with AI" action, defaults `medium`) — see `git log`._
 
