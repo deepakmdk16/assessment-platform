@@ -86,7 +86,7 @@ export function AddQuestionPage() {
   const [draftOpen, setDraftOpen] = useState(false)
   const [brief, setBrief] = useState('')
   const [draftLanguage, setDraftLanguage] = useState<Language>('python')
-  const [difficulty, setDifficulty] = useState('')
+  const [difficulty, setDifficulty] = useState('medium')
   const [targetComplexity, setTargetComplexity] = useState('')
   const [drafting, setDrafting] = useState(false)
   const [draftError, setDraftError] = useState<DraftFailure | null>(null)
@@ -312,6 +312,18 @@ export function AddQuestionPage() {
                   </select>
                 </div>
                 <div className="field">
+                  <label htmlFor="difficulty">Difficulty</label>
+                  <select
+                    id="difficulty"
+                    value={difficulty}
+                    onChange={(e) => setDifficulty(e.target.value)}
+                  >
+                    <option value="easy">easy</option>
+                    <option value="medium">medium</option>
+                    <option value="hard">hard</option>
+                  </select>
+                </div>
+                <div className="field">
                   <label htmlFor="target_complexity">Target complexity (optional)</label>
                   <input
                     id="target_complexity"
@@ -357,19 +369,6 @@ export function AddQuestionPage() {
                   <label htmlFor="title">Title</label>
                   <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
                 </div>
-              </div>
-              <div className="field">
-                <label htmlFor="difficulty">Difficulty (optional)</label>
-                <select
-                  id="difficulty"
-                  value={difficulty}
-                  onChange={(e) => setDifficulty(e.target.value)}
-                >
-                  <option value="">— Not set —</option>
-                  <option value="easy">easy</option>
-                  <option value="medium">medium</option>
-                  <option value="hard">hard</option>
-                </select>
               </div>
               <div className="field">
                 <label htmlFor="prompt">Prompt</label>

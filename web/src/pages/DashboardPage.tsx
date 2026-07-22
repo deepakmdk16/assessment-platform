@@ -78,83 +78,87 @@ export function DashboardPage() {
 
       {error && <p className="form-error">{error}</p>}
       {!error && questions === null && <p className="page-loading">Loading…</p>}
+
+      {/* The toolbar renders as soon as questions load (even when empty) so
+          archiving your last question never hides the "Show archived" toggle. */}
+      {questions !== null && (
+        <div className="list-toolbar">
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => toggleShowArchived(e.target.checked)}
+            />
+            Show archived
+          </label>
+        </div>
+      )}
+
       {questions?.length === 0 && (
         <p className="empty-state">
           {showArchived
             ? 'No questions yet. Create your first one to start inviting candidates.'
-            : 'No active questions. Create one, or show archived questions below.'}
+            : 'No active questions. Create one, or use “Show archived” above to see archived questions.'}
         </p>
       )}
 
       {questions && questions.length > 0 && (
-        <>
-          <div className="list-toolbar">
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(e) => toggleShowArchived(e.target.checked)}
-              />
-              Show archived
-            </label>
-          </div>
-          <div className="card">
-            <div className="tbl-wrap">
-              <table className="tbl">
-                <thead>
-                  <tr>
-                    <th>Problem</th>
-                    <th>Test cases</th>
-                    <th>Difficulty</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                    <th></th>
+        <div className="card">
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Problem</th>
+                  <th>Test cases</th>
+                  <th>Difficulty</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {questions.map((q) => (
+                  <tr
+                    key={q.id}
+                    className={`clickable-row${q.status === 'archived' ? ' row-archived' : ''}`}
+                    onClick={() => navigate(`/questions/${q.id}`)}
+                  >
+                    <td>
+                      <div className="t-title">{q.title}</div>
+                    </td>
+                    <td className="num">{q.test_cases.length}</td>
+                    <td>
+                      {q.difficulty ? (
+                        <span className={difficultyClass(q.difficulty)}>{q.difficulty}</span>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <span className={badgeClass(q.status)}>{q.status}</span>
+                    </td>
+                    <td>{new Date(q.created_at).toLocaleDateString()}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn sec sm"
+                        onClick={(e) => toggleArchive(e, q)}
+                        disabled={busyId === q.id}
+                      >
+                        {busyId === q.id
+                          ? '…'
+                          : q.status === 'archived'
+                            ? 'Unarchive'
+                            : 'Archive'}
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {questions.map((q) => (
-                    <tr
-                      key={q.id}
-                      className={`clickable-row${q.status === 'archived' ? ' row-archived' : ''}`}
-                      onClick={() => navigate(`/questions/${q.id}`)}
-                    >
-                      <td>
-                        <div className="t-title">{q.title}</div>
-                      </td>
-                      <td className="num">{q.test_cases.length}</td>
-                      <td>
-                        {q.difficulty ? (
-                          <span className={difficultyClass(q.difficulty)}>{q.difficulty}</span>
-                        ) : (
-                          <span className="muted">—</span>
-                        )}
-                      </td>
-                      <td>
-                        <span className={badgeClass(q.status)}>{q.status}</span>
-                      </td>
-                      <td>{new Date(q.created_at).toLocaleDateString()}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="btn sec sm"
-                          onClick={(e) => toggleArchive(e, q)}
-                          disabled={busyId === q.id}
-                        >
-                          {busyId === q.id
-                            ? '…'
-                            : q.status === 'archived'
-                              ? 'Unarchive'
-                              : 'Archive'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <Pager total={total} limit={PAGE_SIZE} offset={offset} onChange={setOffset} />
+                ))}
+              </tbody>
+            </table>
           </div>
-        </>
+          <Pager total={total} limit={PAGE_SIZE} offset={offset} onChange={setOffset} />
+        </div>
       )}
     </div>
   )

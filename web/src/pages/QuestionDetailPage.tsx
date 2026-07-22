@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
-import { badgeClass } from '../badges'
+import { badgeClass, difficultyClass } from '../badges'
 import { Pager } from '../components/Pager'
 import type { Invite, InviteDelivery, QuestionOut, SubmissionRow } from '../types'
 
@@ -340,6 +340,12 @@ export function QuestionDetailPage() {
 
           <div className="card pad">
             <h3>Grading</h3>
+            {question.difficulty && (
+              <div className="kv">
+                <span className="k">Difficulty</span>
+                <span className={difficultyClass(question.difficulty)}>{question.difficulty}</span>
+              </div>
+            )}
             <div className="kv">
               <span className="k">Pass threshold</span>
               <span className="num">{Math.round(question.pass_threshold * 100)}%</span>

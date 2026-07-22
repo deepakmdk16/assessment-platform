@@ -14,19 +14,16 @@ Effort key: **XS** (minutes) · **S** (self-contained) · **M** (multi-file) · 
 
 ## P0 — Bugs & broken flows
 
-| ID | Symptom | Root cause | Fix shape | Repo | Effort |
-|----|---------|-----------|-----------|------|--------|
-| B1 | Archiving your only question dead-ends: the list empties and the "Show archived" toggle disappears; the empty-state text points to a control that isn't on screen. | The toolbar with the checkbox renders only inside `{questions && questions.length > 0}` (`web/src/pages/DashboardPage.tsx:89`). | Hoist the toolbar out of the `length > 0` guard so it's always visible once loaded; branch empty-state copy on `showArchived`. | platform/web | S |
-| B2 | Every platform restart logs all interviewers out. | `JWT_SECRET` is an ephemeral per-process secret when unset (`config.py:86-92`) — by design for dev. | Set a stable `JWT_SECRET` in the gitignored `.env` (prod: secret manager). Optional: persist a dev secret to a gitignored file. | platform (config) | XS |
+_None open. B1 (dashboard archive dead-end) and B2 (stable `JWT_SECRET`) are done — see `git log`._
 
 ## P1 — Finish what's half-built ("data exists, UI doesn't surface it")
 
 | ID | Symptom | Root cause | Fix shape | Repo | Effort |
 |----|---------|-----------|-----------|------|--------|
 | F1 | The AI reference solution shows once at draft time, then vanishes — invisible on the question page and on any submission. | Agent returns it (`schemas.py:113`), but `Question` has **no such column** (`models.py:52-83`) and `authoring._to_loader_dict` drops it. | Add `reference_solution` + `reference_language` columns (Alembic migration); persist on save; add a collapsed "Show reference solution" panel to `QuestionDetailPage` + `SubmissionDetailPage`. | platform (+web) | M |
-| F2 | Question detail page shows threshold / time limit / complexity but not difficulty (the dashboard list already shows it). | `QuestionDetailPage.tsx:341-360` omits difficulty; `difficultyClass` badge already exists (`badges.ts:13`). | Add one `.kv` row reusing `difficultyClass`. | platform/web | XS |
-| F3 | Difficulty select sits *below* the "Draft with AI" button, so you draft before seeing it; no default. | Draft buttons at `AddQuestionPage.tsx:283,323`; select at `:362`. Already easy/medium/hard and already sent to the model. | Move the select above the draft action; default `medium`. | platform/web | XS |
 | F4 | A question can be saved with as few as 1 test case; "8 minimum" is only aspirational. | Prompt says ">=6 aim 8-10"; draft-eval floor is 4; the loader enforces only `min_length=1` (`AssesmentAgent/.../loader.py:52`). | Raise the loader/`validate_question` floor to a hard minimum of correctness cases (exempt the performance case); holds for AI **and** hand-authored paths. | agent | S |
+
+_Done: F2 (difficulty row on the question detail page), F3 (difficulty select moved above the "Draft with AI" action, defaults `medium`) — see `git log`._
 
 ## P2 — Table-stakes to compete with HackerRank
 
@@ -134,8 +131,7 @@ Moats 1–3 are architectural, not features a competitor bolts on.
 
 ## Suggested sequencing
 
-1. **Quick-win batch** (one branch): **B1, F2, F3** (web, reuse existing styled
-   components — no new visual design) + **B2** (env). All XS–S, high-visibility.
+1. ~~**Quick-win batch** (one branch): **B1, F2, F3** + **B2** (env).~~ **Done.**
 2. **F1** (reference persistence) — its own small batch; needs a migration.
 3. **T2** (Submissions tab) — web-only now that the endpoint's confirmed present.
 4. **T1** (timer) — first heavy item; the loudest table-stakes gap.
