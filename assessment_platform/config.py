@@ -31,6 +31,11 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./platform.db")
 # developer's real `.env` (loaded above) can't make the suite send live email.
 TESTING = os.getenv("PLATFORM_TESTING", "").lower() in {"1", "true"}
 
+# Whether to write candidate PII (recipient emails, invite links) to the logs
+# verbatim. OFF by default so production log aggregation never ingests it; turn ON
+# locally (LOG_PII=true) to get the copy-pasteable invite link when SMTP is unset.
+LOG_PII = os.getenv("LOG_PII", "").lower() in {"1", "true"}
+
 # Create tables on startup via SQLModel.metadata.create_all. OFF by default:
 # production runs the Alembic migrations, and an unconditional create_all silently
 # masks a missing migration (a model change works in dev without one, then a fresh

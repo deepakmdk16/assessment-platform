@@ -69,9 +69,9 @@ Open hardening items (ops, not vulnerabilities):
 - **SEC1** — `REGISTRATION_CODE` is unset by default → open interviewer sign-up.
   Must be set in prod (`config.py:110`). *Deploy-checklist item, XS.*
 - **SEC2** — `JWT_SECRET` ephemeral when unset (= **B2**).
-- **SEC3** — invite links + recipient emails are logged at INFO when SMTP is
-  unconfigured, and SMTP failures log recipient lists (`email_client.py:59,72`).
-  Candidate PII in app logs; redact for prod log aggregation. *S.*
+- ~~**SEC3** — invite links + recipient emails logged at INFO.~~ **Done:** logs
+  now mask emails (`j***@e***`) and omit the link by default; a `LOG_PII` flag
+  (off by default) restores verbatim logging for local debugging.
 - **SEC4** — distributed rate limiting for horizontal scale (see P4).
 
 ---
