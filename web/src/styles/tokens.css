@@ -66,9 +66,13 @@
   --content-max: 1300px;
 }
 
-/* Dark theme — OS preference */
+/* Dark theme. Two triggers, one palette:
+   1. OS preference — unless the interviewer has explicitly chosen Light, in which
+      case `:not([data-theme="light"])` lets that choice win over the media query.
+   2. An explicit Dark choice — `:root[data-theme="dark"]` (the U1 toggle stamps
+      data-theme on <html>). Auto = no attribute, so the media query governs. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --color-bg: #0b0e14;
     --color-surface: #12161f;
     --color-surface-2: #161b26;
@@ -98,4 +102,38 @@
     --shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
     --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.6);
   }
+}
+
+/* Explicit Dark choice — same palette as the media query above, applied whatever
+   the OS says. Kept in lockstep with the block above (standard two-trigger dark
+   pattern; there is no way to share custom-property values across the two). */
+:root[data-theme="dark"] {
+  --color-bg: #0b0e14;
+  --color-surface: #12161f;
+  --color-surface-2: #161b26;
+  --color-surface-3: #1c2230;
+  --color-border: #232a37;
+  --color-border-strong: #303948;
+  --color-text: #dbe2ec;
+  --color-heading: #f2f5fa;
+  --color-muted: #8b95a6;
+  --color-faint: #66707f;
+
+  --color-ink: #e7ebf2;
+  --color-ink-hover: #ffffff;
+  --color-accent: #5b8bff;
+  --color-accent-soft: #17233f;
+  --color-accent-ink: #6f9aff;
+
+  --color-good: #3ecf7f; --color-good-soft: #14271d;
+  --color-warn: #e0a13c; --color-warn-soft: #2a2113;
+  --color-bad: #f06a6f; --color-bad-soft: #2a1618;
+  --color-easy: #3ecf7f; --color-medium: #e0a13c; --color-hard: #f06a6f;
+
+  --rail: #0a0d13; --rail-2: #10141d; --rail-border: #1e2431;
+  --rail-text: #b7c0ce; --rail-muted: #6b7484;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.6);
 }

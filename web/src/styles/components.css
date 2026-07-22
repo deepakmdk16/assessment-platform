@@ -106,8 +106,55 @@
   border-top: 1px solid var(--rail-border);
   padding-top: 0.8rem;
   display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.side-id {
+  display: flex;
   align-items: center;
   gap: 0.6rem;
+}
+
+/* Segmented Light / Dark / Auto control, styled for the dark rail. */
+.theme-seg {
+  display: flex;
+  gap: 2px;
+  background: var(--rail-2);
+  border: 1px solid var(--rail-border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.theme-seg button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.32rem 0.3rem;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--rail-muted);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.theme-seg button svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.theme-seg button:hover {
+  color: var(--rail-text);
+}
+
+.theme-seg button.on {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 .avatar {
@@ -1147,6 +1194,30 @@ textarea {
   align-items: center;
   gap: 0.7rem;
   font-size: 0.85rem;
+}
+
+/* Square icon-only button (e.g. the candidate header's theme cycle). */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+.icon-btn svg {
+  width: 1.05rem;
+  height: 1.05rem;
 }
 
 .timer {

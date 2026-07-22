@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { ThemeProvider } from '../../theme/ThemeContext'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CandidatePage } from '../CandidatePage'
 import { api } from '../../api'
@@ -56,11 +57,13 @@ const startResponse: InviteStartResponse = {
 
 function renderCandidatePage() {
   return render(
-    <MemoryRouter initialEntries={['/t/tok123']}>
-      <Routes>
-        <Route path="/t/:token" element={<CandidatePage />} />
-      </Routes>
-    </MemoryRouter>,
+    <ThemeProvider>
+      <MemoryRouter initialEntries={['/t/tok123']}>
+        <Routes>
+          <Route path="/t/:token" element={<CandidatePage />} />
+        </Routes>
+      </MemoryRouter>
+    </ThemeProvider>,
   )
 }
 

@@ -3,6 +3,9 @@ import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
+import { ThemeCycleButton } from '../components/ThemeToggle'
+import { useTheme } from '../theme/ThemeContext'
+import { monacoTheme } from '../theme/theme'
 import type { InviteStartResponse, Language, RunResponse, RunTestsResponse } from '../types'
 
 type Stage =
@@ -66,6 +69,7 @@ function clearDraft(token: string): void {
 
 export function CandidatePage() {
   const { token } = useParams<{ token: string }>()
+  const { resolved } = useTheme()
   const [stage, setStage] = useState<Stage>('loading')
   const [invite, setInvite] = useState<InviteStartResponse | null>(null)
 
@@ -355,6 +359,7 @@ export function CandidatePage() {
               Time&rsquo;s up — submitting…
             </span>
           )}
+          <ThemeCycleButton />
         </div>
       </header>
 
@@ -421,7 +426,7 @@ export function CandidatePage() {
                 setCode(value ?? '')
                 if (draftRestored) setDraftRestored(false)
               }}
-              theme="vs-dark"
+              theme={monacoTheme(resolved)}
               options={{
                 minimap: { enabled: false },
                 fontSize: 13,

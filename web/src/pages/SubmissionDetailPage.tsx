@@ -3,6 +3,8 @@ import { Link, useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
+import { useTheme } from '../theme/ThemeContext'
+import { monacoTheme } from '../theme/theme'
 import type { QuestionOut, ResultTestCase, SubmissionDetail } from '../types'
 
 /** The interviewer's report card. Unlike the candidate view this deliberately
@@ -10,6 +12,7 @@ import type { QuestionOut, ResultTestCase, SubmissionDetail } from '../types'
  *  whole point is judging the submission. */
 export function SubmissionDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const { resolved } = useTheme()
   const [sub, setSub] = useState<SubmissionDetail | null>(null)
   const [question, setQuestion] = useState<QuestionOut | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -152,7 +155,7 @@ export function SubmissionDetailPage() {
               height="100%"
               language={sub.language || undefined}
               value={sub.code}
-              theme="vs-dark"
+              theme={monacoTheme(resolved)}
               options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13 }}
             />
           </div>

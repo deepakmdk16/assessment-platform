@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { ThemeProvider } from '../../theme/ThemeContext'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SubmissionDetailPage } from '../SubmissionDetailPage'
 import { api } from '../../api'
@@ -110,11 +111,13 @@ const submission: SubmissionDetail = {
 
 function renderPage() {
   return render(
-    <MemoryRouter initialEntries={['/submissions/sub1']}>
-      <Routes>
-        <Route path="/submissions/:id" element={<SubmissionDetailPage />} />
-      </Routes>
-    </MemoryRouter>,
+    <ThemeProvider>
+      <MemoryRouter initialEntries={['/submissions/sub1']}>
+        <Routes>
+          <Route path="/submissions/:id" element={<SubmissionDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    </ThemeProvider>,
   )
 }
 

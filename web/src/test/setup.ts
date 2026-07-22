@@ -15,6 +15,22 @@ if (typeof HTMLDialogElement !== 'undefined' && !HTMLDialogElement.prototype.sho
   }
 }
 
+// jsdom has no matchMedia; the ThemeProvider queries prefers-color-scheme. Stub a
+// light-preference, no-op media query so components using useTheme can mount.
+if (typeof window !== 'undefined' && !window.matchMedia) {
+  window.matchMedia = (query: string) =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }) as unknown as MediaQueryList
+}
+
 afterEach(() => {
   cleanup()
 })

@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { ThemeToggle } from './ThemeToggle'
 
 function initials(name: string): string {
   return name
@@ -48,18 +49,21 @@ export function Sidebar() {
         </Link>
       </nav>
 
-      {user && (
-        <div className="side-foot">
-          <span className="avatar" aria-hidden="true">
-            {initials(user.name)}
-          </span>
-          <span className="side-who">
-            {user.name}
-            <br />
-            <small>Interviewer</small>
-          </span>
-        </div>
-      )}
+      <div className="side-foot">
+        <ThemeToggle />
+        {user && (
+          <div className="side-id">
+            <span className="avatar" aria-hidden="true">
+              {initials(user.name)}
+            </span>
+            <span className="side-who">
+              {user.name}
+              <br />
+              <small>Interviewer</small>
+            </span>
+          </div>
+        )}
+      </div>
     </aside>
   )
 }
