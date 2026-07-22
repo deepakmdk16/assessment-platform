@@ -172,6 +172,21 @@ export interface SubmissionRow {
   created_at: string
 }
 
+/** A row in the global Submissions list (`GET /submissions`). Lean by design —
+ *  the heavy `code`/`full_result` blobs are fetched per-id on the detail page. */
+export interface SubmissionSummary {
+  id: string
+  question_id: string
+  candidate: string
+  candidate_email?: string | null
+  language: Language
+  status: string
+  agent_job_id: string | null
+  created_at: string
+  verdict?: string
+  score_pct?: number
+}
+
 /** How one test case came out. Mirrors the agent's runner outcome. */
 export type ResultCaseStatus = 'PASS' | 'FAIL' | 'TLE'
 

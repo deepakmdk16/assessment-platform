@@ -12,6 +12,7 @@ import type {
   RunTestsResponse,
   SubmissionDetail,
   SubmissionRow,
+  SubmissionSummary,
   SubmitResponse,
   User,
 } from './types'
@@ -158,6 +159,11 @@ export const api = {
     return request<Page<SubmissionRow>>(`/questions/${questionId}/submissions?${params}`, {
       auth: true,
     })
+  },
+
+  listAllSubmissions: (offset = 0, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    return request<Page<SubmissionSummary>>(`/submissions?${params}`, { auth: true })
   },
 
   getSubmission: (submissionId: string) =>

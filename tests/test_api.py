@@ -815,6 +815,10 @@ def test_submissions_list_is_lean(client, monkeypatch) -> None:
     assert "full_result" not in row
     assert "result" not in row
     assert {"id", "question_id", "candidate", "language", "status", "verdict", "score_pct"} <= row.keys()
+    # candidate_email rides on the lean row (light field, used to disambiguate in
+    # the global Submissions list); the direct POST /submissions path has none.
+    assert "candidate_email" in row
+    assert row["candidate_email"] is None
 
     # The full payload is still available per-id.
     detail = client.get(f"/submissions/{row['id']}").json()

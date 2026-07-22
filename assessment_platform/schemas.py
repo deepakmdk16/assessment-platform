@@ -159,6 +159,7 @@ class SubmissionSummaryOut(BaseModel):
     id: str
     question_id: str
     candidate: str
+    candidate_email: str | None = None
     language: str
     status: str
     agent_job_id: str | None

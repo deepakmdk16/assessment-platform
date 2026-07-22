@@ -17,6 +17,7 @@ export function Sidebar() {
 
   const onNew = pathname === '/questions/new'
   const onQuestions = pathname === '/dashboard' || (pathname.startsWith('/questions/') && !onNew)
+  const onSubmissions = pathname.startsWith('/submissions')
 
   return (
     <aside className="sidebar">
@@ -32,6 +33,12 @@ export function Sidebar() {
             <path d="M4 6h16M4 12h16M4 18h10" />
           </svg>
           Questions
+        </Link>
+        <Link to="/submissions" className={onSubmissions ? 'on' : undefined}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M9 5h9M9 12h9M9 19h9M4 5h.01M4 12h.01M4 19h.01" />
+          </svg>
+          Submissions
         </Link>
         <Link to="/questions/new" className={onNew ? 'on' : undefined}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

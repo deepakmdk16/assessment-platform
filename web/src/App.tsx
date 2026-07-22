@@ -6,6 +6,7 @@ import { RegisterPage } from './pages/RegisterPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { AddQuestionPage } from './pages/AddQuestionPage'
 import { QuestionDetailPage } from './pages/QuestionDetailPage'
+import { SubmissionsPage } from './pages/SubmissionsPage'
 import { SubmissionDetailPage } from './pages/SubmissionDetailPage'
 import { CandidatePage } from './pages/CandidatePage'
 import { NotFoundPage } from './pages/NotFoundPage'
@@ -57,6 +58,16 @@ export function App() {
         }
       />
 
+      <Route
+        path="/submissions"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <SubmissionsPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
       <Route
         path="/submissions/:id"
         element={

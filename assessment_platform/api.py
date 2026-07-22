@@ -190,6 +190,7 @@ def _submission_summary(
         id=sub.id,
         question_id=sub.question_id,
         candidate=sub.candidate,
+        candidate_email=sub.candidate_email,
         language=sub.language,
         status=sub.status,
         agent_job_id=sub.agent_job_id,
