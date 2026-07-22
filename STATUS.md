@@ -4,6 +4,9 @@ Pending / next work **only**. Feature *history* is `git log` (commits are
 per-slice and detailed) — there is deliberately no changelog file. Update this
 file in the same commit that opens or closes an item (pre-push checkpoint #5).
 Durable architecture / boundary / invariants live in CLAUDE.md + CONVENTIONS.md.
+The broader prioritized gap/feature list (interviewer UX, candidate experience,
+security, analytics, moats) lives in [PRODUCT_BACKLOG.md](PRODUCT_BACKLOG.md) —
+this file stays scoped to near-term pending work.
 
 ## Open items
 
