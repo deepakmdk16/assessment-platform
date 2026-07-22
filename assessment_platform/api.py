@@ -13,6 +13,8 @@ platform<->agent link (see README).
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import secrets
 import uuid
@@ -22,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
@@ -1185,6 +1187,55 @@ def list_submissions(
     results = _results_by_submission(subs, session)
     items = [_submission_summary(sub, results.get(sub.id)) for sub in subs]
     return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@app.get("/submissions/export")
+def export_submissions(
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Owner-scoped CSV of every submission across the caller's questions.
+
+    A full export (not paginated) for spreadsheets / ATS import — the lean summary
+    columns plus the question title, so a row is readable without a second lookup.
+    Declared BEFORE `/submissions/{submission_id}` so "export" isn't swallowed as
+    an id by the path-param route.
+    """
+    _reap_stale_running(session)
+    subs = session.exec(
+        select(Submission)
+        .join(Question)
+        .where(Question.owner_id == current.id)
+        .order_by(col(Submission.created_at).desc(), col(Submission.id))
+    ).all()
+    results = _results_by_submission(subs, session)
+    titles = {
+        q.id: q.title
+        for q in session.exec(select(Question).where(Question.owner_id == current.id)).all()
+    }
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "submission_id", "question_id", "question_title", "candidate",
+            "candidate_email", "language", "status", "verdict", "score_pct", "created_at",
+        ]
+    )
+    for sub in subs:
+        r = results.get(sub.id)
+        writer.writerow(
+            [
+                sub.id, sub.question_id, titles.get(sub.question_id, ""), sub.candidate,
+                sub.candidate_email or "", sub.language, sub.status,
+                r.verdict if r else "", r.score_pct if r else "", sub.created_at.isoformat(),
+            ]
+        )
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="submissions.csv"'},
+    )
 
 
 @app.get("/submissions/{submission_id}", response_model=SubmissionOut)

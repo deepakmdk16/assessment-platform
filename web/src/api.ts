@@ -192,3 +192,22 @@ export const api = {
     data: { candidate_name: string; candidate_email: string; language: string; code: string },
   ) => request<SubmitResponse>(`/invite/${token}/submit`, { method: 'POST', body: data }),
 }
+
+/** Fetch the owner-scoped submissions CSV (authenticated) and trigger a browser
+ *  download. Kept out of `request` because it returns a file, not JSON. */
+export async function exportSubmissionsCsv(): Promise<void> {
+  const token = getToken()
+  const res = await fetch(`${BASE_URL}/submissions/export`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (res.status === 401) unauthorizedHandler?.()
+  if (!res.ok) throw new ApiError(res.status, res.statusText)
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'submissions.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}

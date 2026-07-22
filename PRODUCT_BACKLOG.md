@@ -81,7 +81,9 @@ Open hardening items (ops, not vulnerabilities):
 - **No aggregate endpoints** — no `@app.get` for stats/metrics/summary; the
   dashboard is a question list only. No cross-candidate comparison, pass-rate,
   percentile, or time-to-solve. → **AR1** (L).
-- **No export** (CSV/JSON) of submissions or results. → **AR2** (S–M).
+- ~~**No export** (CSV/JSON) of submissions or results. → **AR2**.~~ **Done:**
+  `GET /submissions/export` streams an owner-scoped CSV (summary columns + the
+  question title); "Export CSV" button on the Submissions page.
 - **PDF report exists but isn't surfaced** → **AR3** (in P2 above).
 
 ---

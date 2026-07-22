@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, ApiError } from '../api'
+import { api, ApiError, exportSubmissionsCsv } from '../api'
 import { badgeClass } from '../badges'
 import { Pager } from '../components/Pager'
 import type { SubmissionSummary } from '../types'
@@ -17,6 +17,19 @@ export function SubmissionsPage() {
   const [offset, setOffset] = useState(0)
   const [titles, setTitles] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+
+  async function handleExport() {
+    setError(null)
+    setExporting(true)
+    try {
+      await exportSubmissionsCsv()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to export submissions')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -63,6 +76,14 @@ export function SubmissionsPage() {
           </h1>
           <div className="sub">Every graded attempt across your questions, newest first.</div>
         </div>
+        {submissions && submissions.length > 0 && (
+          <button type="button" className="btn sec" onClick={handleExport} disabled={exporting}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+            </svg>
+            {exporting ? 'Exporting…' : 'Export CSV'}
+          </button>
+        )}
       </div>
 
       {error && <p className="form-error">{error}</p>}

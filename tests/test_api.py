@@ -826,3 +826,21 @@ def test_submissions_list_is_lean(client, monkeypatch) -> None:
 
     # Pagination bounds apply here too.
     assert client.get("/submissions?limit=0").status_code == 422
+
+
+def test_submissions_csv_export(client, monkeypatch) -> None:
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
+    client.post(
+        "/submissions",
+        json={"question_id": "sum_of_n", "candidate": "Jane", "language": "python", "code": "print(1)"},
+    )
+
+    resp = client.get("/submissions/export")
+    assert resp.status_code == 200  # not swallowed by /submissions/{id}
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert "attachment" in resp.headers["content-disposition"]
+    lines = resp.text.strip().splitlines()
+    assert lines[0].startswith("submission_id,question_id,question_title,candidate")
+    assert "Jane" in resp.text
+    assert "Sum of N" in resp.text  # the question title is joined in, not just the id
