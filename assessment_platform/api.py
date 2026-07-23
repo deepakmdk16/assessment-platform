@@ -875,6 +875,53 @@ def list_invites(
     return [_invite_out(inv) for inv in invites]
 
 
+@app.post("/assessments/{assessment_id}/invites", response_model=InviteOut, status_code=201)
+def create_assessment_invite(
+    assessment_id: str,
+    body: InviteCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> InviteOut:
+    """Invite candidates to a whole assessment (T4). Same shape as the per-question
+    invite, but the link opens the ordered multi-question flow."""
+    assessment = _owned_assessment(assessment_id, current, session)
+    if not assessment.questions:
+        raise HTTPException(
+            status_code=400, detail="cannot invite to an assessment with no questions."
+        )
+    invite = Invite(
+        token=secrets.token_urlsafe(32),
+        assessment_id=assessment_id,
+        created_by=_require_id(current.id),
+        recipients=[_normalize_email(r) for r in body.recipients],
+        expires_at=body.expires_at,
+    )
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    deliveries = email_client.send_invite_emails(
+        invite.recipients, _invite_url(invite.token), assessment.title
+    )
+    invite.deliveries = [
+        {"recipient": d.recipient, "sent": d.sent, "error": d.error} for d in deliveries
+    ]
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    return _invite_out(invite)
+
+
+@app.get("/assessments/{assessment_id}/invites", response_model=list[InviteOut])
+def list_assessment_invites(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> list[InviteOut]:
+    _owned_assessment(assessment_id, current, session)
+    invites = session.exec(select(Invite).where(Invite.assessment_id == assessment_id)).all()
+    return [_invite_out(inv) for inv in invites]
+
+
 @app.post("/questions/{question_id}/invites/{token}/revoke", response_model=InviteOut)
 def revoke_invite(
     question_id: str,

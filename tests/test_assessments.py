@@ -122,6 +122,23 @@ def test_assessment_owner_scoped(anon_client: TestClient) -> None:
     ).status_code == 403
 
 
+def test_assessment_invite_creation(client) -> None:
+    _make_questions(client, "q1", "q2")
+    client.post(
+        "/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1", "q2"]}
+    )
+    resp = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]})
+    assert resp.status_code == 201
+    inv = resp.json()
+    # An assessment invite carries assessment_id and no single question_id.
+    assert inv["assessment_id"] == "a1"
+    assert inv["question_id"] is None
+    assert inv["url"].endswith(f"/t/{inv['token']}")
+
+    listed = client.get("/assessments/a1/invites").json()
+    assert len(listed) == 1 and listed[0]["token"] == inv["token"]
+
+
 def test_delete_blocked_by_invite(client) -> None:
     _make_questions(client, "q1")
     client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1"]})

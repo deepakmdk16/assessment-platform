@@ -199,15 +199,23 @@ class CandidateAttempt(SQLModel, table=True):
 
 
 class Submission(SQLModel, table=True):
-    # One attempt per candidate per invite, enforced by the DATABASE. The
-    # pre-insert check in `candidate_submit` is a SELECT followed by an INSERT, so
-    # two concurrent submits both pass it and both write — the "one attempt" rule
-    # was advisory until this constraint existed. NULLs compare as distinct in SQL
-    # (both SQLite and Postgres), so the interviewer's direct POST /submissions
-    # path — which has no invite_id or candidate_email — stays unconstrained, which
-    # is the intent: it is not a candidate attempt.
+    # One attempt per candidate per invite PER QUESTION, enforced by the DATABASE.
+    # (T4: an assessment invite carries several questions, so the candidate gets one
+    # attempt at each — the constraint gained `question_id`.) The pre-insert check in
+    # `candidate_submit` is a SELECT followed by an INSERT, so two concurrent submits
+    # both pass it and both write — the "one attempt" rule was advisory until this
+    # constraint existed. NULLs compare as distinct in SQL (both SQLite and Postgres),
+    # so the interviewer's direct POST /submissions path — which has no invite_id or
+    # candidate_email — stays unconstrained, which is the intent: not a candidate
+    # attempt. For a legacy single-question invite the extra column is constant, so
+    # per-(invite,candidate,question) collapses back to the old per-(invite,candidate).
     __table_args__ = (
-        UniqueConstraint("invite_id", "candidate_email", name="uq_submission_invite_candidate"),
+        UniqueConstraint(
+            "invite_id",
+            "candidate_email",
+            "question_id",
+            name="uq_submission_invite_candidate_question",
+        ),
     )
 
     id: str = Field(primary_key=True)  # uuid hex, assigned in the route

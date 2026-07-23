@@ -17,9 +17,12 @@ this file stays scoped to near-term pending work.
   an invite points at EITHER a question or an assessment), migration `15556d728532`;
   (2) owner-scoped assessment CRUD API (`/assessments` create/list/get/update/
   archive/unarchive/delete; delete 409s if an invite points at it; questions
-  validated as owned + no dupes). **Remaining slices:** (3) rethread invite create
-  + candidate start/submit + submissions to be per-(invite,candidate,question), and
-  move the timer deadline to read `assessment.duration_minutes`; (4) interviewer
+  validated as owned + no dupes); (3a) Submission unique constraint now includes
+  `question_id` (migration `ad5e81ec2b2b`) + `POST/GET /assessments/{id}/invites`.
+  **Remaining:** (3b) rethread the candidate flow — `/start` returns the ordered
+  question list + shared deadline, `/run` `/run-tests` `/submit` take a
+  `question_id`, and the timer deadline reads `assessment.duration_minutes`; (4)
+  interviewer
   assessment-builder UI (mockup-gated); (5) candidate free-nav multi-question UI
   (mockup-gated). See PRODUCT_BACKLOG.md → T4 for the full spec.
 - **Set `TRUST_PROXY_HEADERS=true` when deploying behind a proxy.** The rate
