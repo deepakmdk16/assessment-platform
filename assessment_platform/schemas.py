@@ -107,6 +107,41 @@ class QuestionOut(BaseModel):
     test_cases: list[TestCaseOut]
 
 
+class AssessmentCreate(BaseModel):
+    """An interviewer's assessment: a named, ordered set of their own questions
+    with an optional total time budget (T4)."""
+
+    id: str
+    title: str
+    duration_minutes: int | None = Field(default=None, gt=0)  # None = untimed total
+    # Ordered question ids; order here becomes the candidate's question order.
+    question_ids: list[str] = Field(min_length=1)
+
+
+class AssessmentUpdate(BaseModel):
+    """Full replace of an assessment's mutable fields (PUT semantics)."""
+
+    title: str
+    duration_minutes: int | None = Field(default=None, gt=0)
+    question_ids: list[str] = Field(min_length=1)
+
+
+class AssessmentQuestionOut(BaseModel):
+    question_id: str
+    position: int
+    title: str  # denormalized for the builder/results UI — no second fetch needed
+
+
+class AssessmentOut(BaseModel):
+    id: str
+    title: str
+    duration_minutes: int | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    questions: list[AssessmentQuestionOut]
+
+
 class QuestionDraftIn(BaseModel):
     """An interviewer's brief for the AI question-authoring assistant."""
 

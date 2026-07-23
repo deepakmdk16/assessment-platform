@@ -40,6 +40,8 @@ from .auth import (
 from .config import PLATFORM_BASE_URL
 from .db import get_session, init_db
 from .models import (
+    Assessment,
+    AssessmentQuestion,
     AssessmentResult,
     CandidateAttempt,
     Interviewer,
@@ -51,6 +53,10 @@ from .models import (
 )
 from .ratelimit import client_ip, limiter
 from .schemas import (
+    AssessmentCreate,
+    AssessmentOut,
+    AssessmentQuestionOut,
+    AssessmentUpdate,
     CandidateQuestionView,
     CandidateRunIn,
     CandidateRunOut,
@@ -626,6 +632,192 @@ def delete_question(
             ),
         )
     session.delete(q)
+    session.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Assessments (T4: a named, ordered set of the interviewer's own questions)      #
+# --------------------------------------------------------------------------- #
+
+
+def _owned_assessment(assessment_id: str, current: Interviewer, session: Session) -> Assessment:
+    a = session.get(Assessment, assessment_id)
+    if a is None:
+        raise HTTPException(status_code=404, detail=f"no assessment with id {assessment_id!r}.")
+    if a.owner_id != current.id:
+        raise HTTPException(status_code=403, detail="not your assessment.")
+    return a
+
+
+def _assessment_out(a: Assessment) -> AssessmentOut:
+    # `a.questions` is ordered by position (relationship order_by). Each carries
+    # the question title so the builder / results UI needs no second fetch.
+    return AssessmentOut(
+        id=a.id,
+        title=a.title,
+        duration_minutes=a.duration_minutes,
+        status=a.status,
+        created_at=a.created_at,
+        updated_at=a.updated_at,
+        questions=[
+            AssessmentQuestionOut(
+                question_id=aq.question_id,
+                position=aq.position,
+                title=aq.question.title if aq.question else aq.question_id,
+            )
+            for aq in a.questions
+        ],
+    )
+
+
+def _membership_rows(
+    question_ids: list[str], current: Interviewer, session: Session
+) -> list[AssessmentQuestion]:
+    """Validate an ordered question-id list and build the membership rows.
+
+    Every id must be one of the caller's questions (404/403 via _owned_question),
+    and a question may appear at most once (the join's unique constraint would
+    reject a repeat — reported here as a clean 400)."""
+    if len(set(question_ids)) != len(question_ids):
+        raise HTTPException(status_code=400, detail="a question may appear at most once.")
+    for qid in question_ids:
+        _owned_question(qid, current, session)  # 404/403
+    return [
+        AssessmentQuestion(question_id=qid, position=i) for i, qid in enumerate(question_ids)
+    ]
+
+
+@app.post("/assessments", response_model=AssessmentOut, status_code=201)
+def create_assessment(
+    body: AssessmentCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentOut:
+    if session.get(Assessment, body.id) is not None:
+        raise HTTPException(status_code=409, detail=f"assessment {body.id!r} already exists.")
+    a = Assessment(
+        id=body.id,
+        owner_id=_require_id(current.id),
+        title=body.title,
+        duration_minutes=body.duration_minutes,
+        questions=_membership_rows(body.question_ids, current, session),
+    )
+    session.add(a)
+    session.commit()
+    session.refresh(a)
+    return _assessment_out(a)
+
+
+@app.get("/assessments", response_model=Page[AssessmentOut])
+def list_assessments(
+    include_archived: bool = False,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> Page[AssessmentOut]:
+    where = [Assessment.owner_id == current.id]
+    if not include_archived:
+        where.append(Assessment.status == "active")
+    total = session.exec(select(func.count()).select_from(Assessment).where(*where)).one()
+    stmt = (
+        select(Assessment)
+        .where(*where)
+        .order_by(col(Assessment.created_at).desc(), col(Assessment.id))
+        .offset(offset)
+        .limit(limit)
+    )
+    items = [_assessment_out(a) for a in session.exec(stmt).all()]
+    return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@app.get("/assessments/{assessment_id}", response_model=AssessmentOut)
+def get_assessment(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentOut:
+    return _assessment_out(_owned_assessment(assessment_id, current, session))
+
+
+@app.put("/assessments/{assessment_id}", response_model=AssessmentOut)
+def update_assessment(
+    assessment_id: str,
+    body: AssessmentUpdate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentOut:
+    a = _owned_assessment(assessment_id, current, session)
+    a.title = body.title
+    a.duration_minutes = body.duration_minutes
+    a.updated_at = datetime.now(timezone.utc)
+    # Full replace of the membership set (PUT). Clear via the relationship and
+    # flush FIRST (delete-orphan removes the old rows), so a question kept across
+    # the update doesn't collide with its own old row on the
+    # (assessment_id, question_id) unique key during a single flush.
+    a.questions.clear()
+    session.flush()
+    a.questions.extend(_membership_rows(body.question_ids, current, session))
+    session.add(a)
+    session.commit()
+    session.refresh(a)
+    return _assessment_out(a)
+
+
+@app.post("/assessments/{assessment_id}/archive", response_model=AssessmentOut)
+def archive_assessment(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentOut:
+    """Retire an assessment: hide it by default while keeping its invites. Idempotent."""
+    a = _owned_assessment(assessment_id, current, session)
+    a.status = "archived"
+    a.updated_at = datetime.now(timezone.utc)
+    session.add(a)
+    session.commit()
+    session.refresh(a)
+    return _assessment_out(a)
+
+
+@app.post("/assessments/{assessment_id}/unarchive", response_model=AssessmentOut)
+def unarchive_assessment(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentOut:
+    """Restore an archived assessment. Idempotent."""
+    a = _owned_assessment(assessment_id, current, session)
+    a.status = "active"
+    a.updated_at = datetime.now(timezone.utc)
+    session.add(a)
+    session.commit()
+    session.refresh(a)
+    return _assessment_out(a)
+
+
+@app.delete("/assessments/{assessment_id}", status_code=204)
+def delete_assessment(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> None:
+    """Delete an assessment (and its membership rows). 409 if any invite points at
+    it — those invites are live links, so archive instead. The member questions
+    are shared and never touched."""
+    a = _owned_assessment(assessment_id, current, session)
+    invite_count = session.exec(
+        select(func.count()).select_from(Invite).where(Invite.assessment_id == assessment_id)
+    ).one()
+    if invite_count:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot delete assessment {assessment_id!r}: {invite_count} invite(s) point at "
+                "it. Archive it instead."
+            ),
+        )
+    session.delete(a)
     session.commit()
 
 
