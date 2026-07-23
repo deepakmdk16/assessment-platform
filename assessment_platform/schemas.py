@@ -241,7 +241,10 @@ class InviteDeliveryOut(BaseModel):
 class InviteOut(BaseModel):
     token: str
     url: str
-    question_id: str
+    # Exactly one is set: a legacy single-question invite has question_id; a T4
+    # assessment invite has assessment_id.
+    question_id: str | None = None
+    assessment_id: str | None = None
     recipients: list[str]
     expires_at: datetime | None
     status: str

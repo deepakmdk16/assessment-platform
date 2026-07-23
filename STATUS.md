@@ -10,6 +10,16 @@ this file stays scoped to near-term pending work.
 
 ## Open items
 
+- **T4 multi-question assessments — IN PROGRESS (slice 1 of 5 landed).** Approved
+  design: first-class `Assessment` (ordered questions, per-assessment **total**
+  timer), free candidate navigation. **Landed:** `Assessment` + `AssessmentQuestion`
+  models, `Invite.assessment_id` (question_id now nullable — an invite points at
+  EITHER a question or an assessment), migration `15556d728532`. **Remaining
+  slices:** (2) assessment CRUD API; (3) rethread invite create + candidate
+  start/submit + submissions to be per-(invite,candidate,question), and move the
+  timer deadline to read `assessment.duration_minutes`; (4) interviewer
+  assessment-builder UI (mockup-gated); (5) candidate free-nav multi-question UI
+  (mockup-gated). See PRODUCT_BACKLOG.md → T4 for the full spec.
 - **Set `TRUST_PROXY_HEADERS=true` when deploying behind a proxy.** The rate
   limiters key on the caller's address; behind a proxy that is the *proxy* for
   every request, collapsing every bucket into one shared counter (the first few

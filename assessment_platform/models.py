@@ -105,10 +105,62 @@ class QuestionTestCase(SQLModel, table=True):
     question: Question | None = Relationship(back_populates="test_cases")
 
 
+class Assessment(SQLModel, table=True):
+    """A named, ordered set of questions handed to a candidate as one sitting.
+
+    First-class so it can be reused across invites. Owns the **total** time budget
+    (the per-assessment timer, T4): `duration_minutes` is None = untimed, else the
+    whole sitting's budget, which the candidate spends across its questions.
+    """
+
+    id: str = Field(primary_key=True)  # short slug, like Question.id
+    owner_id: int = Field(foreign_key="interviewer.id", index=True)
+    title: str
+    duration_minutes: int | None = None  # None = untimed; per-assessment total
+    status: str = Field(default="active", index=True)
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
+
+    # The ordered questions (by AssessmentQuestion.position). Deleting an
+    # assessment drops its membership rows, never the shared questions themselves.
+    questions: list["AssessmentQuestion"] = Relationship(
+        back_populates="assessment",
+        sa_relationship_kwargs={
+            "cascade": "all, delete-orphan",
+            "order_by": "AssessmentQuestion.position",
+        },
+    )
+    invites: list["Invite"] = Relationship(back_populates="assessment")
+
+
+class AssessmentQuestion(SQLModel, table=True):
+    """Membership of a question in an assessment, with its display order. A
+    question may belong to many assessments (they are shared), so the FK to
+    `question` deliberately does not cascade."""
+
+    __table_args__ = (
+        UniqueConstraint("assessment_id", "question_id", name="uq_assessment_question"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    assessment_id: str = Field(foreign_key="assessment.id", index=True)
+    question_id: str = Field(foreign_key="question.id", index=True)
+    position: int = 0
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
+
+    assessment: Assessment | None = Relationship(back_populates="questions")
+    question: Question | None = Relationship()
+
+
 class Invite(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     token: str = Field(unique=True, index=True)  # url-safe random, shared with candidate
-    question_id: str = Field(foreign_key="question.id", index=True)
+    # An invite points at EITHER a single legacy question or (T4) an assessment.
+    # question_id is nullable now so an assessment-backed invite needs no question;
+    # exactly one of the two is set. Legacy single-question invites keep question_id.
+    question_id: str | None = Field(default=None, foreign_key="question.id", index=True)
+    assessment_id: str | None = Field(default=None, foreign_key="assessment.id", index=True)
     created_by: int = Field(foreign_key="interviewer.id", index=True)
     recipients: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     # Per-recipient send outcome captured at creation, so who-was-emailed is an
@@ -121,6 +173,7 @@ class Invite(SQLModel, table=True):
     updated_at: datetime = _updated_at()
 
     question: Question | None = Relationship(back_populates="invites")
+    assessment: Assessment | None = Relationship(back_populates="invites")
 
 
 class CandidateAttempt(SQLModel, table=True):

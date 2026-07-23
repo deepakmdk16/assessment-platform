@@ -226,6 +226,7 @@ def _invite_out(inv: Invite) -> InviteOut:
         token=inv.token,
         url=_invite_url(inv.token),
         question_id=inv.question_id,
+        assessment_id=inv.assessment_id,
         recipients=inv.recipients,
         expires_at=inv.expires_at,
         status=inv.status,
