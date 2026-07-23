@@ -10,9 +10,10 @@ this file stays scoped to near-term pending work.
 
 ## Open items
 
-- **T4 multi-question assessments — IN PROGRESS (slices 1–2 of 5 landed).** Approved
-  design: first-class `Assessment` (ordered questions, per-assessment **total**
-  timer), free candidate navigation. **Landed:** (1) `Assessment` +
+- **T4 multi-question assessments — IN PROGRESS (slices 1–3 + 5 of 5 landed; only
+  the interviewer builder UI remains).** Approved design: first-class `Assessment`
+  (ordered questions, per-assessment **total** timer), free candidate navigation.
+  **Landed:** (1) `Assessment` +
   `AssessmentQuestion` models, `Invite.assessment_id` (question_id now nullable —
   an invite points at EITHER a question or an assessment), migration `15556d728532`;
   (2) owner-scoped assessment CRUD API (`/assessments` create/list/get/update/
@@ -30,10 +31,14 @@ this file stays scoped to near-term pending work.
   one shared countdown that auto-submits every written-but-unsubmitted question at
   zero. CandidatePage delegates to it when an invite carries >1 question; the
   single-question flow is unchanged. Shared timer/console helpers extracted to
-  `candidateTimer.ts` / `ConsoleResult.tsx`. **Remaining (UI only):** (4)
-  interviewer
-  assessment-builder UI (mockup-gated); (5) candidate free-nav multi-question UI
-  (mockup-gated). See PRODUCT_BACKLOG.md → T4 for the full spec.
+  `candidateTimer.ts` / `ConsoleResult.tsx`. **Remaining — slice (4) only:** the
+  **interviewer assessment-builder UI**. Its mockup is approved, and a first draft
+  of the web pieces (web `types.ts`/`api.ts` for assessments + `AssessmentsListPage`,
+  `NewAssessmentPage`, `AssessmentDetailPage`) exists **unwired** in a local
+  `git stash` (`stash@{0}`); resuming is a wiring job: routes in `App.tsx`, an
+  "Assessments" sidebar link, the picker CSS (`.q-pick`/`.q-ord`/`.mini`/
+  `.picker-label`), then verify + a page test. See PRODUCT_BACKLOG.md → T4 for the
+  full spec.
 - **Set `TRUST_PROXY_HEADERS=true` when deploying behind a proxy.** The rate
   limiters key on the caller's address; behind a proxy that is the *proxy* for
   every request, collapsing every bucket into one shared counter (the first few
