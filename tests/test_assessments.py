@@ -5,10 +5,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from conftest import register_interviewer
+from conftest import async_return, register_interviewer
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+from assessment_platform import agent_client
 from assessment_platform import db as db_module
 from assessment_platform.models import Invite
 
@@ -137,6 +138,44 @@ def test_assessment_invite_creation(client) -> None:
 
     listed = client.get("/assessments/a1/invites").json()
     assert len(listed) == 1 and listed[0]["token"] == inv["token"]
+
+
+def _sub(tok: str, email: str, qid: str | None) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "candidate_name": "C", "candidate_email": email, "language": "python", "code": "print(1)",
+    }
+    if qid is not None:
+        body["question_id"] = qid
+    return body
+
+
+def test_candidate_multi_question_flow(client, monkeypatch) -> None:
+    _make_questions(client, "q1", "q2")
+    client.post(
+        "/assessments",
+        json={"id": "a1", "title": "A", "duration_minutes": 60, "question_ids": ["q1", "q2"]},
+    )
+    tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
+
+    # /start hands back BOTH questions (ordered), a shared deadline, and no key.
+    data = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io"}).json()
+    assert [q["id"] for q in data["questions"]] == ["q1", "q2"]
+    assert all(q["submitted"] is False for q in data["questions"])
+    assert data["deadline"] is not None
+    assert "test_cases" not in str(data["questions"])  # answer key never leaks
+
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
+    # Submit q1; re-entering shows it done and q2 still open (no all-or-nothing block).
+    assert client.post(f"/invite/{tok}/submit", json=_sub(tok, "cand@x.io", "q1")).status_code == 201
+    again = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io"}).json()
+    assert {q["id"]: q["submitted"] for q in again["questions"]} == {"q1": True, "q2": False}
+
+    # One attempt PER QUESTION: re-submitting q1 is 409, submitting q2 is fine.
+    assert client.post(f"/invite/{tok}/submit", json=_sub(tok, "cand@x.io", "q1")).status_code == 409
+    assert client.post(f"/invite/{tok}/submit", json=_sub(tok, "cand@x.io", "q2")).status_code == 201
+
+    # A multi-question invite requires naming the question.
+    assert client.post(f"/invite/{tok}/submit", json=_sub(tok, "cand@x.io", None)).status_code == 400
 
 
 def test_delete_blocked_by_invite(client) -> None:

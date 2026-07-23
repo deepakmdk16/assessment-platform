@@ -305,6 +305,16 @@ class CandidateQuestionView(BaseModel):
     time_limit_s: float
 
 
+class CandidateQuestionPublic(CandidateQuestionView):
+    """A candidate-facing question inside the multi-question flow (T4): the same
+    safe view plus the id the run/submit calls target, and whether this candidate
+    has already submitted it (so the UI can mark it done). Still never carries the
+    answer key."""
+
+    id: str
+    submitted: bool = False
+
+
 class InviteStatusOut(BaseModel):
     """The unauthenticated probe for `GET /invite/{token}`: says only whether the
     link is live. Deliberately carries no question data — the candidate must
@@ -319,11 +329,15 @@ class CandidateStartIn(BaseModel):
 
 
 class InvitePublicOut(BaseModel):
+    # `question` is the FIRST question, kept so the pre-T4 single-question UI keeps
+    # working; the multi-question UI reads the ordered `questions` list.
     question: CandidateQuestionView
+    questions: list[CandidateQuestionPublic] = Field(default_factory=list)
     languages: list[str]
-    # Server-authoritative moment the attempt must be submitted by (started_at +
-    # the question's duration). None when the question is untimed. The candidate
-    # UI counts down to this off the server clock, not the browser's.
+    # Server-authoritative moment the sitting must be submitted by (started_at +
+    # the assessment's total duration, or the single question's, for a legacy
+    # invite). None when untimed. The candidate UI counts down to this off the
+    # server clock, not the browser's.
     deadline: datetime | None = None
 
 
@@ -332,6 +346,9 @@ class CandidateSubmitIn(BaseModel):
     candidate_email: EmailStr
     language: str
     code: str = Field(min_length=1)
+    # Which question this submits. None (or omitted) targets the invite's single
+    # question; required for a multi-question assessment invite.
+    question_id: str | None = None
 
 
 class CandidateSubmitOut(BaseModel):
@@ -346,6 +363,9 @@ class CandidateRunIn(BaseModel):
     language: str
     code: str = Field(min_length=1)
     stdin: str = ""
+    # The question being worked on (None = the invite's single question); used only
+    # for the live/invited/not-already-submitted gate — run itself is generic.
+    question_id: str | None = None
 
 
 class CandidateRunOut(BaseModel):
@@ -363,6 +383,9 @@ class CandidateRunTestsIn(BaseModel):
     candidate_email: EmailStr
     language: str
     code: str = Field(min_length=1)
+    # Which question's tests to run. None = the invite's single question; required
+    # for a multi-question assessment invite.
+    question_id: str | None = None
 
 
 class CandidateTestOutcomeOut(BaseModel):

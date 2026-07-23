@@ -18,10 +18,14 @@ this file stays scoped to near-term pending work.
   (2) owner-scoped assessment CRUD API (`/assessments` create/list/get/update/
   archive/unarchive/delete; delete 409s if an invite points at it; questions
   validated as owned + no dupes); (3a) Submission unique constraint now includes
-  `question_id` (migration `ad5e81ec2b2b`) + `POST/GET /assessments/{id}/invites`.
-  **Remaining:** (3b) rethread the candidate flow — `/start` returns the ordered
-  question list + shared deadline, `/run` `/run-tests` `/submit` take a
-  `question_id`, and the timer deadline reads `assessment.duration_minutes`; (4)
+  `question_id` (migration `ad5e81ec2b2b`) + `POST/GET /assessments/{id}/invites`;
+  (3b) candidate flow rethreaded — `/start` returns the ordered `questions` (each
+  with a per-question `submitted` flag) + shared `deadline` (still exposes the
+  legacy `question` = first, so the pre-T4 UI keeps working); `/run` `/run-tests`
+  `/submit` take an optional `question_id` (None = the single question); one
+  attempt per (invite, candidate, question); timer reads the invite's total
+  duration (assessment or legacy question). **The whole T4 backend is done.**
+  **Remaining (UI only):** (4)
   interviewer
   assessment-builder UI (mockup-gated); (5) candidate free-nav multi-question UI
   (mockup-gated). See PRODUCT_BACKLOG.md → T4 for the full spec.

@@ -57,6 +57,7 @@ from .schemas import (
     AssessmentOut,
     AssessmentQuestionOut,
     AssessmentUpdate,
+    CandidateQuestionPublic,
     CandidateQuestionView,
     CandidateRunIn,
     CandidateRunOut,
@@ -982,11 +983,14 @@ def _check_invited(invite: Invite, email: str) -> None:
 _ALREADY_SUBMITTED_DETAIL = "your assessment has already been recorded for this email address."
 
 
-def _check_not_already_submitted(invite: Invite, email: str, session: Session) -> None:
-    """409 if `email` already submitted on this invite (one attempt per candidate).
+def _check_not_already_submitted(
+    invite: Invite, email: str, question_id: str, session: Session
+) -> None:
+    """409 if `email` already submitted THIS question on this invite (one attempt
+    per candidate per question — T4).
 
     The fast path only: it is a SELECT before an INSERT, so it cannot stop two
-    concurrent submits from both passing. The `uq_submission_invite_candidate`
+    concurrent submits from both passing. The uq_submission_invite_candidate_question
     constraint is what actually enforces the rule; this just turns the common,
     uncontended case into a clean 409 instead of a caught IntegrityError.
     """
@@ -994,10 +998,55 @@ def _check_not_already_submitted(invite: Invite, email: str, session: Session) -
         select(Submission).where(
             Submission.invite_id == invite.id,
             Submission.candidate_email == email,
+            Submission.question_id == question_id,
         )
     ).first()
     if already is not None:
         raise HTTPException(status_code=409, detail=_ALREADY_SUBMITTED_DETAIL)
+
+
+def _invite_questions(invite: Invite, session: Session) -> list[Question]:
+    """The ordered questions this invite presents: an assessment's questions (T4)
+    or a legacy invite's single question. 404 if the referenced thing is gone."""
+    if invite.assessment_id is not None:
+        a = session.get(Assessment, invite.assessment_id)
+        if a is None:
+            raise HTTPException(status_code=404, detail="this assessment no longer exists.")
+        qs = [aq.question for aq in a.questions if aq.question is not None]
+        if not qs:
+            raise HTTPException(status_code=404, detail="this assessment has no questions.")
+        return qs
+    q = session.get(Question, invite.question_id) if invite.question_id else None
+    if q is None:
+        raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
+    return [q]
+
+
+def _invite_duration(invite: Invite, session: Session) -> int | None:
+    """Total time budget for the sitting: the assessment's (T4) or, for a legacy
+    invite, the single question's. None = untimed."""
+    if invite.assessment_id is not None:
+        a = session.get(Assessment, invite.assessment_id)
+        return a.duration_minutes if a else None
+    q = session.get(Question, invite.question_id) if invite.question_id else None
+    return q.duration_minutes if q else None
+
+
+def _resolve_question(invite: Invite, question_id: str | None, session: Session) -> Question:
+    """The question a run/submit targets. `question_id` None targets the single
+    question of a legacy invite; for a multi-question assessment it is required and
+    must name one of its questions."""
+    questions = _invite_questions(invite, session)
+    if question_id is None:
+        if len(questions) == 1:
+            return questions[0]
+        raise HTTPException(
+            status_code=400, detail="question_id is required for a multi-question assessment."
+        )
+    for q in questions:
+        if q.id == question_id:
+            return q
+    raise HTTPException(status_code=404, detail="that question is not part of this invite.")
 
 
 def _deadline_for(started_at: datetime, duration_minutes: int | None) -> datetime | None:
@@ -1040,22 +1089,21 @@ def _get_or_start_attempt(invite: Invite, email: str, session: Session) -> Candi
     return attempt
 
 
-def _enforce_deadline(
-    invite: Invite, question: Question, email: str, session: Session
-) -> None:
-    """Reject a submit that arrives after a timed assessment's window has closed.
+def _enforce_deadline(invite: Invite, email: str, session: Session) -> None:
+    """Reject a submit that arrives after the sitting's window has closed.
 
     Server-authoritative: the deadline is started_at (stamped at /start) + the
-    question's duration, plus a grace window for the auto-submit round-trip. An
-    untimed question, or a submit with no attempt on record (the candidate never
-    opened it via /start), is left to pass — the latter is anchored now so at least
-    the clock exists.
+    invite's total duration (the assessment's, or a legacy question's), plus a
+    grace window for the auto-submit round-trip. An untimed sitting, or a submit
+    with no attempt on record (the candidate never opened it via /start), is left
+    to pass — the latter is anchored now so at least the clock exists.
     """
-    if question.duration_minutes is None:
+    duration = _invite_duration(invite, session)
+    if duration is None:
         return
     attempt = _get_or_start_attempt(invite, email, session)
-    deadline = _deadline_for(attempt.started_at, question.duration_minutes)
-    assert deadline is not None  # duration_minutes is not None here
+    deadline = _deadline_for(attempt.started_at, duration)
+    assert deadline is not None  # duration is not None here
     if datetime.now(timezone.utc) > deadline + timedelta(seconds=config.SUBMIT_GRACE_SECONDS):
         raise HTTPException(
             status_code=410, detail="time's up — the assessment window has closed."
@@ -1065,20 +1113,46 @@ def _enforce_deadline(
 def _candidate_question_view(
     invite: Invite, session: Session, attempt: CandidateAttempt | None = None
 ) -> InvitePublicOut:
-    q = session.get(Question, invite.question_id)
-    if q is None:  # question deleted after the invite was issued
-        raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
     # Candidate-facing view only — never expose test_cases or expected outputs.
-    deadline = _deadline_for(attempt.started_at, q.duration_minutes) if attempt else None
-    return InvitePublicOut(
-        question=CandidateQuestionView(
+    questions = _invite_questions(invite, session)
+    deadline = _deadline_for(attempt.started_at, _invite_duration(invite, session)) if attempt else None
+    # Which of these questions this candidate has already submitted, so the UI can
+    # mark them done and lock their editors.
+    submitted_ids: set[str] = set()
+    if attempt is not None:
+        submitted_ids = set(
+            session.exec(
+                select(Submission.question_id).where(
+                    Submission.invite_id == invite.id,
+                    Submission.candidate_email == attempt.candidate_email,
+                )
+            ).all()
+        )
+    public = [
+        CandidateQuestionPublic(
+            id=q.id,
             title=q.title,
             prompt=q.prompt,
             constraints=q.constraints,
             example_input=q.example_input,
             example_output=q.example_output,
             time_limit_s=q.time_limit_s,
+            submitted=q.id in submitted_ids,
+        )
+        for q in questions
+    ]
+    first = questions[0]
+    return InvitePublicOut(
+        # Legacy singular view = the first question (keeps the pre-T4 UI working).
+        question=CandidateQuestionView(
+            title=first.title,
+            prompt=first.prompt,
+            constraints=first.constraints,
+            example_input=first.example_input,
+            example_output=first.example_output,
+            time_limit_s=first.time_limit_s,
         ),
+        questions=public,
         languages=config.SUPPORTED_LANGUAGES,
         deadline=deadline,
     )
@@ -1116,26 +1190,30 @@ def start_invite(
     invite = _load_invite_or_error(token, session)
     email = _normalize_email(body.candidate_email)
     _check_invited(invite, email)
-    _check_not_already_submitted(invite, email, session)
+    # A legacy single-question invite is one attempt: block re-entry once submitted.
+    # A multi-question assessment invite lets the candidate return to finish other
+    # questions — the view carries per-question submitted status instead.
+    if invite.assessment_id is None and invite.question_id is not None:
+        _check_not_already_submitted(invite, email, invite.question_id, session)
     # Stamp (or re-read) the clock start for this candidate, so the returned
     # deadline is stable across reloads and device switches.
     attempt = _get_or_start_attempt(invite, email, session)
     return _candidate_question_view(invite, session, attempt)
 
 
-def _load_invite_for_candidate(token: str, email: str, session: Session) -> tuple[Invite, Question]:
+def _load_invite_for_candidate(
+    token: str, email: str, question_id: str | None, session: Session
+) -> tuple[Invite, Question]:
     """Shared guard for the candidate's in-editor actions (run / run-tests).
 
     Same gates as /start: the link must be live, the caller must be an invited
-    recipient, and they must not have submitted already. Without this, anyone
-    holding the link could burn agent compute for free.
+    recipient, and they must not have submitted THIS question already. Without
+    this, anyone holding the link could burn agent compute for free.
     """
     invite = _load_invite_or_error(token, session)
     _check_invited(invite, email)
-    _check_not_already_submitted(invite, email, session)
-    question = session.get(Question, invite.question_id)
-    if question is None:
-        raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
+    question = _resolve_question(invite, question_id, session)
+    _check_not_already_submitted(invite, email, question.id, session)
     return invite, question
 
 
@@ -1167,7 +1245,7 @@ async def candidate_run(
     """
     limiter.check("run", client_ip(request), config.RUN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S)
     email = _normalize_email(body.candidate_email)
-    _load_invite_for_candidate(token, email, session)
+    _load_invite_for_candidate(token, email, body.question_id, session)
 
     result = await _agent_run_call(
         "run", lambda: agent_client.run_code(body.code, body.language, body.stdin)
@@ -1202,7 +1280,7 @@ async def candidate_run_tests(
     """
     limiter.check("run", client_ip(request), config.RUN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S)
     email = _normalize_email(body.candidate_email)
-    _, question = _load_invite_for_candidate(token, email, session)
+    _, question = _load_invite_for_candidate(token, email, body.question_id, session)
 
     result = await _agent_run_call(
         "run-tests", lambda: agent_client.run_tests(question, body.code, body.language)
@@ -1238,18 +1316,17 @@ async def candidate_submit(
         "submit", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
     invite = _load_invite_or_error(token, session)
-    question = session.get(Question, invite.question_id)
-    if question is None:
-        raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
-
-    # Re-check both gates here, not just in /start: the start screen is only UI,
-    # so a caller can POST straight to this route and skip it.
+    # Re-check the gates here, not just in /start: the start screen is only UI, so a
+    # caller can POST straight to this route and skip it.
     email = _normalize_email(body.candidate_email)
     _check_invited(invite, email)
-    _check_not_already_submitted(invite, email, session)
+    # Which question this submits (the single one for a legacy invite; a named one
+    # for an assessment). One attempt per (invite, candidate, question).
+    question = _resolve_question(invite, body.question_id, session)
+    _check_not_already_submitted(invite, email, question.id, session)
     # Server-enforced timer: refuse a submit that missed the window (past the
-    # deadline + grace). No-op for an untimed question.
-    _enforce_deadline(invite, question, email, session)
+    # deadline + grace). No-op for an untimed sitting.
+    _enforce_deadline(invite, email, session)
 
     sub = Submission(
         id=uuid.uuid4().hex,
