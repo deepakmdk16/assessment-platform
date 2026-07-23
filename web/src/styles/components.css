@@ -1732,11 +1732,63 @@ button.tab:hover {
     grid-template-columns: 1fr;
   }
 
-  .tc-row {
+  .tc-row,
+  .tc-io,
+  .grid2 {
     grid-template-columns: 1fr;
+  }
+
+  /* Title and its primary action stack instead of squeezing side by side. */
+  .page-head {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .content {
     padding: 1.5rem 1rem 3rem;
+  }
+}
+
+/* Phone: the candidate split IDE is the priority — candidates take assessments on
+   many devices (CX1). The two panes are already stacked to one column at 900px;
+   here the whole IDE scrolls (no fixed viewport height cramming both panes into
+   one screen), the header wraps so title + timer + theme stay visible, and the
+   action buttons wrap with a full-width Submit. */
+@media (max-width: 640px) {
+  .ide {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .ide-top {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.7rem;
+  }
+
+  .ide-top-right {
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .editor-wrapper {
+    flex: none;
+    height: 340px;
+  }
+
+  .console {
+    max-height: none;
+  }
+
+  .actionbar {
+    flex-wrap: wrap;
+  }
+
+  .actionbar .btn {
+    flex: 1;
+  }
+
+  .actionbar .btn.submit {
+    flex-basis: 100%;
   }
 }
