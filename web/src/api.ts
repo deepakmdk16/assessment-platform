@@ -179,17 +179,29 @@ export const api = {
 
   runCandidate: (
     token: string,
-    data: { candidate_email: string; language: string; code: string; stdin: string },
+    data: {
+      candidate_email: string
+      language: string
+      code: string
+      stdin: string
+      question_id?: string
+    },
   ) => request<RunResponse>(`/invite/${token}/run`, { method: 'POST', body: data }),
 
   runCandidateTests: (
     token: string,
-    data: { candidate_email: string; language: string; code: string },
+    data: { candidate_email: string; language: string; code: string; question_id?: string },
   ) => request<RunTestsResponse>(`/invite/${token}/run-tests`, { method: 'POST', body: data }),
 
   submitCandidate: (
     token: string,
-    data: { candidate_name: string; candidate_email: string; language: string; code: string },
+    data: {
+      candidate_name: string
+      candidate_email: string
+      language: string
+      code: string
+      question_id?: string
+    },
   ) => request<SubmitResponse>(`/invite/${token}/submit`, { method: 'POST', body: data }),
 }
 

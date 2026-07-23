@@ -2,11 +2,13 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
-import { badgeClass } from '../badges'
 import { ThemeCycleButton } from '../components/ThemeToggle'
 import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
 import type { InviteStartResponse, Language, RunResponse, RunTestsResponse } from '../types'
+import { AssessmentFlow } from './AssessmentFlow'
+import { ConsoleResult } from './ConsoleResult'
+import { CRIT_MS, formatRemaining, WARN_MS } from './candidateTimer'
 
 type Stage =
   | 'loading'
@@ -27,20 +29,6 @@ interface Draft {
 }
 
 const DRAFT_PREFIX = 'assessment-draft:'
-
-// Countdown urgency thresholds (ms): amber under 5 min, red under 1 min.
-const WARN_MS = 5 * 60 * 1000
-const CRIT_MS = 60 * 1000
-
-/** Remaining time as m:ss (or h:mm:ss past an hour), floored at zero. */
-function formatRemaining(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const h = Math.floor(total / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const s = total % 60
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
-}
 
 function loadDraft(token: string): Draft | null {
   try {
@@ -327,6 +315,22 @@ export function CandidatePage() {
   }
 
   // stage === 'editor'
+  // A multi-question assessment invite (T4) uses the free-navigation flow; a
+  // single-question invite keeps the original single-question IDE below unchanged.
+  if (token && invite && invite.questions && invite.questions.length > 1) {
+    return (
+      <AssessmentFlow
+        token={token}
+        candidateName={candidateName}
+        candidateEmail={candidateEmail}
+        questions={invite.questions}
+        languages={invite.languages}
+        deadline={deadline}
+        onExpired={() => setStage('expired')}
+      />
+    )
+  }
+
   const q = invite?.question
   const hasExample = Boolean(q?.example_input || q?.example_output)
   return (
@@ -524,95 +528,6 @@ export function CandidatePage() {
       </div>
     </div>
   )
-}
-
-/** The console's Result tab: output from Run, or the pass/fail strip from
- *  Run-against-test-cases. The candidate sees counts and statuses only — never
- *  a case's input or expected output. */
-function ConsoleResult({
-  running,
-  error,
-  run,
-  tests,
-}: {
-  running: 'run' | 'tests' | null
-  error: string | null
-  run: RunResponse | null
-  tests: RunTestsResponse | null
-}) {
-  if (running) return <p className="muted">Running…</p>
-  if (error)
-    return (
-      <p role="alert" className="form-error">
-        {error}
-      </p>
-    )
-
-  if (run) {
-    if (run.compile_error)
-      return (
-        <>
-          <span className="io-label">Compile error</span>
-          <pre className="code">{run.compile_error}</pre>
-        </>
-      )
-    if (run.timed_out)
-      return (
-        <p className="form-warning">
-          Your program ran out of time before it finished. It may be stuck waiting for input, or
-          too slow.
-        </p>
-      )
-    return (
-      <>
-        <span className="io-label">Output</span>
-        <pre className="code">{run.stdout || '(no output)'}</pre>
-        {run.stderr && (
-          <>
-            <span className="io-label">Errors</span>
-            <pre className="code">{run.stderr}</pre>
-          </>
-        )}
-        <p className="cellsub">Finished in {run.duration_s}s</p>
-      </>
-    )
-  }
-
-  if (tests) {
-    if (tests.compile_error)
-      return (
-        <>
-          <span className="io-label">Compile error</span>
-          <pre className="code">{tests.compile_error}</pre>
-        </>
-      )
-    const allPassed = tests.passed === tests.total && tests.total > 0
-    return (
-      <>
-        <p className={allPassed ? 'run-summary good' : 'run-summary'}>
-          {tests.passed} of {tests.total} test cases passed
-        </p>
-        <ul className="test-strip">
-          {tests.test_cases.map((c) => (
-            <li key={c.index}>
-              <span className="test-strip-name">
-                Test {c.index}
-                {c.category === 'performance' && <span className="cellsub"> · performance</span>}
-              </span>
-              <span className={badgeClass(c.status)}>{c.status}</span>
-              <span className="cellsub">{c.duration_s}s</span>
-            </li>
-          ))}
-        </ul>
-        <p className="cellsub">
-          These are the same tests used for grading. The inputs aren’t shown — Submit when you’re
-          ready to record your attempt.
-        </p>
-      </>
-    )
-  }
-
-  return <p className="muted">Run your code to see output here.</p>
 }
 
 function CandidateNotice({ title, body }: { title: string; body: string }) {

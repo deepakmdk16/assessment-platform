@@ -115,6 +115,13 @@ export interface InviteQuestionPublic {
   time_limit_s: number
 }
 
+/** A question inside the multi-question assessment flow (T4): the safe view plus
+ *  the id run/submit target and whether this candidate has already submitted it. */
+export interface CandidateQuestionPublic extends InviteQuestionPublic {
+  id: string
+  submitted: boolean
+}
+
 /** `GET /invite/{token}` — a liveness probe only. The question deliberately isn't
  *  here: it's handed out by `POST /invite/{token}/start` once the candidate has
  *  identified as an invited recipient. */
@@ -124,10 +131,14 @@ export interface InviteStatusResponse {
 
 /** `POST /invite/{token}/start` — the question, released after the email check. */
 export interface InviteStartResponse {
+  /** The first question — kept so the pre-T4 single-question UI keeps working. */
   question: InviteQuestionPublic
+  /** The ordered question set (T4). Length 1 for a legacy invite; the
+   *  multi-question flow renders when there's more than one. */
+  questions?: CandidateQuestionPublic[]
   languages: Language[]
-  /** Server-authoritative submit deadline (ISO). null when the question is
-   *  untimed. The countdown runs to this, and the server enforces it on submit. */
+  /** Server-authoritative submit deadline (ISO). null when untimed. The countdown
+   *  runs to this, and the server enforces it on submit. */
   deadline?: string | null
 }
 

@@ -1196,6 +1196,72 @@ textarea {
   font-size: 0.85rem;
 }
 
+/* "N / M submitted" progress in the multi-question header. */
+.progress {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+}
+
+/* Multi-question switcher strip (T4): free navigation between an assessment's
+   questions; a green check marks submitted ones, the accent pill is current. */
+.q-strip {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  overflow-x: auto;
+}
+
+.q-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.q-tab .n {
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  background: var(--color-surface-3);
+  color: var(--color-muted);
+}
+
+.q-tab.on {
+  border-color: var(--color-accent);
+  color: var(--color-heading);
+  background: var(--color-accent-soft);
+}
+
+.q-tab.on .n {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.q-tab.done {
+  color: var(--color-good);
+}
+
+.q-tab.done .n {
+  background: var(--color-good);
+  color: #fff;
+}
+
 /* Square icon-only button (e.g. the candidate header's theme cycle). */
 .icon-btn {
   display: inline-flex;

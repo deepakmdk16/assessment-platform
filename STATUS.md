@@ -25,7 +25,12 @@ this file stays scoped to near-term pending work.
   `/submit` take an optional `question_id` (None = the single question); one
   attempt per (invite, candidate, question); timer reads the invite's total
   duration (assessment or legacy question). **The whole T4 backend is done.**
-  **Remaining (UI only):** (4)
+  (5) candidate **free-navigation multi-question UI** built (`AssessmentFlow`):
+  question switcher, per-question code/submit, per-question read-only after submit,
+  one shared countdown that auto-submits every written-but-unsubmitted question at
+  zero. CandidatePage delegates to it when an invite carries >1 question; the
+  single-question flow is unchanged. Shared timer/console helpers extracted to
+  `candidateTimer.ts` / `ConsoleResult.tsx`. **Remaining (UI only):** (4)
   interviewer
   assessment-builder UI (mockup-gated); (5) candidate free-nav multi-question UI
   (mockup-gated). See PRODUCT_BACKLOG.md → T4 for the full spec.

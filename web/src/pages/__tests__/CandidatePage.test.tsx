@@ -55,6 +55,22 @@ const startResponse: InviteStartResponse = {
   languages: ['python', 'javascript'],
 }
 
+const multiStartResponse: InviteStartResponse = {
+  question: startResponse.question,
+  questions: [
+    {
+      id: 'q1', title: 'Two Sum', prompt: 'Find two numbers that add up to target.',
+      constraints: '', example_input: '', example_output: '', time_limit_s: 2, submitted: false,
+    },
+    {
+      id: 'q2', title: 'Merge Intervals', prompt: 'Merge overlapping intervals.',
+      constraints: '', example_input: '', example_output: '', time_limit_s: 2, submitted: false,
+    },
+  ],
+  languages: ['python', 'javascript'],
+  deadline: null,
+}
+
 function renderCandidatePage() {
   return render(
     <ThemeProvider>
@@ -111,6 +127,39 @@ describe('CandidatePage', () => {
     })
 
     expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
+  })
+
+  it('multi-question assessment: shows the switcher, submits per question, and navigates', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(multiStartResponse)
+    vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    // Both questions appear as tabs; the first one's prompt is shown.
+    expect(await screen.findByRole('tab', { name: /Two Sum/i })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Merge Intervals/i })).toBeInTheDocument()
+    expect(screen.getByText(/Find two numbers/i)).toBeInTheDocument()
+
+    // Submit the current question — the call carries its question_id.
+    await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
+    await user.click(screen.getByRole('button', { name: /submit this question/i }))
+    await waitFor(() => {
+      expect(api.submitCandidate).toHaveBeenCalledWith(
+        'tok123',
+        expect.objectContaining({ question_id: 'q1', code: 'print(1)' }),
+      )
+    })
+
+    // Free navigation: clicking the second tab shows its prompt.
+    await user.click(screen.getByRole('tab', { name: /Merge Intervals/i }))
+    expect(screen.getByText(/Merge overlapping intervals/i)).toBeInTheDocument()
   })
 
   it('does not reveal the question until the gate is passed', async () => {
