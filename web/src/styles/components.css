@@ -1277,6 +1277,56 @@ textarea {
   min-height: 0;
 }
 
+/* Resizable review layout (U2): react-resizable-panels sizes the flex children;
+   the handles supply both the gap and the drag affordance. Panes reuse .panel. */
+.ide-panels {
+  flex: 1;
+  min-height: 0;
+  padding: 0.7rem;
+}
+
+.rz {
+  position: relative;
+  flex: none;
+  background: var(--color-bg);
+}
+
+.rz-col {
+  width: 10px;
+  cursor: col-resize;
+}
+
+.rz-row {
+  height: 10px;
+  cursor: row-resize;
+}
+
+.rz::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--color-border-strong);
+  border-radius: 2px;
+}
+
+.rz-col::after {
+  width: 3px;
+  height: 34px;
+}
+
+.rz-row::after {
+  height: 3px;
+  width: 34px;
+}
+
+.rz:hover::after,
+.rz[data-resize-handle-state="hover"]::after,
+.rz[data-resize-handle-state="drag"]::after {
+  background: var(--color-accent);
+}
+
 .panel {
   display: flex;
   flex-direction: column;

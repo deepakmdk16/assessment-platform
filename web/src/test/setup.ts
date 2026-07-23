@@ -31,6 +31,15 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
     }) as unknown as MediaQueryList
 }
 
+// react-resizable-panels observes element size; jsdom has no ResizeObserver.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+}
+
 afterEach(() => {
   cleanup()
 })
