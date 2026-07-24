@@ -10,35 +10,6 @@ this file stays scoped to near-term pending work.
 
 ## Open items
 
-- **T4 multi-question assessments — IN PROGRESS (slices 1–3 + 5 of 5 landed; only
-  the interviewer builder UI remains).** Approved design: first-class `Assessment`
-  (ordered questions, per-assessment **total** timer), free candidate navigation.
-  **Landed:** (1) `Assessment` +
-  `AssessmentQuestion` models, `Invite.assessment_id` (question_id now nullable —
-  an invite points at EITHER a question or an assessment), migration `15556d728532`;
-  (2) owner-scoped assessment CRUD API (`/assessments` create/list/get/update/
-  archive/unarchive/delete; delete 409s if an invite points at it; questions
-  validated as owned + no dupes); (3a) Submission unique constraint now includes
-  `question_id` (migration `ad5e81ec2b2b`) + `POST/GET /assessments/{id}/invites`;
-  (3b) candidate flow rethreaded — `/start` returns the ordered `questions` (each
-  with a per-question `submitted` flag) + shared `deadline` (still exposes the
-  legacy `question` = first, so the pre-T4 UI keeps working); `/run` `/run-tests`
-  `/submit` take an optional `question_id` (None = the single question); one
-  attempt per (invite, candidate, question); timer reads the invite's total
-  duration (assessment or legacy question). **The whole T4 backend is done.**
-  (5) candidate **free-navigation multi-question UI** built (`AssessmentFlow`):
-  question switcher, per-question code/submit, per-question read-only after submit,
-  one shared countdown that auto-submits every written-but-unsubmitted question at
-  zero. CandidatePage delegates to it when an invite carries >1 question; the
-  single-question flow is unchanged. Shared timer/console helpers extracted to
-  `candidateTimer.ts` / `ConsoleResult.tsx`. **Remaining — slice (4) only:** the
-  **interviewer assessment-builder UI**. Its mockup is approved, and a first draft
-  of the web pieces (web `types.ts`/`api.ts` for assessments + `AssessmentsListPage`,
-  `NewAssessmentPage`, `AssessmentDetailPage`) exists **unwired** in a local
-  `git stash` (`stash@{0}`); resuming is a wiring job: routes in `App.tsx`, an
-  "Assessments" sidebar link, the picker CSS (`.q-pick`/`.q-ord`/`.mini`/
-  `.picker-label`), then verify + a page test. See PRODUCT_BACKLOG.md → T4 for the
-  full spec.
 - **Set `TRUST_PROXY_HEADERS=true` when deploying behind a proxy.** The rate
   limiters key on the caller's address; behind a proxy that is the *proxy* for
   every request, collapsing every bucket into one shared counter (the first few

@@ -99,11 +99,39 @@ export interface InviteDelivery {
 export interface Invite {
   token: string
   url: string
-  question_id: string
+  /** Exactly one is set: a single-question invite has question_id; a T4
+   *  assessment invite has assessment_id. */
+  question_id: string | null
+  assessment_id: string | null
   recipients: string[]
   expires_at: string | null
   status: InviteStatus
   deliveries: InviteDelivery[]
+}
+
+/** A question inside an assessment, with its order and denormalized title. */
+export interface AssessmentQuestionRef {
+  question_id: string
+  position: number
+  title: string
+}
+
+/** `GET/POST /assessments` — a named, ordered set of questions with a total timer. */
+export interface AssessmentOut {
+  id: string
+  title: string
+  duration_minutes: number | null
+  status: string
+  created_at: string
+  updated_at: string
+  questions: AssessmentQuestionRef[]
+}
+
+export interface AssessmentIn {
+  id: string
+  title: string
+  duration_minutes?: number | null
+  question_ids: string[]
 }
 
 export interface InviteQuestionPublic {

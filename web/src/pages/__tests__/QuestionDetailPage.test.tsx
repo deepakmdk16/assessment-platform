@@ -46,6 +46,7 @@ const activeInvite: Invite = {
   token: 'tok123',
   url: 'http://localhost:5173/t/tok123',
   question_id: 'two-sum',
+  assessment_id: null,
   recipients: ['candidate@example.com'],
   expires_at: null,
   status: 'active',
