@@ -844,3 +844,73 @@ def test_submissions_csv_export(client, monkeypatch) -> None:
     assert lines[0].startswith("submission_id,question_id,question_title,candidate")
     assert "Jane" in resp.text
     assert "Sum of N" in resp.text  # the question title is joined in, not just the id
+
+
+# --------------------------------------------------------------------------- #
+# AR3: PDF report proxy (GET /submissions/{id}/report)                          #
+# --------------------------------------------------------------------------- #
+
+
+def _grade_submission(client, monkeypatch, job_id: str = "job-rep") -> str:
+    """Create a running submission and grade it via a callback; return its id."""
+    sub_id = _create_running_submission(client, monkeypatch, job_id)
+    resp = client.post("/assessments/callback", json=_callback_payload(job_id))
+    assert resp.status_code == 200
+    return sub_id
+
+
+def test_submission_report_streams_pdf(client, monkeypatch) -> None:
+    sub_id = _grade_submission(client, monkeypatch)
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url, timeout, **kw):  # noqa: ANN001
+        captured["url"] = url
+        captured["body"] = json.loads(kw["content"])
+        return httpx.Response(
+            200,
+            content=b"%PDF-1.4 fake",
+            headers={"content-type": "application/pdf"},
+            request=httpx.Request("POST", url),
+        )
+
+    patch_async_post(monkeypatch, fake_post)
+
+    resp = client.get(f"/submissions/{sub_id}/report")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert "attachment" in resp.headers["content-disposition"]
+    assert resp.content == b"%PDF-1.4 fake"
+
+    # The proxy assembled the three pieces the agent needs to render.
+    assert captured["url"].endswith("/report")
+    body = captured["body"]
+    assert body["result"]["verdict"] == "PASS"  # the stored full_result
+    assert body["question"]["id"] == "sum_of_n"  # the full question, inline shape
+    assert body["question"]["test_cases"][0]["name"] == "t1"
+    assert body["code"] == "x"  # the candidate's submitted source
+    assert body["candidate"] == "Jane Doe"
+
+
+def test_submission_report_409_when_not_graded(client, monkeypatch) -> None:
+    # Running submission, no callback yet → no result → 409, agent never called.
+    sub_id = _create_running_submission(client, monkeypatch, "job-ungraded")
+    resp = client.get(f"/submissions/{sub_id}/report")
+    assert resp.status_code == 409
+
+
+def test_submission_report_404_unknown_submission(client) -> None:
+    assert client.get("/submissions/ghost/report").status_code == 404
+
+
+def test_submission_report_502_when_agent_errors(client, monkeypatch) -> None:
+    sub_id = _grade_submission(client, monkeypatch, "job-rep-502")
+
+    def fake_post(url, timeout, **kw):  # noqa: ANN001
+        return httpx.Response(500, text="boom", request=httpx.Request("POST", url))
+
+    patch_async_post(monkeypatch, fake_post)
+
+    resp = client.get(f"/submissions/{sub_id}/report")
+    assert resp.status_code == 502
+    assert "boom" not in resp.text  # agent internals not leaked

@@ -213,3 +213,32 @@ async def trigger_assessment(
     resp = await _signed_post(f"{base_url}/assessments", body, timeout=AGENT_TIMEOUT_S)
     resp.raise_for_status()
     return resp.json()["job_id"]
+
+
+async def request_report(
+    result: dict,
+    question: Question,
+    code: str,
+    candidate: str | None = None,
+    base_url: str = AGENT_BASE_URL,
+) -> bytes:
+    """Render a PDF report for a graded submission and return the raw bytes.
+
+    The platform stores only the serialized result (`AssessmentResult.full_result`),
+    which keeps the question's id/title and omits the candidate source — but the
+    report renders the full prompt/constraints/example AND the submitted code. So we
+    send all three: the stored `result`, the full `question` (same inline shape as
+    the grade path), and the candidate `code`. The agent assembles and renders;
+    nothing is duplicated into stored results. Synchronous (no LLM), like run/tests.
+    Raises on transport/HTTP error — the route maps that to a clean 502.
+    """
+    body: dict = {
+        "result": result,
+        "question": build_question_payload(question),
+        "code": code,
+    }
+    if candidate:
+        body["candidate"] = candidate
+    resp = await _signed_post(f"{base_url}/report", body, timeout=AGENT_RUN_TIMEOUT_S)
+    resp.raise_for_status()
+    return resp.content

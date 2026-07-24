@@ -1569,6 +1569,51 @@ def get_submission(
     return _submission_out(sub, result)
 
 
+@app.get("/submissions/{submission_id}/report")
+async def submission_report(
+    submission_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Download a PDF report for a graded submission.
+
+    Proxies to the agent's `/report`: the platform owns the pieces the serialized
+    result omits, so it loads the stored result, the candidate's submitted code,
+    and the full question, POSTs `{result, question, code, candidate}`, and streams
+    the rendered PDF back as an attachment. The agent renders; the platform only
+    assembles and serves — it never derives anything from the result here.
+    """
+    sub = _owned_submission(submission_id, current, session)  # 404/403 guard
+    result = session.exec(
+        select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
+    ).first()
+    if result is None:
+        raise HTTPException(status_code=409, detail="submission has not been graded yet.")
+    question = session.get(Question, sub.question_id)
+    if question is None:
+        raise HTTPException(status_code=404, detail=f"no question with id {sub.question_id!r}.")
+
+    try:
+        pdf = await agent_client.request_report(
+            result=result.full_result,
+            question=question,
+            code=sub.code,
+            candidate=sub.candidate,
+        )
+    except httpx.HTTPError as exc:
+        # Any agent failure (bad status or unreachable) is a clean 502 — don't leak
+        # the agent's internals to the interviewer.
+        logger.warning("report generation failed for submission %s: %s", sub.id, exc)
+        raise HTTPException(status_code=502, detail="could not generate the report.") from exc
+
+    filename = f"report-{sub.id}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Dashboard (interviewer: submissions for one of their questions)               #
 # --------------------------------------------------------------------------- #
