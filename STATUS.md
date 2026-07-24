@@ -24,14 +24,6 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   + `SubmissionsPage`, **and** ideally an **assessment-level attempt view** (one
   candidate's whole sitting — all N questions + an aggregate — instead of N
   scattered rows). **M.**
-- **A4 · "Email sent" is reported even when delivery failed.** `AssessmentDetailPage`
-  shows "Invite created for …" unconditionally and never inspects the returned
-  `deliveries[].sent`. Live deliveries are stored `sent:false` with a Gmail
-  `530 Authentication Required` (dev has no `SMTP_USERNAME`/`SMTP_PASSWORD`), yet
-  the UI reads as success. The invite *link* is valid — only the email failed. Fix:
-  surface per-recipient delivery status (sent/failed + reason) in the invite UI;
-  distinguish "invite created" from "email delivered". (Ops: set SMTP creds in any
-  env expected to actually mail.) **S.**
 - **A5 · No completion screen after time's up in the multi-question flow.** The
   single-question `CandidatePage` shows "Thanks, {name}! Your solution has been
   submitted and is being graded." (`CandidatePage.tsx:268`). `AssessmentFlow` has
