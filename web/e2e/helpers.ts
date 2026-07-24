@@ -34,7 +34,15 @@ export async function createQuestion(page: Page): Promise<{ id: string; title: s
   await page.getByLabel('Prompt').fill('Return indices of the two numbers that add up to target.')
   await page.getByRole('button', { name: 'Next' }).click() // → Grading
   await page.getByRole('button', { name: 'Next' }).click() // → Test cases
+  // The A1 case-floor is enforced at creation: a question needs ≥4 correctness
+  // cases AND ≥1 performance case or POST /questions 422s. Start from the one
+  // empty row, add four more, and mark the last one performance.
   await page.getByLabel('Test case 1 name').fill('basic')
+  for (let i = 2; i <= 5; i++) {
+    await page.getByRole('button', { name: 'Add test case' }).click()
+    await page.getByLabel(`Test case ${i} name`).fill(`case ${i}`)
+  }
+  await page.getByLabel('Test case 5 category').selectOption('performance')
   await page.getByRole('button', { name: 'Next' }).click() // → Example
   await page.getByRole('button', { name: 'Next' }).click() // → Review
   await page.getByRole('button', { name: 'Create question' }).click()

@@ -30,14 +30,13 @@ def _sample_question(qid: str = "sum_of_n") -> dict[str, Any]:
         "required_complexity": None,
         "example_input": "2\n3 4\n",
         "example_output": "7",
+        # 4 correctness + 1 performance: the authoring-time floor (A1) mirrors the
+        # agent's MIN_CORRECTNESS_CASES=4 + one performance case.
         "test_cases": [
-            {
-                "name": "t1",
-                "stdin": "2\n3 4\n",
-                "expected": "7",
-                "category": "correctness",
-                "weight": 1.0,
-            },
+            {"name": "t1", "stdin": "2\n3 4\n", "expected": "7", "category": "correctness", "weight": 1.0},
+            {"name": "t2", "stdin": "1\n5\n", "expected": "5", "category": "correctness", "weight": 1.0},
+            {"name": "t3", "stdin": "3\n1 2 3\n", "expected": "6", "category": "correctness", "weight": 1.0},
+            {"name": "t4", "stdin": "1\n0\n", "expected": "0", "category": "correctness", "weight": 1.0},
             {
                 "name": "big",
                 "stdin": "100000\n...",
@@ -86,7 +85,7 @@ def test_question_crud_roundtrip(client) -> None:
     assert resp.status_code == 201
     created = resp.json()
     assert created["id"] == "sum_of_n"
-    assert len(created["test_cases"]) == 2
+    assert len(created["test_cases"]) == 5
     assert created["test_cases"][0]["id"] is not None
 
     # Duplicate id -> 409
@@ -111,7 +110,11 @@ def test_question_crud_roundtrip(client) -> None:
         "example_input": None,
         "example_output": None,
         "test_cases": [
-            {"name": "only", "stdin": "1\n5\n", "expected": "5", "category": "correctness", "weight": 1.0}
+            {"name": "only", "stdin": "1\n5\n", "expected": "5", "category": "correctness", "weight": 1.0},
+            {"name": "c2", "stdin": "1\n1\n", "expected": "1", "category": "correctness", "weight": 1.0},
+            {"name": "c3", "stdin": "2\n2 2\n", "expected": "4", "category": "correctness", "weight": 1.0},
+            {"name": "c4", "stdin": "1\n9\n", "expected": "9", "category": "correctness", "weight": 1.0},
+            {"name": "big", "stdin": "100000\n...", "expected": "1", "category": "performance", "weight": 3.0},
         ],
     }
     resp = client.put("/questions/sum_of_n", json=upd)
@@ -119,7 +122,7 @@ def test_question_crud_roundtrip(client) -> None:
     body = resp.json()
     assert body["title"] == "Sum of N (v2)"
     assert body["required_complexity"] == "O(N)"
-    assert len(body["test_cases"]) == 1
+    assert len(body["test_cases"]) == 5
 
     # Delete
     assert client.delete("/questions/sum_of_n").status_code == 204

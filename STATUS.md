@@ -16,30 +16,26 @@ Effort key: **XS** (minutes) · **S** (self-contained) · **M** (multi-file) · 
 The T4 multi-question assessment epic shipped; driving it end-to-end surfaced these.
 Several are "the single-question flow had it, the assessment flow doesn't yet."
 
-- **A1 · Grading rejects pre-floor questions — P0 regression (cross-repo).** A
-  candidate submission for `grid_path_minimize` (and any question with **< 4
-  correctness cases**) fails grading entirely: `agent_job_id=None`, `status=error`,
-  and the candidate gets a 502. Root cause: the agent's F4 floor
-  (`MIN_CORRECTNESS_CASES = 4`) is enforced at *grade time* on every inline
-  question (`../AssesmentAgent/.../loader.py:78` via `api.py:392`), so a question
-  authored under the old floor now hard-fails every submission — the candidate is
-  punished for the interviewer's question shape. The platform stored a 3-case
-  question the agent now refuses; the two repos disagree on the floor.
-  **Platform half of the fix:** enforce the same question invariants (case floor +
-  ≥1 performance case) at *creation* (`POST /questions`, `PUT /questions/{id}` —
-  today there is **no** case-count check, `api.py:375`), so you can't save a
-  question that will later fail grading. **Agent half** (downgrade the floor to a
-  warning on the grade path) is tracked in the agent's STATUS. See also **A2**
-  (the general lesson). Immediate unblock for testing: add ≥1 correctness case to
-  `grid_path_minimize`. **M.**
-- **A2 · "Flag early / degrade gracefully" when tightening a shared invariant
-  (process gap).** A2 is the *pattern* behind A1 and worth institutionalizing: F4
-  made `validate_question` stricter (3→4 cases), which silently invalidated
-  already-stored data. When we tighten a shared invariant we should (1) **flag**
-  existing rows that would now fail (a check/migration that reports offending
-  questions at deploy time) and (2) **degrade** rather than hard-fail on paths
-  where the data owner can't act (a candidate can't fix the interviewer's
-  question). Capture this as a standing rule in CONVENTIONS.md when A1 is picked up. **S** (doc) + informs A1.
+- **A1 · Grading rejects pre-floor questions — P0 regression (cross-repo).**
+  **Platform half DONE** — `POST /questions` and `PUT /questions/{id}` now enforce
+  the case floor (≥ 4 correctness + ≥ 1 performance, mirroring the agent's
+  `MIN_CORRECTNESS_CASES`) via `_enforce_case_floor` → `question_rules.case_floor_violations`
+  and return 422 naming what's missing, so a question that would fail grading can't
+  be saved. Offline audit for pre-existing rows: `scripts/check_question_cases.py`
+  (`DATABASE_URL=... uv run python scripts/check_question_cases.py`). Local unblock:
+  `grid_path_minimize` in `dev.db` gained a 4th correctness case (note: `dev.db` is
+  gitignored, so this is a per-clone data fix, not a code seed — none exists).
+  The E2E path was updated to match: `createQuestion` (`web/e2e/helpers.ts`) now
+  drives the wizard to 4 correctness + 1 performance case, and the mock agent's
+  draft response (`web/e2e/mock-agent.mjs`) is floor-compliant, so authoring specs
+  no longer 422 on create.
+  **Still open — agent half:** downgrade the grade-time floor to a warning so
+  already-stored below-floor questions grade instead of 502-ing. Tracked in the
+  agent's STATUS.
+- **A2 · "Flag early / degrade gracefully" when tightening a shared invariant.**
+  **DONE (as a standing rule in CONVENTIONS.md → Data & schemas).** The "flag early"
+  half shipped with A1 (`scripts/check_question_cases.py`); the "degrade" half is
+  the agent's remaining A1 work.
 - **A3 · Submissions list can't tell an assessment sitting from a standalone
   attempt.** Every row shows only `question_id`; assessment-group and individual
   submissions look identical (`SubmissionSummaryOut`, `schemas.py:193`). The link

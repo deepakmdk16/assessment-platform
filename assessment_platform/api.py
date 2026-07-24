@@ -51,6 +51,7 @@ from .models import (
     Submission,
     as_utc,
 )
+from .question_rules import case_floor_violations
 from .ratelimit import client_ip, limiter
 from .schemas import (
     AssessmentCreate,
@@ -86,6 +87,7 @@ from .schemas import (
     SubmissionCreate,
     SubmissionOut,
     SubmissionSummaryOut,
+    TestCaseIn,
     TestCaseOut,
     TokenOut,
 )
@@ -372,6 +374,16 @@ def _owned_submission(submission_id: str, current: Interviewer, session: Session
     return sub
 
 
+def _enforce_case_floor(test_cases: list[TestCaseIn]) -> None:
+    """Reject a question that would later fail the agent's grade-time floor.
+
+    Enforced at authoring time (create/update) so we never store a question that
+    hard-fails every candidate submission — the candidate can't fix it (A1)."""
+    problems = case_floor_violations([tc.category for tc in test_cases])
+    if problems:
+        raise HTTPException(status_code=422, detail="question " + "; ".join(problems) + ".")
+
+
 @app.post("/questions", response_model=QuestionOut, status_code=201)
 def create_question(
     body: QuestionCreate,
@@ -380,6 +392,7 @@ def create_question(
 ) -> QuestionOut:
     if session.get(Question, body.id) is not None:
         raise HTTPException(status_code=409, detail=f"question {body.id!r} already exists.")
+    _enforce_case_floor(body.test_cases)
     q = Question(
         id=body.id,
         owner_id=_require_id(current.id),
@@ -538,6 +551,7 @@ def update_question(
     session: Session = Depends(get_session),
 ) -> QuestionOut:
     q = _owned_question(question_id, current, session)
+    _enforce_case_floor(body.test_cases)
     q.title = body.title
     q.prompt = body.prompt
     q.constraints = body.constraints

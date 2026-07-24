@@ -14,8 +14,13 @@ def _question() -> dict:
         "required_complexity": None,
         "example_input": None,
         "example_output": None,
+        # 4 correctness + 1 performance to satisfy the authoring-time floor (A1).
         "test_cases": [
-            {"name": "t", "stdin": "1\n", "expected": "1", "category": "correctness", "weight": 1.0}
+            {"name": "t1", "stdin": "1\n", "expected": "1", "category": "correctness", "weight": 1.0},
+            {"name": "t2", "stdin": "2\n", "expected": "2", "category": "correctness", "weight": 1.0},
+            {"name": "t3", "stdin": "3\n", "expected": "3", "category": "correctness", "weight": 1.0},
+            {"name": "t4", "stdin": "4\n", "expected": "4", "category": "correctness", "weight": 1.0},
+            {"name": "big", "stdin": "9\n", "expected": "9", "category": "performance", "weight": 3.0},
         ],
     }
 
