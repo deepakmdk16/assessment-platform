@@ -1,4 +1,6 @@
 import type {
+  AssessmentIn,
+  AssessmentOut,
   Invite,
   InviteStartResponse,
   InviteStatusResponse,
@@ -134,6 +136,43 @@ export const api = {
 
   deleteQuestion: (id: string) =>
     request<void>(`/questions/${id}`, { method: 'DELETE', auth: true }),
+
+  // --- Assessments (T4) ----------------------------------------------------
+  listAssessments: (includeArchived = false, offset = 0, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (includeArchived) params.set('include_archived', 'true')
+    return request<Page<AssessmentOut>>(`/assessments?${params}`, { auth: true })
+  },
+
+  createAssessment: (data: AssessmentIn) =>
+    request<AssessmentOut>('/assessments', { method: 'POST', body: data, auth: true }),
+
+  getAssessment: (id: string) => request<AssessmentOut>(`/assessments/${id}`, { auth: true }),
+
+  updateAssessment: (id: string, data: Omit<AssessmentIn, 'id'>) =>
+    request<AssessmentOut>(`/assessments/${id}`, { method: 'PUT', body: data, auth: true }),
+
+  archiveAssessment: (id: string) =>
+    request<AssessmentOut>(`/assessments/${id}/archive`, { method: 'POST', auth: true }),
+
+  unarchiveAssessment: (id: string) =>
+    request<AssessmentOut>(`/assessments/${id}/unarchive`, { method: 'POST', auth: true }),
+
+  deleteAssessment: (id: string) =>
+    request<void>(`/assessments/${id}`, { method: 'DELETE', auth: true }),
+
+  createAssessmentInvite: (
+    assessmentId: string,
+    data: { recipients?: string[]; expires_at?: string | null },
+  ) =>
+    request<Invite>(`/assessments/${assessmentId}/invites`, {
+      method: 'POST',
+      body: data,
+      auth: true,
+    }),
+
+  listAssessmentInvites: (assessmentId: string) =>
+    request<Invite[]>(`/assessments/${assessmentId}/invites`, { auth: true }),
 
   createInvite: (
     questionId: string,

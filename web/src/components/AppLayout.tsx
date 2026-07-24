@@ -7,6 +7,9 @@ function crumbFor(pathname: string): string {
   if (pathname === '/dashboard') return 'Questions'
   if (pathname === '/questions/new') return 'New question'
   if (pathname.startsWith('/questions/')) return 'Question'
+  if (pathname === '/assessments/new') return 'New assessment'
+  if (pathname === '/assessments') return 'Assessments'
+  if (pathname.startsWith('/assessments/')) return 'Assessment'
   return ''
 }
 

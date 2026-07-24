@@ -8,6 +8,9 @@ import { AddQuestionPage } from './pages/AddQuestionPage'
 import { QuestionDetailPage } from './pages/QuestionDetailPage'
 import { SubmissionsPage } from './pages/SubmissionsPage'
 import { SubmissionDetailPage } from './pages/SubmissionDetailPage'
+import { AssessmentsListPage } from './pages/AssessmentsListPage'
+import { NewAssessmentPage } from './pages/NewAssessmentPage'
+import { AssessmentDetailPage } from './pages/AssessmentDetailPage'
 import { CandidatePage } from './pages/CandidatePage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { CandidateErrorFallback, ErrorBoundary } from './components/ErrorBoundary'
@@ -53,6 +56,37 @@ export function App() {
           <ProtectedRoute>
             <AppLayout>
               <QuestionDetailPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/assessments"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <AssessmentsListPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/assessments/new"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <NewAssessmentPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/assessments/:id"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <AssessmentDetailPage />
             </AppLayout>
           </ProtectedRoute>
         }

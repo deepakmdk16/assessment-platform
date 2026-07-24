@@ -1908,3 +1908,70 @@ button.tab:hover {
     flex-basis: 100%;
   }
 }
+
+/* Assessment builder — question picker (NewAssessmentPage) */
+.picker-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  margin-bottom: 0.6rem;
+}
+
+.q-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  margin-bottom: 0.5rem;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.q-ord {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-ink);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.q-pick-t {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.q-pick-t .title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.mini:hover {
+  color: var(--color-ink-hover);
+  border-color: var(--color-border-strong);
+}
