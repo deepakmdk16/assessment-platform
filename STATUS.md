@@ -16,26 +16,6 @@ Effort key: **XS** (minutes) · **S** (self-contained) · **M** (multi-file) · 
 The T4 multi-question assessment epic shipped; driving it end-to-end surfaced these.
 Several are "the single-question flow had it, the assessment flow doesn't yet."
 
-- **A1 · Grading rejects pre-floor questions — P0 regression (cross-repo).**
-  **Platform half DONE** — `POST /questions` and `PUT /questions/{id}` now enforce
-  the case floor (≥ 4 correctness + ≥ 1 performance, mirroring the agent's
-  `MIN_CORRECTNESS_CASES`) via `_enforce_case_floor` → `question_rules.case_floor_violations`
-  and return 422 naming what's missing, so a question that would fail grading can't
-  be saved. Offline audit for pre-existing rows: `scripts/check_question_cases.py`
-  (`DATABASE_URL=... uv run python scripts/check_question_cases.py`). Local unblock:
-  `grid_path_minimize` in `dev.db` gained a 4th correctness case (note: `dev.db` is
-  gitignored, so this is a per-clone data fix, not a code seed — none exists).
-  The E2E path was updated to match: `createQuestion` (`web/e2e/helpers.ts`) now
-  drives the wizard to 4 correctness + 1 performance case, and the mock agent's
-  draft response (`web/e2e/mock-agent.mjs`) is floor-compliant, so authoring specs
-  no longer 422 on create.
-  **Still open — agent half:** downgrade the grade-time floor to a warning so
-  already-stored below-floor questions grade instead of 502-ing. Tracked in the
-  agent's STATUS.
-- **A2 · "Flag early / degrade gracefully" when tightening a shared invariant.**
-  **DONE (as a standing rule in CONVENTIONS.md → Data & schemas).** The "flag early"
-  half shipped with A1 (`scripts/check_question_cases.py`); the "degrade" half is
-  the agent's remaining A1 work.
 - **A3 · Submissions list can't tell an assessment sitting from a standalone
   attempt.** Every row shows only `question_id`; assessment-group and individual
   submissions look identical (`SubmissionSummaryOut`, `schemas.py:193`). The link
@@ -44,14 +24,6 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   + `SubmissionsPage`, **and** ideally an **assessment-level attempt view** (one
   candidate's whole sitting — all N questions + an aggregate — instead of N
   scattered rows). **M.**
-- **A4 · "Email sent" is reported even when delivery failed.** `AssessmentDetailPage`
-  shows "Invite created for …" unconditionally and never inspects the returned
-  `deliveries[].sent`. Live deliveries are stored `sent:false` with a Gmail
-  `530 Authentication Required` (dev has no `SMTP_USERNAME`/`SMTP_PASSWORD`), yet
-  the UI reads as success. The invite *link* is valid — only the email failed. Fix:
-  surface per-recipient delivery status (sent/failed + reason) in the invite UI;
-  distinguish "invite created" from "email delivered". (Ops: set SMTP creds in any
-  env expected to actually mail.) **S.**
 - **A5 · No completion screen after time's up in the multi-question flow.** The
   single-question `CandidatePage` shows "Thanks, {name}! Your solution has been
   submitted and is being graded." (`CandidatePage.tsx:268`). `AssessmentFlow` has
@@ -60,12 +32,6 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   submitted." Because A1's rejection makes the auto-submits fail, candidates land
   on a dead "0/N" screen with no acknowledgement. Needs an "assessment complete"
   screen + non-silent handling of auto-submit failures (retry/report). **M.**
-- **A6 · Drop the user-facing slug ID.** Both `AddQuestionPage` and
-  `NewAssessmentPage` make the user type an "Id (slug)" — but the id is an internal
-  PK / URL key, not a user concept (the DB already has auto-gen ids like
-  `q-1784204214377-831267`). Auto-generate `slugify(title) + short-random-suffix`
-  server-side and remove the field from both forms; keep accepting an explicit id
-  on the API for the agent/CLI authoring path. **S.**
 - **A7 · Invites should be assessment-level, not (also) question-level.** Now that
   assessments exist, offering "send invite" on a single question is duplicative and
   confusing. Decide the model: either deprecate per-question invites in the UI in
@@ -125,18 +91,6 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
 
 ## C. Backlog — table-stakes & hardening (open items moved from PRODUCT_BACKLOG)
 
-- **AR3 · PDF report download — platform half DONE; agent half tracked in the agent
-  STATUS (cross-repo).** The platform now proxies + serves the PDF:
-  `agent_client.request_report()` POSTs to the agent's `POST /report` (signed like
-  every other outbound call), `GET /submissions/{id}/report` streams the PDF back
-  (409 ungraded / 404 unknown / 502 on agent error), and SubmissionDetailPage has a
-  "Download PDF report" button. **Refined contract** (differs from the original
-  wording — the serialized result alone couldn't render a report): the platform
-  sends `{result, question, code, candidate?}` — the stored `full_result` plus the
-  FULL question (same inline shape as the grade path) plus the candidate's submitted
-  `code`, because `result_to_dict` keeps only the question's id/title and omits the
-  source. The agent half (`POST /report` + `result_from_dict`) landed on the agent's
-  `feat/report-endpoint` branch; merge/deploy the two together.
 - **CX2 · In-progress candidate code lives only in `localStorage`.** Autosave is
   debounced to `localStorage` (`CandidatePage.tsx:37,95`) — lost on cleared storage,
   incognito, or a device switch. Optional server-side draft persistence keyed by

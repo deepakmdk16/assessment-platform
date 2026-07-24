@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -384,17 +385,45 @@ def _enforce_case_floor(test_cases: list[TestCaseIn]) -> None:
         raise HTTPException(status_code=422, detail="question " + "; ".join(problems) + ".")
 
 
+def _slugify(text: str) -> str:
+    """A URL-safe lowercase slug from free text (empty input -> "item")."""
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug[:48] or "item"
+
+
+def _generate_id(title: str, exists: Callable[[str], bool]) -> str:
+    """slug(title) + a short random suffix, retried until unused.
+
+    The id is an internal PK / URL key, not a user concept — the UI no longer
+    asks for it (A6). The random suffix makes a collision vanishingly unlikely;
+    the loop makes it impossible.
+    """
+    base = _slugify(title)
+    for _ in range(6):
+        candidate = f"{base}-{secrets.token_hex(3)}"
+        if not exists(candidate):
+            return candidate
+    return f"{base}-{uuid.uuid4().hex[:8]}"
+
+
 @app.post("/questions", response_model=QuestionOut, status_code=201)
 def create_question(
     body: QuestionCreate,
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> QuestionOut:
-    if session.get(Question, body.id) is not None:
-        raise HTTPException(status_code=409, detail=f"question {body.id!r} already exists.")
+    # An explicit id (agent/CLI authoring path) is honored; the UI omits it and
+    # the server generates slug(title)+suffix.
+    explicit_id = (body.id or "").strip()
+    if explicit_id:
+        if session.get(Question, explicit_id) is not None:
+            raise HTTPException(status_code=409, detail=f"question {explicit_id!r} already exists.")
+        qid = explicit_id
+    else:
+        qid = _generate_id(body.title, lambda c: session.get(Question, c) is not None)
     _enforce_case_floor(body.test_cases)
     q = Question(
-        id=body.id,
+        id=qid,
         owner_id=_require_id(current.id),
         title=body.title,
         prompt=body.prompt,
@@ -708,10 +737,17 @@ def create_assessment(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> AssessmentOut:
-    if session.get(Assessment, body.id) is not None:
-        raise HTTPException(status_code=409, detail=f"assessment {body.id!r} already exists.")
+    explicit_id = (body.id or "").strip()
+    if explicit_id:
+        if session.get(Assessment, explicit_id) is not None:
+            raise HTTPException(
+                status_code=409, detail=f"assessment {explicit_id!r} already exists."
+            )
+        aid = explicit_id
+    else:
+        aid = _generate_id(body.title, lambda c: session.get(Assessment, c) is not None)
     a = Assessment(
-        id=body.id,
+        id=aid,
         owner_id=_require_id(current.id),
         title=body.title,
         duration_minutes=body.duration_minutes,

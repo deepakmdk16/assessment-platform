@@ -6,7 +6,6 @@ import type { QuestionOut } from '../types'
 
 export function NewAssessmentPage() {
   const navigate = useNavigate()
-  const [id, setId] = useState('')
   const [title, setTitle] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(60)
   const [indefinite, setIndefinite] = useState(false)
@@ -51,14 +50,12 @@ export function NewAssessmentPage() {
   }
 
   async function handleCreate() {
-    if (!id.trim()) return setError('Id is required.')
     if (!title.trim()) return setError('Title is required.')
     if (selectedIds.length === 0) return setError('Add at least one question.')
     setError(null)
     setSubmitting(true)
     try {
       const created = await api.createAssessment({
-        id,
         title,
         duration_minutes: indefinite ? null : durationMinutes,
         question_ids: selectedIds,
@@ -89,15 +86,9 @@ export function NewAssessmentPage() {
       <div className="card pad">
         <div className="card-title">Basics</div>
         <div className="stack">
-          <div className="grid2">
-            <div className="field">
-              <label htmlFor="id">Id (slug)</label>
-              <input id="id" className="mono" value={id} onChange={(e) => setId(e.target.value)} />
-            </div>
-            <div className="field">
-              <label htmlFor="title">Title</label>
-              <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
-            </div>
+          <div className="field">
+            <label htmlFor="title">Title</label>
+            <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
           <div className="field">
             <label htmlFor="duration">Time allowed (whole assessment)</label>
