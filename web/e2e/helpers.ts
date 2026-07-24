@@ -24,12 +24,10 @@ export async function registerInterviewer(page: Page): Promise<{ email: string; 
 /** Create a minimal valid question; lands on its detail page. Returns id + title. */
 export async function createQuestion(page: Page): Promise<{ id: string; title: string }> {
   const suffix = uniqueSuffix()
-  const id = `q-${suffix}`
   const title = `Two Sum ${suffix}`
 
   // The add-question page is a wizard: Basics → Grading → Test cases → Example → Review.
   await page.goto('/questions/new')
-  await page.getByLabel('Id (slug)').fill(id)
   await page.getByLabel('Title').fill(title)
   await page.getByLabel('Prompt').fill('Return indices of the two numbers that add up to target.')
   await page.getByRole('button', { name: 'Next' }).click() // → Grading
@@ -48,6 +46,8 @@ export async function createQuestion(page: Page): Promise<{ id: string; title: s
   await page.getByRole('button', { name: 'Create question' }).click()
 
   await expect(page.getByRole('heading', { name: title })).toBeVisible()
+  // The server generates the id (A6); read it back from the detail URL.
+  const id = new URL(page.url()).pathname.split('/').pop() as string
   return { id, title }
 }
 

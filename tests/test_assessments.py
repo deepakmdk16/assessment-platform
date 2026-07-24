@@ -3,6 +3,7 @@ with a per-assessment total duration). Owner-scoped; fully offline."""
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from conftest import async_return, register_interviewer
@@ -40,6 +41,18 @@ def _question(qid: str) -> dict[str, Any]:
 def _make_questions(client, *ids: str) -> None:
     for qid in ids:
         assert client.post("/questions", json=_question(qid)).status_code == 201
+
+
+def test_create_assessment_without_id_generates_slug(client) -> None:
+    # A6: the UI no longer sends an id — the server derives slug(title)+suffix.
+    _make_questions(client, "q1")
+    resp = client.post(
+        "/assessments", json={"title": "Backend Screen", "question_ids": ["q1"]}
+    )
+    assert resp.status_code == 201
+    aid = resp.json()["id"]
+    assert re.fullmatch(r"backend-screen-[0-9a-f]{6}", aid), aid
+    assert client.get(f"/assessments/{aid}").status_code == 200
 
 
 def test_assessment_crud_roundtrip(client) -> None:

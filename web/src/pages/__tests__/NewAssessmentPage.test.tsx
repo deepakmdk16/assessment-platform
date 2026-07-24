@@ -58,7 +58,6 @@ describe('NewAssessmentPage', () => {
     vi.mocked(api.createAssessment).mockResolvedValue({ id: 'week-1' } as AssessmentOut)
     await renderLoaded([q('two-sum', 'Two Sum'), q('islands', 'Count Islands')])
 
-    await user.type(screen.getByLabelText(/id \(slug\)/i), 'week-1')
     await user.type(screen.getByLabelText(/^title$/i), 'Week 1 Screen')
 
     // Add both, in library order.
@@ -70,7 +69,6 @@ describe('NewAssessmentPage', () => {
     await waitFor(() => expect(api.createAssessment).toHaveBeenCalledTimes(1))
     const payload = vi.mocked(api.createAssessment).mock.calls[0][0]
     expect(payload).toMatchObject({
-      id: 'week-1',
       title: 'Week 1 Screen',
       duration_minutes: 60,
       question_ids: ['two-sum', 'islands'],
@@ -87,7 +85,6 @@ describe('NewAssessmentPage', () => {
     vi.mocked(api.createAssessment).mockResolvedValue({ id: 'a' } as AssessmentOut)
     await renderLoaded([q('two-sum', 'Two Sum'), q('islands', 'Count Islands'), q('bfs', 'BFS')])
 
-    await user.type(screen.getByLabelText(/id \(slug\)/i), 'a')
     await user.type(screen.getByLabelText(/^title$/i), 'A')
 
     // Add all three (each Add click removes that item from the library column).
@@ -114,7 +111,6 @@ describe('NewAssessmentPage', () => {
     vi.mocked(api.createAssessment).mockResolvedValue({ id: 'a' } as AssessmentOut)
     await renderLoaded([q('two-sum', 'Two Sum')])
 
-    await user.type(screen.getByLabelText(/id \(slug\)/i), 'a')
     await user.type(screen.getByLabelText(/^title$/i), 'A')
     await user.click(addButtons()[0])
     await user.click(screen.getByLabelText(/indefinite/i))
@@ -129,7 +125,6 @@ describe('NewAssessmentPage', () => {
     const user = userEvent.setup()
     await renderLoaded([q('two-sum', 'Two Sum')])
 
-    await user.type(screen.getByLabelText(/id \(slug\)/i), 'a')
     await user.type(screen.getByLabelText(/^title$/i), 'A')
     await user.click(screen.getByRole('button', { name: /create assessment/i }))
 

@@ -4,6 +4,7 @@ LLM, or network is required."""
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock
@@ -127,6 +128,20 @@ def test_question_crud_roundtrip(client) -> None:
     # Delete
     assert client.delete("/questions/sum_of_n").status_code == 204
     assert client.get("/questions/sum_of_n").status_code == 404
+
+
+def test_create_question_without_id_generates_slug(client) -> None:
+    # A6: the UI no longer sends an id — the server derives slug(title)+suffix.
+    body = {k: v for k, v in _sample_question().items() if k != "id"}
+    resp = client.post("/questions", json=body)
+    assert resp.status_code == 201
+    qid = resp.json()["id"]
+    assert re.fullmatch(r"sum-of-n-[0-9a-f]{6}", qid), qid
+    # It's real and addressable; two id-less creates don't collide.
+    assert client.get(f"/questions/{qid}").status_code == 200
+    second = client.post("/questions", json=body)
+    assert second.status_code == 201
+    assert second.json()["id"] != qid
 
 
 def test_get_missing_question_404(client) -> None:

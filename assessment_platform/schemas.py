@@ -46,7 +46,9 @@ class TestCaseOut(TestCaseIn):
 
 
 class QuestionCreate(BaseModel):
-    id: str
+    # Optional: the UI omits it and the server generates slug(title)+suffix. The
+    # agent/CLI authoring path may still supply an explicit id, which is honored.
+    id: str | None = None
     title: str
     prompt: str
     constraints: str = ""
@@ -111,7 +113,8 @@ class AssessmentCreate(BaseModel):
     """An interviewer's assessment: a named, ordered set of their own questions
     with an optional total time budget (T4)."""
 
-    id: str
+    # Optional: the UI omits it and the server generates slug(title)+suffix.
+    id: str | None = None
     title: str
     duration_minutes: int | None = Field(default=None, gt=0)  # None = untimed total
     # Ordered question ids; order here becomes the candidate's question order.

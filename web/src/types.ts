@@ -37,7 +37,8 @@ export interface TestCaseOut extends TestCaseIn {
 }
 
 export interface QuestionIn {
-  id: string
+  // Optional: the UI omits it and the server generates slug(title)+suffix (A6).
+  id?: string
   title: string
   prompt: string
   constraints: string
@@ -54,6 +55,7 @@ export interface QuestionIn {
 }
 
 export interface QuestionOut extends Omit<QuestionIn, 'test_cases'> {
+  id: string
   status: string
   test_cases: TestCaseOut[]
   created_at: string
@@ -128,7 +130,8 @@ export interface AssessmentOut {
 }
 
 export interface AssessmentIn {
-  id: string
+  // Optional: the UI omits it and the server generates slug(title)+suffix (A6).
+  id?: string
   title: string
   duration_minutes?: number | null
   question_ids: string[]
