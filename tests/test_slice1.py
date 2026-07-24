@@ -27,8 +27,12 @@ def _sample_question(qid: str = "sum_of_n") -> dict[str, Any]:
         "required_complexity": None,
         "example_input": "2\n3 4\n",
         "example_output": "7",
+        # 4 correctness + 1 performance to satisfy the authoring-time floor (A1).
         "test_cases": [
             {"name": "t1", "stdin": "2\n3 4\n", "expected": "7", "category": "correctness", "weight": 1.0},
+            {"name": "t2", "stdin": "1\n5\n", "expected": "5", "category": "correctness", "weight": 1.0},
+            {"name": "t3", "stdin": "3\n1 2 3\n", "expected": "6", "category": "correctness", "weight": 1.0},
+            {"name": "t4", "stdin": "1\n0\n", "expected": "0", "category": "correctness", "weight": 1.0},
             {"name": "big", "stdin": "9\n...", "expected": "42", "category": "performance", "weight": 3.0},
         ],
     }

@@ -26,7 +26,14 @@ def _question(qid: str) -> dict[str, Any]:
         "constraints": "c",
         "time_limit_s": 2.0,
         "pass_threshold": 0.9,
-        "test_cases": [{"name": "t1", "stdin": "1\n", "expected": "1"}],
+        # 4 correctness + 1 performance to satisfy the authoring-time floor (A1).
+        "test_cases": [
+            {"name": "t1", "stdin": "1\n", "expected": "1", "category": "correctness"},
+            {"name": "t2", "stdin": "2\n", "expected": "2", "category": "correctness"},
+            {"name": "t3", "stdin": "3\n", "expected": "3", "category": "correctness"},
+            {"name": "t4", "stdin": "4\n", "expected": "4", "category": "correctness"},
+            {"name": "big", "stdin": "9\n", "expected": "9", "category": "performance"},
+        ],
     }
 
 

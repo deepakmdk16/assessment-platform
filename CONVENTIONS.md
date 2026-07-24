@@ -20,6 +20,14 @@ behavior; this covers what a reviewer can verify in a diff.
   `test_cases`/`expected`. Never widen it. The absence test must stay green.
 - **Timestamps:** every table carries `created_at`; mutable rows also carry
   `updated_at` (bump it on write). Use timezone-aware UTC (`_utcnow`).
+- **Flag early / degrade gracefully when tightening a shared invariant.** When you
+  make a rule the two repos share stricter (e.g. the agent's correctness-case
+  floor 3→4), already-stored data can silently become invalid. Two obligations:
+  (1) **flag** the rows that would now fail — a network-free deploy-time check that
+  lists offenders (see `scripts/check_question_cases.py`); and (2) **degrade**, not
+  hard-fail, on any path where the party hitting the error can't fix the data (a
+  candidate can't fix the interviewer's question — so the platform guards at
+  *authoring* time, and the agent downgrades the floor to a warning at grade time).
 
 ## Auth & security
 
