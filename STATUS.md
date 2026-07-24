@@ -76,10 +76,13 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   favour of assessment invites (a single question becomes a one-question
   assessment), or clearly separate "quick single-question screen" from "assessment".
   Today both paths exist (`/questions/{id}/invites` and `/assessments/{id}/invites`). **M.**
-- **A8 · Authoring is disconnected from assessments.** Creating a question offers no
-  way to add it to an assessment, and there's no "build an assessment from these
-  questions" entry point from the question list. Add an "add to assessment" affordance
-  (or multi-select → new assessment) so the two flows connect. **M.**
+- **A8 · Authoring ↔ assessment connective tissue.** The builder already adds
+  *existing* library questions; what's missing: (a) an "add to assessment" affordance
+  from the questions page / a "build assessment from these" multi-select, and
+  (b) — **lowest priority, explicitly deferred** — creating a *brand-new* question
+  from inside the builder. Keep question creation simple and owned by the questions
+  page; the builder assembles, it shouldn't grow a second authoring flow unless
+  there's real demand. **M.**
 - **A9 · Assessment editing has no guardrails.** `PUT /assessments/{id}` can reorder
   or swap questions after invites are sent / submissions exist, so two candidates in
   the "same" assessment could get different question sets. Lock the question set once
@@ -139,9 +142,34 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
 - **AR1 · No aggregate analytics endpoints.** No stats/metrics/summary route; the
   dashboard is a question list. No cross-candidate comparison, pass-rate, percentile,
   or time-to-solve. **L.**
-- **I1 · Proctoring signals** — tab-blur / paste / fullscreen-exit. None present. **M.**
-- **I2 · Plagiarism / similarity detection** across submissions. None present
-  (largely mooted by per-candidate variants — see D). **L.**
+- **I1 · Integrity / proctoring suite (staged).** Nothing present today. Stage it
+  cheap-high-signal → heavy, and lean on the structural moat before buying webcams:
+  - **Browser telemetry (do first, cheap):** tab/window blur + focus-loss timeline,
+    fullscreen enforce + exit detection, paste events into the editor (size + whether
+    it originated outside the page — flag a 200-line paste vs organic typing),
+    devtools/right-click signals. Decide flag-vs-block per signal.
+  - **Structural anti-cheat (our moat — prefer over surveillance):** per-candidate
+    unique question variants (see D) makes a leaked bank useless and reduces the need
+    for heavy proctoring at all.
+  - **Identity / webcam (heavy, sequence later behind demand):** start photo,
+    periodic snapshots, optional continuous video. Real cost isn't the capture — it's
+    consent/compliance (GDPR/BIPA), storage, and bias/false-positive risk. Table-stakes
+    for *some* enterprises; don't build before a deal needs it.
+  - **Integrity report:** per-attempt risk score + flagged-event timeline for the
+    interviewer, so signals are actionable rather than raw logs. **L (whole suite).**
+- **I2 · Plagiarism / similarity detection** across submissions (token-fingerprint /
+  MOSS-style; optionally match against public solutions + AI-generated-code detection).
+  None present; largely mooted by per-candidate variants (see D). **L.**
+- **Multi-question AI generation (cross-repo, enables per-candidate variants).**
+  Today the drafter is one question per call. Add orchestration that produces a **set
+  of K variants** for one brief + difficulty — do it by running the existing
+  single-question drafter K times (each still executed-oracle-validated), **not** by
+  asking one prompt for K questions (that dilutes each and worsens quality parity).
+  Pin `difficulty` + `target_complexity` across the set so they're calibrated to the
+  same band, and add a parity check (constraint sizes / `required_complexity` must
+  match across the set) to catch "one variant harder than another". This is the
+  natural feeder for per-candidate variants + assessment jumbling. Agent half (set
+  orchestration + parity guard) also noted in the agent STATUS. **M.**
 - **SEC1 · `REGISTRATION_CODE` unset by default → open interviewer sign-up.** Must be
   set in prod (`config.py:110`). Deploy-checklist item. **XS.**
 - **SEC4 · Rate limiter is per-process**, won't hold across workers/instances
