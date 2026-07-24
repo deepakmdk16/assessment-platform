@@ -25,6 +25,10 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   (`DATABASE_URL=... uv run python scripts/check_question_cases.py`). Local unblock:
   `grid_path_minimize` in `dev.db` gained a 4th correctness case (note: `dev.db` is
   gitignored, so this is a per-clone data fix, not a code seed — none exists).
+  The E2E path was updated to match: `createQuestion` (`web/e2e/helpers.ts`) now
+  drives the wizard to 4 correctness + 1 performance case, and the mock agent's
+  draft response (`web/e2e/mock-agent.mjs`) is floor-compliant, so authoring specs
+  no longer 422 on create.
   **Still open — agent half:** downgrade the grade-time floor to a warning so
   already-stored below-floor questions grade instead of 502-ing. Tracked in the
   agent's STATUS.

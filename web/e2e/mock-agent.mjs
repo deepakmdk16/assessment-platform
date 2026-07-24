@@ -112,8 +112,14 @@ const server = http.createServer(async (req, res) => {
       pass_threshold: 0.9,
       required_complexity: 'O(n)',
       example: { input: '4\n1 2 1 3\n', output: '2' },
+      // Floor-compliant (A1): the platform now enforces ≥4 correctness + ≥1
+      // performance case at save time, so a below-floor draft would 422 on Create.
       test_cases: [
         { name: 't1', stdin: '4\n1 2 1 3\n', expected: '2', category: 'correctness', weight: 1.0 },
+        { name: 't2', stdin: '1\n5\n', expected: '1', category: 'correctness', weight: 1.0 },
+        { name: 't3', stdin: '3\n3 2 1\n', expected: '1', category: 'correctness', weight: 1.0 },
+        { name: 't4', stdin: '5\n1 2 3 4 5\n', expected: '5', category: 'correctness', weight: 1.0 },
+        { name: 'large', stdin: '2\n1 2\n', expected: '2', category: 'performance', weight: 1.0 },
       ],
     }
     res.writeHead(200, { 'Content-Type': 'application/json' })
