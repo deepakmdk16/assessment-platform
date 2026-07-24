@@ -183,6 +183,27 @@ def test_invalid_difficulty_rejected(client) -> None:
     assert client.post("/questions", json=q).status_code == 422
 
 
+def test_reference_solution_persists_on_create_and_get(client) -> None:
+    # A drafted question carries its AI reference solution + language; both must
+    # survive the create and come back on the question (F1 — the answer key was
+    # dropped after draft time before this).
+    q = _sample_question()
+    q["reference_solution"] = "def solve():\n    return 42\n"
+    q["reference_language"] = "python"
+    created = client.post("/questions", json=q).json()
+    assert created["reference_solution"] == "def solve():\n    return 42\n"
+    assert created["reference_language"] == "python"
+    got = client.get("/questions/sum_of_n").json()
+    assert got["reference_solution"] == "def solve():\n    return 42\n"
+    assert got["reference_language"] == "python"
+
+
+def test_reference_solution_absent_for_hand_authored(client) -> None:
+    body = client.post("/questions", json=_sample_question()).json()
+    assert body["reference_solution"] is None
+    assert body["reference_language"] is None
+
+
 def test_update_sets_difficulty(client) -> None:
     client.post("/questions", json=_sample_question())
     upd = {k: v for k, v in _sample_question().items() if k != "id"}
@@ -794,6 +815,10 @@ def test_submissions_list_is_lean(client, monkeypatch) -> None:
     assert "full_result" not in row
     assert "result" not in row
     assert {"id", "question_id", "candidate", "language", "status", "verdict", "score_pct"} <= row.keys()
+    # candidate_email rides on the lean row (light field, used to disambiguate in
+    # the global Submissions list); the direct POST /submissions path has none.
+    assert "candidate_email" in row
+    assert row["candidate_email"] is None
 
     # The full payload is still available per-id.
     detail = client.get(f"/submissions/{row['id']}").json()
@@ -801,3 +826,21 @@ def test_submissions_list_is_lean(client, monkeypatch) -> None:
 
     # Pagination bounds apply here too.
     assert client.get("/submissions?limit=0").status_code == 422
+
+
+def test_submissions_csv_export(client, monkeypatch) -> None:
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
+    client.post(
+        "/submissions",
+        json={"question_id": "sum_of_n", "candidate": "Jane", "language": "python", "code": "print(1)"},
+    )
+
+    resp = client.get("/submissions/export")
+    assert resp.status_code == 200  # not swallowed by /submissions/{id}
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert "attachment" in resp.headers["content-disposition"]
+    lines = resp.text.strip().splitlines()
+    assert lines[0].startswith("submission_id,question_id,question_title,candidate")
+    assert "Jane" in resp.text
+    assert "Sum of N" in resp.text  # the question title is joined in, not just the id

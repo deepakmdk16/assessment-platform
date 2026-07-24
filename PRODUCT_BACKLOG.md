@@ -14,37 +14,33 @@ Effort key: **XS** (minutes) · **S** (self-contained) · **M** (multi-file) · 
 
 ## P0 — Bugs & broken flows
 
-| ID | Symptom | Root cause | Fix shape | Repo | Effort |
-|----|---------|-----------|-----------|------|--------|
-| B1 | Archiving your only question dead-ends: the list empties and the "Show archived" toggle disappears; the empty-state text points to a control that isn't on screen. | The toolbar with the checkbox renders only inside `{questions && questions.length > 0}` (`web/src/pages/DashboardPage.tsx:89`). | Hoist the toolbar out of the `length > 0` guard so it's always visible once loaded; branch empty-state copy on `showArchived`. | platform/web | S |
-| B2 | Every platform restart logs all interviewers out. | `JWT_SECRET` is an ephemeral per-process secret when unset (`config.py:86-92`) — by design for dev. | Set a stable `JWT_SECRET` in the gitignored `.env` (prod: secret manager). Optional: persist a dev secret to a gitignored file. | platform (config) | XS |
+_None open. B1 (dashboard archive dead-end) and B2 (stable `JWT_SECRET`) are done — see `git log`._
 
 ## P1 — Finish what's half-built ("data exists, UI doesn't surface it")
 
 | ID | Symptom | Root cause | Fix shape | Repo | Effort |
 |----|---------|-----------|-----------|------|--------|
-| F1 | The AI reference solution shows once at draft time, then vanishes — invisible on the question page and on any submission. | Agent returns it (`schemas.py:113`), but `Question` has **no such column** (`models.py:52-83`) and `authoring._to_loader_dict` drops it. | Add `reference_solution` + `reference_language` columns (Alembic migration); persist on save; add a collapsed "Show reference solution" panel to `QuestionDetailPage` + `SubmissionDetailPage`. | platform (+web) | M |
-| F2 | Question detail page shows threshold / time limit / complexity but not difficulty (the dashboard list already shows it). | `QuestionDetailPage.tsx:341-360` omits difficulty; `difficultyClass` badge already exists (`badges.ts:13`). | Add one `.kv` row reusing `difficultyClass`. | platform/web | XS |
-| F3 | Difficulty select sits *below* the "Draft with AI" button, so you draft before seeing it; no default. | Draft buttons at `AddQuestionPage.tsx:283,323`; select at `:362`. Already easy/medium/hard and already sent to the model. | Move the select above the draft action; default `medium`. | platform/web | XS |
-| F4 | A question can be saved with as few as 1 test case; "8 minimum" is only aspirational. | Prompt says ">=6 aim 8-10"; draft-eval floor is 4; the loader enforces only `min_length=1` (`AssesmentAgent/.../loader.py:52`). | Raise the loader/`validate_question` floor to a hard minimum of correctness cases (exempt the performance case); holds for AI **and** hand-authored paths. | agent | S |
+| F4 | A question can be saved with as few as 1 test case; "8 minimum" is only aspirational. | Prompt says ">=6 aim 8-10"; draft-eval floor is 4; the loader enforces only `min_length=1` (`AssesmentAgent/.../loader.py:52`). | Bigger than "S": `validate_question` is the shared invariant, so a floor-of-4 breaks ~32 tests and, more importantly, **changes AI-authoring semantics** (a draft must now yield ≥4 surviving correctness cases or hard-fail) — needs an `assess-draft-eval` re-baseline that SKIPs offline, so it must be done in a session with a real key. Built-ins already satisfy 4; the number itself is fine. | agent | M |
+
+_Done: F1 (reference solution persisted — `reference_solution`/`reference_language` columns + migration, shown collapsed on the question and submission pages), F2 (difficulty row on the question detail page), F3 (difficulty select moved above the "Draft with AI" action, defaults `medium`) — see `git log`._
 
 ## P2 — Table-stakes to compete with HackerRank
 
 | ID | Symptom | Root cause / note | Fix shape | Repo | Effort |
 |----|---------|-------------------|-----------|------|--------|
-| T1 | No candidate timer; an attempt never auto-ends. | `Submission` has only `created_at` (no `started_at`/deadline); `Invite.expires_at` is link expiry; `CandidatePage` has no timer; `time_limit_s` is per-test execution. | Duration on question/invite; **server-authoritative** `started_at` on first load; server-enforced deadline on submit; countdown UI. Client clock is untrusted. | platform (data+API+web) | L |
-| T2 | No global "Submissions" view; only reachable by drilling into a question. | **Correction after audit:** `GET /submissions` already exists, owner-scoped + paginated with verdict (`api.py:1077`). Only the UI is missing. | Add a list page + route + sidebar link (`Sidebar.tsx` has only Questions + New). **No new endpoint.** | platform/web | S–M |
 | T3 | Difficulty barely changes the generated question. | Prompt injects a bare `DIFFICULTY: hard` label (`authoring.py:507`); `question_draft.md` has no difficulty semantics. | Prompt section tying easy/medium/hard to concrete levers (constraint sizes → complexity, algorithmic depth, edge-case count). Re-baseline draft eval (checkpoint #4). | agent | M |
-| T4 | One question per assessment; no multi-question tests/sections. | `Invite.question_id` is singular. | Model an assessment as an ordered set of questions; thread through invite, candidate flow, results. | platform | L |
-| AR3 | The agent renders a PDF report but the platform never lets you download it. | `AssesmentAgent/.../report.py` exists; `SubmissionDetailPage` "report" tab is an on-screen card, not the PDF. | Add a platform endpoint that fetches/serves the agent PDF; a download button on the submission page. | platform (+web) | S–M |
+| T4 | One question per assessment; no multi-question tests/sections. | `Invite.question_id` is singular. | **Design approved — multi-slice epic (own session).** (1) First-class `Assessment` model (named, ordered set of questions via a join table) + a **per-assessment total** duration; invites point to an Assessment, not a question. (2) Relocate the T1 timer from the question to the assessment: `CandidateAttempt`/deadline key on the assessment, one shared countdown. (3) Submissions become unique per (invite, candidate, **question**); results aggregate per candidate across questions. (4) Interviewer **assessment-builder** UI (new, mockup-gated) + invite dialog references an Assessment. (5) Candidate **free-navigation** multi-question flow (new, mockup-gated): question list/tabs, jump in any order, submit each independently, shared countdown. Suggested slices: model+migration → assessment CRUD API → invite/candidate/submit rethread → interviewer builder UI → candidate multi-question UI. | platform (+agent none) | L |
+
+_Done: T1 (assessment timer — nullable `Question.duration_minutes` defaulting from difficulty in the wizard; server-authoritative `started_at` stamped once per candidate on `/start` via a `CandidateAttempt` row; `/start` returns a stable deadline; `/submit` enforces deadline + grace; candidate countdown with warn/critical states that auto-submits at zero), T2 (global Submissions page + route + sidebar link; rows link to the submission detail; question titles mapped from id; `candidate_email` added to the lean list row) — see `git log`._
+| AR3 | The agent renders a PDF report but the platform never lets you download it. | `AssesmentAgent/.../report.py` exists but is only reachable via CLI/email — there is **no HTTP endpoint**, and `build_report_pdf` takes the rich `AssessmentResult` dataclass while the platform only stores the serialized dict. | Bigger than first scoped: needs a new agent `POST /report` **and** a `result_from_dict` inverse of `result_to_dict` (nested types; parity-sensitive) before the platform can proxy + serve it with a download button. | agent + platform (+web) | M |
 
 ## P3 — Polish, UX parity & candidate experience
 
 | ID | Symptom | Root cause | Fix shape | Repo | Effort |
 |----|---------|-----------|-----------|------|--------|
-| U1 | No in-app light/dark toggle (mockups had one). | Dark exists only via `@media (prefers-color-scheme: dark)` (`tokens.css:70`); Monaco hardcoded `theme="vs-dark"` (`CandidatePage.tsx:347`, `SubmissionDetailPage.tsx:146`). | Toggle writing `data-theme` on `:root`, overriding the media query, persisted to `localStorage` (light/dark/follow-OS); Monaco reacts. | platform/web | M |
-| U2 | Submission panes (question/code/AI summary) are fixed proportions. | `.ide-split` is static CSS grid/flex; no resize lib in `package.json`. | Resizable panels (e.g. `react-resizable-panels`) with persisted sizes. | platform/web | M–L |
-| CX1 | The app is barely responsive — breaks on smaller/varied screens. | Only **2 `@media` rules** in the entire `components.css`. Candidates take assessments on many devices. | A responsive pass on the candidate flow first (the split IDE), then interviewer pages. | platform/web | M |
+| ~~U1~~ | ~~No in-app light/dark toggle.~~ **Done:** `ThemeProvider` writes `data-theme` on `<html>` (overriding the media query), persisted to `localStorage` as light/dark/**auto**; segmented control in the sidebar footer + a cycle button in the candidate header; Monaco switches via `monacoTheme(resolved)`. | | | platform/web | M |
+| ~~U2~~ | ~~Submission panes are fixed proportions.~~ **Done:** `react-resizable-panels` (v3) gives two draggable dividers — Problem↔Solution + Code↔Report — sizes persisted via `autoSaveId`, min sizes so no pane collapses; below 900px it renders the plain stacked layout (no handles). | | | platform/web | M–L |
+| ~~CX1~~ | ~~The app is barely responsive.~~ **Done (candidate-only scope):** phone breakpoint stacks the candidate IDE, wraps `.ide-top` + `.actionbar` (full-width Submit), and lets `.ide` scroll; `.page-head` + wizard grids stack at ≤900px. Interviewer stays desktop-first (no mobile nav). | | | platform/web | M |
 | CX2 | A candidate's in-progress code lives only in `localStorage`. | Autosave is debounced 500ms to `localStorage` (`CandidatePage.tsx:37,95`) — lost if storage is cleared, incognito, or a different device. | Optional server-side draft persistence keyed by invite token, so work survives a device/browser switch. | platform | M |
 
 ## P4 — Integrity & scale-hardening
@@ -73,9 +69,9 @@ Open hardening items (ops, not vulnerabilities):
 - **SEC1** — `REGISTRATION_CODE` is unset by default → open interviewer sign-up.
   Must be set in prod (`config.py:110`). *Deploy-checklist item, XS.*
 - **SEC2** — `JWT_SECRET` ephemeral when unset (= **B2**).
-- **SEC3** — invite links + recipient emails are logged at INFO when SMTP is
-  unconfigured, and SMTP failures log recipient lists (`email_client.py:59,72`).
-  Candidate PII in app logs; redact for prod log aggregation. *S.*
+- ~~**SEC3** — invite links + recipient emails logged at INFO.~~ **Done:** logs
+  now mask emails (`j***@e***`) and omit the link by default; a `LOG_PII` flag
+  (off by default) restores verbatim logging for local debugging.
 - **SEC4** — distributed rate limiting for horizontal scale (see P4).
 
 ---
@@ -85,7 +81,9 @@ Open hardening items (ops, not vulnerabilities):
 - **No aggregate endpoints** — no `@app.get` for stats/metrics/summary; the
   dashboard is a question list only. No cross-candidate comparison, pass-rate,
   percentile, or time-to-solve. → **AR1** (L).
-- **No export** (CSV/JSON) of submissions or results. → **AR2** (S–M).
+- ~~**No export** (CSV/JSON) of submissions or results. → **AR2**.~~ **Done:**
+  `GET /submissions/export` streams an owner-scoped CSV (summary columns + the
+  question title); "Export CSV" button on the Submissions page.
 - **PDF report exists but isn't surfaced** → **AR3** (in P2 above).
 
 ---
@@ -134,11 +132,10 @@ Moats 1–3 are architectural, not features a competitor bolts on.
 
 ## Suggested sequencing
 
-1. **Quick-win batch** (one branch): **B1, F2, F3** (web, reuse existing styled
-   components — no new visual design) + **B2** (env). All XS–S, high-visibility.
-2. **F1** (reference persistence) — its own small batch; needs a migration.
-3. **T2** (Submissions tab) — web-only now that the endpoint's confirmed present.
-4. **T1** (timer) — first heavy item; the loudest table-stakes gap.
+1. ~~**Quick-win batch** (one branch): **B1, F2, F3** + **B2** (env).~~ **Done.**
+2. ~~**F1** (reference persistence) — needs a migration.~~ **Done.**
+3. ~~**T2** (Submissions tab) — web-only now that the endpoint's confirmed present.~~ **Done.**
+4. ~~**T1** (timer) — first heavy item; the loudest table-stakes gap.~~ **Done.**
 
 **Process note:** `CLAUDE.md` requires **mockup-first sign-off for non-trivial
 visual changes** (copy/one-liners exempt). B1/F2/F3 reuse existing components;

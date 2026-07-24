@@ -12,6 +12,7 @@ import type {
   RunTestsResponse,
   SubmissionDetail,
   SubmissionRow,
+  SubmissionSummary,
   SubmitResponse,
   User,
 } from './types'
@@ -160,6 +161,11 @@ export const api = {
     })
   },
 
+  listAllSubmissions: (offset = 0, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    return request<Page<SubmissionSummary>>(`/submissions?${params}`, { auth: true })
+  },
+
   getSubmission: (submissionId: string) =>
     request<SubmissionDetail>(`/submissions/${submissionId}`, { auth: true }),
 
@@ -173,16 +179,47 @@ export const api = {
 
   runCandidate: (
     token: string,
-    data: { candidate_email: string; language: string; code: string; stdin: string },
+    data: {
+      candidate_email: string
+      language: string
+      code: string
+      stdin: string
+      question_id?: string
+    },
   ) => request<RunResponse>(`/invite/${token}/run`, { method: 'POST', body: data }),
 
   runCandidateTests: (
     token: string,
-    data: { candidate_email: string; language: string; code: string },
+    data: { candidate_email: string; language: string; code: string; question_id?: string },
   ) => request<RunTestsResponse>(`/invite/${token}/run-tests`, { method: 'POST', body: data }),
 
   submitCandidate: (
     token: string,
-    data: { candidate_name: string; candidate_email: string; language: string; code: string },
+    data: {
+      candidate_name: string
+      candidate_email: string
+      language: string
+      code: string
+      question_id?: string
+    },
   ) => request<SubmitResponse>(`/invite/${token}/submit`, { method: 'POST', body: data }),
+}
+
+/** Fetch the owner-scoped submissions CSV (authenticated) and trigger a browser
+ *  download. Kept out of `request` because it returns a file, not JSON. */
+export async function exportSubmissionsCsv(): Promise<void> {
+  const token = getToken()
+  const res = await fetch(`${BASE_URL}/submissions/export`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (res.status === 401) unauthorizedHandler?.()
+  if (!res.ok) throw new ApiError(res.status, res.statusText)
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'submissions.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }

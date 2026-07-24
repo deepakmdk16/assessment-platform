@@ -58,6 +58,12 @@ class QuestionCreate(BaseModel):
     example_input: str | None = None
     example_output: str | None = None
     difficulty: Difficulty | None = None
+    # The AI-drafted reference solution, carried through from a draft so it can be
+    # persisted. Null (and absent from the payload) for hand-authored questions.
+    reference_solution: str | None = None
+    reference_language: str | None = None
+    # Assessment time budget in minutes; None = untimed. Positive when set.
+    duration_minutes: int | None = Field(default=None, gt=0)
     test_cases: list[TestCaseIn] = Field(default_factory=list)
 
 
@@ -75,6 +81,9 @@ class QuestionUpdate(BaseModel):
     example_input: str | None = None
     example_output: str | None = None
     difficulty: Difficulty | None = None
+    reference_solution: str | None = None
+    reference_language: str | None = None
+    duration_minutes: int | None = Field(default=None, gt=0)
     test_cases: list[TestCaseIn] = Field(default_factory=list)
 
 
@@ -89,10 +98,48 @@ class QuestionOut(BaseModel):
     example_input: str | None
     example_output: str | None
     difficulty: str | None
+    reference_solution: str | None
+    reference_language: str | None
+    duration_minutes: int | None
     status: str
     created_at: datetime
     updated_at: datetime
     test_cases: list[TestCaseOut]
+
+
+class AssessmentCreate(BaseModel):
+    """An interviewer's assessment: a named, ordered set of their own questions
+    with an optional total time budget (T4)."""
+
+    id: str
+    title: str
+    duration_minutes: int | None = Field(default=None, gt=0)  # None = untimed total
+    # Ordered question ids; order here becomes the candidate's question order.
+    question_ids: list[str] = Field(min_length=1)
+
+
+class AssessmentUpdate(BaseModel):
+    """Full replace of an assessment's mutable fields (PUT semantics)."""
+
+    title: str
+    duration_minutes: int | None = Field(default=None, gt=0)
+    question_ids: list[str] = Field(min_length=1)
+
+
+class AssessmentQuestionOut(BaseModel):
+    question_id: str
+    position: int
+    title: str  # denormalized for the builder/results UI — no second fetch needed
+
+
+class AssessmentOut(BaseModel):
+    id: str
+    title: str
+    duration_minutes: int | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    questions: list[AssessmentQuestionOut]
 
 
 class QuestionDraftIn(BaseModel):
@@ -151,6 +198,7 @@ class SubmissionSummaryOut(BaseModel):
     id: str
     question_id: str
     candidate: str
+    candidate_email: str | None = None
     language: str
     status: str
     agent_job_id: str | None
@@ -228,7 +276,10 @@ class InviteDeliveryOut(BaseModel):
 class InviteOut(BaseModel):
     token: str
     url: str
-    question_id: str
+    # Exactly one is set: a legacy single-question invite has question_id; a T4
+    # assessment invite has assessment_id.
+    question_id: str | None = None
+    assessment_id: str | None = None
     recipients: list[str]
     expires_at: datetime | None
     status: str
@@ -254,6 +305,16 @@ class CandidateQuestionView(BaseModel):
     time_limit_s: float
 
 
+class CandidateQuestionPublic(CandidateQuestionView):
+    """A candidate-facing question inside the multi-question flow (T4): the same
+    safe view plus the id the run/submit calls target, and whether this candidate
+    has already submitted it (so the UI can mark it done). Still never carries the
+    answer key."""
+
+    id: str
+    submitted: bool = False
+
+
 class InviteStatusOut(BaseModel):
     """The unauthenticated probe for `GET /invite/{token}`: says only whether the
     link is live. Deliberately carries no question data — the candidate must
@@ -268,8 +329,16 @@ class CandidateStartIn(BaseModel):
 
 
 class InvitePublicOut(BaseModel):
+    # `question` is the FIRST question, kept so the pre-T4 single-question UI keeps
+    # working; the multi-question UI reads the ordered `questions` list.
     question: CandidateQuestionView
+    questions: list[CandidateQuestionPublic] = Field(default_factory=list)
     languages: list[str]
+    # Server-authoritative moment the sitting must be submitted by (started_at +
+    # the assessment's total duration, or the single question's, for a legacy
+    # invite). None when untimed. The candidate UI counts down to this off the
+    # server clock, not the browser's.
+    deadline: datetime | None = None
 
 
 class CandidateSubmitIn(BaseModel):
@@ -277,6 +346,9 @@ class CandidateSubmitIn(BaseModel):
     candidate_email: EmailStr
     language: str
     code: str = Field(min_length=1)
+    # Which question this submits. None (or omitted) targets the invite's single
+    # question; required for a multi-question assessment invite.
+    question_id: str | None = None
 
 
 class CandidateSubmitOut(BaseModel):
@@ -291,6 +363,9 @@ class CandidateRunIn(BaseModel):
     language: str
     code: str = Field(min_length=1)
     stdin: str = ""
+    # The question being worked on (None = the invite's single question); used only
+    # for the live/invited/not-already-submitted gate — run itself is generic.
+    question_id: str | None = None
 
 
 class CandidateRunOut(BaseModel):
@@ -308,6 +383,9 @@ class CandidateRunTestsIn(BaseModel):
     candidate_email: EmailStr
     language: str
     code: str = Field(min_length=1)
+    # Which question's tests to run. None = the invite's single question; required
+    # for a multi-question assessment invite.
+    question_id: str | None = None
 
 
 class CandidateTestOutcomeOut(BaseModel):

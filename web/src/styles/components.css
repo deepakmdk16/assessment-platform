@@ -106,8 +106,55 @@
   border-top: 1px solid var(--rail-border);
   padding-top: 0.8rem;
   display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.side-id {
+  display: flex;
   align-items: center;
   gap: 0.6rem;
+}
+
+/* Segmented Light / Dark / Auto control, styled for the dark rail. */
+.theme-seg {
+  display: flex;
+  gap: 2px;
+  background: var(--rail-2);
+  border: 1px solid var(--rail-border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.theme-seg button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.32rem 0.3rem;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--rail-muted);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.theme-seg button svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.theme-seg button:hover {
+  color: var(--rail-text);
+}
+
+.theme-seg button.on {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 .avatar {
@@ -394,6 +441,17 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+}
+
+/* A number/short input sitting inline with a unit label (e.g. "30 minutes"). */
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.inline-field input {
+  max-width: 120px;
 }
 
 .stack {
@@ -1138,12 +1196,142 @@ textarea {
   font-size: 0.85rem;
 }
 
+/* "N / M submitted" progress in the multi-question header. */
+.progress {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+}
+
+/* Multi-question switcher strip (T4): free navigation between an assessment's
+   questions; a green check marks submitted ones, the accent pill is current. */
+.q-strip {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  overflow-x: auto;
+}
+
+.q-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.q-tab .n {
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  background: var(--color-surface-3);
+  color: var(--color-muted);
+}
+
+.q-tab.on {
+  border-color: var(--color-accent);
+  color: var(--color-heading);
+  background: var(--color-accent-soft);
+}
+
+.q-tab.on .n {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.q-tab.done {
+  color: var(--color-good);
+}
+
+.q-tab.done .n {
+  background: var(--color-good);
+  color: #fff;
+}
+
+/* Square icon-only button (e.g. the candidate header's theme cycle). */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+.icon-btn svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
 .timer {
   font-family: var(--font-mono);
   color: var(--color-muted);
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+}
+
+.timer svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+/* Escalating urgency as the clock runs down (thresholds set in CandidatePage). */
+.timer.warn {
+  color: var(--color-warn);
+  font-weight: 600;
+}
+
+.timer.crit {
+  color: var(--color-bad);
+  font-weight: 700;
+}
+
+.timer.crit svg {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+/* Shown in place of the timer once time is up and the attempt is auto-submitting. */
+.timer-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--color-bad);
+}
+
+.timer-done svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timer.crit svg {
+    animation: none;
+  }
 }
 
 .ide-split {
@@ -1153,6 +1341,56 @@ textarea {
   gap: 0.7rem;
   padding: 0.7rem;
   min-height: 0;
+}
+
+/* Resizable review layout (U2): react-resizable-panels sizes the flex children;
+   the handles supply both the gap and the drag affordance. Panes reuse .panel. */
+.ide-panels {
+  flex: 1;
+  min-height: 0;
+  padding: 0.7rem;
+}
+
+.rz {
+  position: relative;
+  flex: none;
+  background: var(--color-bg);
+}
+
+.rz-col {
+  width: 10px;
+  cursor: col-resize;
+}
+
+.rz-row {
+  height: 10px;
+  cursor: row-resize;
+}
+
+.rz::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--color-border-strong);
+  border-radius: 2px;
+}
+
+.rz-col::after {
+  width: 3px;
+  height: 34px;
+}
+
+.rz-row::after {
+  height: 3px;
+  width: 34px;
+}
+
+.rz:hover::after,
+.rz[data-resize-handle-state="hover"]::after,
+.rz[data-resize-handle-state="drag"]::after {
+  background: var(--color-accent);
 }
 
 .panel {
@@ -1610,11 +1848,63 @@ button.tab:hover {
     grid-template-columns: 1fr;
   }
 
-  .tc-row {
+  .tc-row,
+  .tc-io,
+  .grid2 {
     grid-template-columns: 1fr;
+  }
+
+  /* Title and its primary action stack instead of squeezing side by side. */
+  .page-head {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .content {
     padding: 1.5rem 1rem 3rem;
+  }
+}
+
+/* Phone: the candidate split IDE is the priority — candidates take assessments on
+   many devices (CX1). The two panes are already stacked to one column at 900px;
+   here the whole IDE scrolls (no fixed viewport height cramming both panes into
+   one screen), the header wraps so title + timer + theme stay visible, and the
+   action buttons wrap with a full-width Submit. */
+@media (max-width: 640px) {
+  .ide {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .ide-top {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.7rem;
+  }
+
+  .ide-top-right {
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .editor-wrapper {
+    flex: none;
+    height: 340px;
+  }
+
+  .console {
+    max-height: none;
+  }
+
+  .actionbar {
+    flex-wrap: wrap;
+  }
+
+  .actionbar .btn {
+    flex: 1;
+  }
+
+  .actionbar .btn.submit {
+    flex-basis: 100%;
   }
 }

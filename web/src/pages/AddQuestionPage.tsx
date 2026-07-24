@@ -59,6 +59,10 @@ function describeDraftFailure(err: unknown): DraftFailure {
 const STEPS = ['Basics', 'Grading', 'Test cases', 'Example', 'Review'] as const
 const LAST_STEP = STEPS.length - 1
 
+// Default assessment length per difficulty (minutes). The interviewer can change
+// it or make the assessment indefinite; this only seeds the field.
+const DURATION_BY_DIFFICULTY: Record<string, number> = { easy: 20, medium: 30, hard: 60 }
+
 export function AddQuestionPage() {
   const navigate = useNavigate()
 
@@ -72,6 +76,11 @@ export function AddQuestionPage() {
   const [timeLimitS, setTimeLimitS] = useState(2)
   const [passThreshold, setPassThreshold] = useState(70)
   const [requiredComplexity, setRequiredComplexity] = useState('')
+  // Timer. Seeds from the difficulty default (medium => 30) until the interviewer
+  // edits it; `indefinite` makes the assessment untimed (duration_minutes = null).
+  const [durationMinutes, setDurationMinutes] = useState(DURATION_BY_DIFFICULTY.medium)
+  const [indefinite, setIndefinite] = useState(false)
+  const [durationTouched, setDurationTouched] = useState(false)
 
   const [testCases, setTestCases] = useState<TestCaseIn[]>([emptyTestCase()])
 
@@ -86,12 +95,13 @@ export function AddQuestionPage() {
   const [draftOpen, setDraftOpen] = useState(false)
   const [brief, setBrief] = useState('')
   const [draftLanguage, setDraftLanguage] = useState<Language>('python')
-  const [difficulty, setDifficulty] = useState('')
+  const [difficulty, setDifficulty] = useState('medium')
   const [targetComplexity, setTargetComplexity] = useState('')
   const [drafting, setDrafting] = useState(false)
   const [draftError, setDraftError] = useState<DraftFailure | null>(null)
   const [draftWarnings, setDraftWarnings] = useState<string[]>([])
   const [referenceSolution, setReferenceSolution] = useState<string | null>(null)
+  const [referenceLanguage, setReferenceLanguage] = useState<string | null>(null)
 
   async function handleDraft() {
     if (!brief.trim()) {
@@ -103,6 +113,7 @@ export function AddQuestionPage() {
     // warnings / reference solution on screen.
     setDraftWarnings([])
     setReferenceSolution(null)
+    setReferenceLanguage(null)
     setDrafting(true)
     try {
       const res = await api.draftQuestion({
@@ -125,6 +136,7 @@ export function AddQuestionPage() {
       setTestCases(q.test_cases.length > 0 ? q.test_cases : [emptyTestCase()])
       setDraftWarnings(res.warnings)
       setReferenceSolution(res.reference_solution)
+      setReferenceLanguage(res.reference_language)
     } catch (err) {
       setDraftError(describeDraftFailure(err))
     } finally {
@@ -202,6 +214,11 @@ export function AddQuestionPage() {
         example_input: exampleInput,
         example_output: exampleOutput,
         difficulty: difficulty.trim() || undefined,
+        // Persist the AI reference (if this question was drafted) so it survives
+        // past draft time; null for a hand-authored question.
+        reference_solution: referenceSolution,
+        reference_language: referenceLanguage,
+        duration_minutes: indefinite ? null : durationMinutes,
         test_cases: testCases,
       })
       // `justCreated` opens the invite dialog once, as a nudge — inviting is
@@ -312,6 +329,26 @@ export function AddQuestionPage() {
                   </select>
                 </div>
                 <div className="field">
+                  <label htmlFor="difficulty">Difficulty</label>
+                  <select
+                    id="difficulty"
+                    value={difficulty}
+                    onChange={(e) => {
+                      const d = e.target.value
+                      setDifficulty(d)
+                      // Re-seed the timer from the new difficulty unless the
+                      // interviewer has already set a duration by hand.
+                      if (!durationTouched && DURATION_BY_DIFFICULTY[d]) {
+                        setDurationMinutes(DURATION_BY_DIFFICULTY[d])
+                      }
+                    }}
+                  >
+                    <option value="easy">easy</option>
+                    <option value="medium">medium</option>
+                    <option value="hard">hard</option>
+                  </select>
+                </div>
+                <div className="field">
                   <label htmlFor="target_complexity">Target complexity (optional)</label>
                   <input
                     id="target_complexity"
@@ -335,7 +372,10 @@ export function AddQuestionPage() {
                 )}
                 {referenceSolution && (
                   <details className="draft-reference">
-                    <summary>Reference solution (context only — not saved)</summary>
+                    <summary>
+                      Reference solution{referenceLanguage ? ` (${referenceLanguage})` : ''} — saved
+                      with the question
+                    </summary>
                     <pre className="code">{referenceSolution}</pre>
                   </details>
                 )}
@@ -357,19 +397,6 @@ export function AddQuestionPage() {
                   <label htmlFor="title">Title</label>
                   <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
                 </div>
-              </div>
-              <div className="field">
-                <label htmlFor="difficulty">Difficulty (optional)</label>
-                <select
-                  id="difficulty"
-                  value={difficulty}
-                  onChange={(e) => setDifficulty(e.target.value)}
-                >
-                  <option value="">— Not set —</option>
-                  <option value="easy">easy</option>
-                  <option value="medium">medium</option>
-                  <option value="hard">hard</option>
-                </select>
               </div>
               <div className="field">
                 <label htmlFor="prompt">Prompt</label>
@@ -422,6 +449,35 @@ export function AddQuestionPage() {
                   value={requiredComplexity}
                   onChange={(e) => setRequiredComplexity(e.target.value)}
                 />
+              </div>
+              <div className="field">
+                <label htmlFor="duration_minutes">Time allowed</label>
+                <div className="inline-field">
+                  <input
+                    id="duration_minutes"
+                    type="number"
+                    min={1}
+                    value={durationMinutes}
+                    disabled={indefinite}
+                    onChange={(e) => {
+                      setDurationMinutes(Number(e.target.value))
+                      setDurationTouched(true)
+                    }}
+                  />
+                  <span className="muted">minutes</span>
+                </div>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={indefinite}
+                    onChange={(e) => setIndefinite(e.target.checked)}
+                  />
+                  Indefinite (no timer)
+                </label>
+                <p className="cellsub">
+                  The candidate&rsquo;s attempt auto-submits when this runs out. Defaults from
+                  difficulty; change it any time.
+                </p>
               </div>
             </div>
           </div>

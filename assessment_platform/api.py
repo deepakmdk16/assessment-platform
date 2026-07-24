@@ -13,6 +13,8 @@ platform<->agent link (see README).
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import secrets
 import uuid
@@ -22,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
@@ -38,7 +40,10 @@ from .auth import (
 from .config import PLATFORM_BASE_URL
 from .db import get_session, init_db
 from .models import (
+    Assessment,
+    AssessmentQuestion,
     AssessmentResult,
+    CandidateAttempt,
     Interviewer,
     Invite,
     Question,
@@ -48,6 +53,11 @@ from .models import (
 )
 from .ratelimit import client_ip, limiter
 from .schemas import (
+    AssessmentCreate,
+    AssessmentOut,
+    AssessmentQuestionOut,
+    AssessmentUpdate,
+    CandidateQuestionPublic,
     CandidateQuestionView,
     CandidateRunIn,
     CandidateRunOut,
@@ -141,6 +151,9 @@ def _question_out(q: Question) -> QuestionOut:
         example_input=q.example_input,
         example_output=q.example_output,
         difficulty=q.difficulty,
+        reference_solution=q.reference_solution,
+        reference_language=q.reference_language,
+        duration_minutes=q.duration_minutes,
         status=q.status,
         created_at=q.created_at,
         updated_at=q.updated_at,
@@ -188,6 +201,7 @@ def _submission_summary(
         id=sub.id,
         question_id=sub.question_id,
         candidate=sub.candidate,
+        candidate_email=sub.candidate_email,
         language=sub.language,
         status=sub.status,
         agent_job_id=sub.agent_job_id,
@@ -219,6 +233,7 @@ def _invite_out(inv: Invite) -> InviteOut:
         token=inv.token,
         url=_invite_url(inv.token),
         question_id=inv.question_id,
+        assessment_id=inv.assessment_id,
         recipients=inv.recipients,
         expires_at=inv.expires_at,
         status=inv.status,
@@ -377,6 +392,9 @@ def create_question(
         example_input=body.example_input,
         example_output=body.example_output,
         difficulty=body.difficulty,
+        reference_solution=body.reference_solution,
+        reference_language=body.reference_language,
+        duration_minutes=body.duration_minutes,
         test_cases=[
             QuestionTestCase(
                 name=tc.name,
@@ -529,6 +547,9 @@ def update_question(
     q.example_input = body.example_input
     q.example_output = body.example_output
     q.difficulty = body.difficulty
+    q.reference_solution = body.reference_solution
+    q.reference_language = body.reference_language
+    q.duration_minutes = body.duration_minutes
     q.updated_at = datetime.now(timezone.utc)
     # Replace the whole test-case set (PUT = full replace). cascade delete-orphan
     # cleans up the old rows.
@@ -616,6 +637,192 @@ def delete_question(
 
 
 # --------------------------------------------------------------------------- #
+# Assessments (T4: a named, ordered set of the interviewer's own questions)      #
+# --------------------------------------------------------------------------- #
+
+
+def _owned_assessment(assessment_id: str, current: Interviewer, session: Session) -> Assessment:
+    a = session.get(Assessment, assessment_id)
+    if a is None:
+        raise HTTPException(status_code=404, detail=f"no assessment with id {assessment_id!r}.")
+    if a.owner_id != current.id:
+        raise HTTPException(status_code=403, detail="not your assessment.")
+    return a
+
+
+def _assessment_out(a: Assessment) -> AssessmentOut:
+    # `a.questions` is ordered by position (relationship order_by). Each carries
+    # the question title so the builder / results UI needs no second fetch.
+    return AssessmentOut(
+        id=a.id,
+        title=a.title,
+        duration_minutes=a.duration_minutes,
+        status=a.status,
+        created_at=a.created_at,
+        updated_at=a.updated_at,
+        questions=[
+            AssessmentQuestionOut(
+                question_id=aq.question_id,
+                position=aq.position,
+                title=aq.question.title if aq.question else aq.question_id,
+            )
+            for aq in a.questions
+        ],
+    )
+
+
+def _membership_rows(
+    question_ids: list[str], current: Interviewer, session: Session
+) -> list[AssessmentQuestion]:
+    """Validate an ordered question-id list and build the membership rows.
+
+    Every id must be one of the caller's questions (404/403 via _owned_question),
+    and a question may appear at most once (the join's unique constraint would
+    reject a repeat — reported here as a clean 400)."""
+    if len(set(question_ids)) != len(question_ids):
+        raise HTTPException(status_code=400, detail="a question may appear at most once.")
+    for qid in question_ids:
+        _owned_question(qid, current, session)  # 404/403
+    return [
+        AssessmentQuestion(question_id=qid, position=i) for i, qid in enumerate(question_ids)
+    ]
+
+
+@app.post("/assessments", response_model=AssessmentOut, status_code=201)
+def create_assessment(
+    body: AssessmentCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentOut:
+    if session.get(Assessment, body.id) is not None:
+        raise HTTPException(status_code=409, detail=f"assessment {body.id!r} already exists.")
+    a = Assessment(
+        id=body.id,
+        owner_id=_require_id(current.id),
+        title=body.title,
+        duration_minutes=body.duration_minutes,
+        questions=_membership_rows(body.question_ids, current, session),
+    )
+    session.add(a)
+    session.commit()
+    session.refresh(a)
+    return _assessment_out(a)
+
+
+@app.get("/assessments", response_model=Page[AssessmentOut])
+def list_assessments(
+    include_archived: bool = False,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> Page[AssessmentOut]:
+    where = [Assessment.owner_id == current.id]
+    if not include_archived:
+        where.append(Assessment.status == "active")
+    total = session.exec(select(func.count()).select_from(Assessment).where(*where)).one()
+    stmt = (
+        select(Assessment)
+        .where(*where)
+        .order_by(col(Assessment.created_at).desc(), col(Assessment.id))
+        .offset(offset)
+        .limit(limit)
+    )
+    items = [_assessment_out(a) for a in session.exec(stmt).all()]
+    return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@app.get("/assessments/{assessment_id}", response_model=AssessmentOut)
+def get_assessment(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentOut:
+    return _assessment_out(_owned_assessment(assessment_id, current, session))
+
+
+@app.put("/assessments/{assessment_id}", response_model=AssessmentOut)
+def update_assessment(
+    assessment_id: str,
+    body: AssessmentUpdate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentOut:
+    a = _owned_assessment(assessment_id, current, session)
+    a.title = body.title
+    a.duration_minutes = body.duration_minutes
+    a.updated_at = datetime.now(timezone.utc)
+    # Full replace of the membership set (PUT). Clear via the relationship and
+    # flush FIRST (delete-orphan removes the old rows), so a question kept across
+    # the update doesn't collide with its own old row on the
+    # (assessment_id, question_id) unique key during a single flush.
+    a.questions.clear()
+    session.flush()
+    a.questions.extend(_membership_rows(body.question_ids, current, session))
+    session.add(a)
+    session.commit()
+    session.refresh(a)
+    return _assessment_out(a)
+
+
+@app.post("/assessments/{assessment_id}/archive", response_model=AssessmentOut)
+def archive_assessment(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentOut:
+    """Retire an assessment: hide it by default while keeping its invites. Idempotent."""
+    a = _owned_assessment(assessment_id, current, session)
+    a.status = "archived"
+    a.updated_at = datetime.now(timezone.utc)
+    session.add(a)
+    session.commit()
+    session.refresh(a)
+    return _assessment_out(a)
+
+
+@app.post("/assessments/{assessment_id}/unarchive", response_model=AssessmentOut)
+def unarchive_assessment(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentOut:
+    """Restore an archived assessment. Idempotent."""
+    a = _owned_assessment(assessment_id, current, session)
+    a.status = "active"
+    a.updated_at = datetime.now(timezone.utc)
+    session.add(a)
+    session.commit()
+    session.refresh(a)
+    return _assessment_out(a)
+
+
+@app.delete("/assessments/{assessment_id}", status_code=204)
+def delete_assessment(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> None:
+    """Delete an assessment (and its membership rows). 409 if any invite points at
+    it — those invites are live links, so archive instead. The member questions
+    are shared and never touched."""
+    a = _owned_assessment(assessment_id, current, session)
+    invite_count = session.exec(
+        select(func.count()).select_from(Invite).where(Invite.assessment_id == assessment_id)
+    ).one()
+    if invite_count:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot delete assessment {assessment_id!r}: {invite_count} invite(s) point at "
+                "it. Archive it instead."
+            ),
+        )
+    session.delete(a)
+    session.commit()
+
+
+# --------------------------------------------------------------------------- #
 # Invites (interviewer creates a candidate link)                                #
 # --------------------------------------------------------------------------- #
 
@@ -666,6 +873,53 @@ def list_invites(
     invites = session.exec(
         select(Invite).where(Invite.question_id == question_id)
     ).all()
+    return [_invite_out(inv) for inv in invites]
+
+
+@app.post("/assessments/{assessment_id}/invites", response_model=InviteOut, status_code=201)
+def create_assessment_invite(
+    assessment_id: str,
+    body: InviteCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> InviteOut:
+    """Invite candidates to a whole assessment (T4). Same shape as the per-question
+    invite, but the link opens the ordered multi-question flow."""
+    assessment = _owned_assessment(assessment_id, current, session)
+    if not assessment.questions:
+        raise HTTPException(
+            status_code=400, detail="cannot invite to an assessment with no questions."
+        )
+    invite = Invite(
+        token=secrets.token_urlsafe(32),
+        assessment_id=assessment_id,
+        created_by=_require_id(current.id),
+        recipients=[_normalize_email(r) for r in body.recipients],
+        expires_at=body.expires_at,
+    )
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    deliveries = email_client.send_invite_emails(
+        invite.recipients, _invite_url(invite.token), assessment.title
+    )
+    invite.deliveries = [
+        {"recipient": d.recipient, "sent": d.sent, "error": d.error} for d in deliveries
+    ]
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    return _invite_out(invite)
+
+
+@app.get("/assessments/{assessment_id}/invites", response_model=list[InviteOut])
+def list_assessment_invites(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> list[InviteOut]:
+    _owned_assessment(assessment_id, current, session)
+    invites = session.exec(select(Invite).where(Invite.assessment_id == assessment_id)).all()
     return [_invite_out(inv) for inv in invites]
 
 
@@ -729,11 +983,14 @@ def _check_invited(invite: Invite, email: str) -> None:
 _ALREADY_SUBMITTED_DETAIL = "your assessment has already been recorded for this email address."
 
 
-def _check_not_already_submitted(invite: Invite, email: str, session: Session) -> None:
-    """409 if `email` already submitted on this invite (one attempt per candidate).
+def _check_not_already_submitted(
+    invite: Invite, email: str, question_id: str, session: Session
+) -> None:
+    """409 if `email` already submitted THIS question on this invite (one attempt
+    per candidate per question — T4).
 
     The fast path only: it is a SELECT before an INSERT, so it cannot stop two
-    concurrent submits from both passing. The `uq_submission_invite_candidate`
+    concurrent submits from both passing. The uq_submission_invite_candidate_question
     constraint is what actually enforces the rule; this just turns the common,
     uncontended case into a clean 409 instead of a caught IntegrityError.
     """
@@ -741,27 +998,163 @@ def _check_not_already_submitted(invite: Invite, email: str, session: Session) -
         select(Submission).where(
             Submission.invite_id == invite.id,
             Submission.candidate_email == email,
+            Submission.question_id == question_id,
         )
     ).first()
     if already is not None:
         raise HTTPException(status_code=409, detail=_ALREADY_SUBMITTED_DETAIL)
 
 
-def _candidate_question_view(invite: Invite, session: Session) -> InvitePublicOut:
-    q = session.get(Question, invite.question_id)
-    if q is None:  # question deleted after the invite was issued
+def _invite_questions(invite: Invite, session: Session) -> list[Question]:
+    """The ordered questions this invite presents: an assessment's questions (T4)
+    or a legacy invite's single question. 404 if the referenced thing is gone."""
+    if invite.assessment_id is not None:
+        a = session.get(Assessment, invite.assessment_id)
+        if a is None:
+            raise HTTPException(status_code=404, detail="this assessment no longer exists.")
+        qs = [aq.question for aq in a.questions if aq.question is not None]
+        if not qs:
+            raise HTTPException(status_code=404, detail="this assessment has no questions.")
+        return qs
+    q = session.get(Question, invite.question_id) if invite.question_id else None
+    if q is None:
         raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
+    return [q]
+
+
+def _invite_duration(invite: Invite, session: Session) -> int | None:
+    """Total time budget for the sitting: the assessment's (T4) or, for a legacy
+    invite, the single question's. None = untimed."""
+    if invite.assessment_id is not None:
+        a = session.get(Assessment, invite.assessment_id)
+        return a.duration_minutes if a else None
+    q = session.get(Question, invite.question_id) if invite.question_id else None
+    return q.duration_minutes if q else None
+
+
+def _resolve_question(invite: Invite, question_id: str | None, session: Session) -> Question:
+    """The question a run/submit targets. `question_id` None targets the single
+    question of a legacy invite; for a multi-question assessment it is required and
+    must name one of its questions."""
+    questions = _invite_questions(invite, session)
+    if question_id is None:
+        if len(questions) == 1:
+            return questions[0]
+        raise HTTPException(
+            status_code=400, detail="question_id is required for a multi-question assessment."
+        )
+    for q in questions:
+        if q.id == question_id:
+            return q
+    raise HTTPException(status_code=404, detail="that question is not part of this invite.")
+
+
+def _deadline_for(started_at: datetime, duration_minutes: int | None) -> datetime | None:
+    """Absolute submit deadline for a timed attempt, or None when untimed."""
+    if duration_minutes is None:
+        return None
+    return as_utc(started_at) + timedelta(minutes=duration_minutes)
+
+
+def _get_or_start_attempt(invite: Invite, email: str, session: Session) -> CandidateAttempt:
+    """Return this candidate's attempt for the invite, creating it (stamping
+    started_at = now) on first call. The started_at is never moved once set, so
+    re-opening the link can't reset a timed assessment's clock. The unique
+    constraint makes the get-or-create race-safe: a loser re-reads the winner's row.
+    """
+    existing = session.exec(
+        select(CandidateAttempt).where(
+            CandidateAttempt.invite_id == invite.id,
+            CandidateAttempt.candidate_email == email,
+        )
+    ).first()
+    if existing is not None:
+        return existing
+    attempt = CandidateAttempt(invite_id=_require_id(invite.id), candidate_email=email)
+    session.add(attempt)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raced = session.exec(
+            select(CandidateAttempt).where(
+                CandidateAttempt.invite_id == invite.id,
+                CandidateAttempt.candidate_email == email,
+            )
+        ).first()
+        if raced is None:  # pragma: no cover — the constraint guarantees a row here
+            raise
+        return raced
+    session.refresh(attempt)
+    return attempt
+
+
+def _enforce_deadline(invite: Invite, email: str, session: Session) -> None:
+    """Reject a submit that arrives after the sitting's window has closed.
+
+    Server-authoritative: the deadline is started_at (stamped at /start) + the
+    invite's total duration (the assessment's, or a legacy question's), plus a
+    grace window for the auto-submit round-trip. An untimed sitting, or a submit
+    with no attempt on record (the candidate never opened it via /start), is left
+    to pass — the latter is anchored now so at least the clock exists.
+    """
+    duration = _invite_duration(invite, session)
+    if duration is None:
+        return
+    attempt = _get_or_start_attempt(invite, email, session)
+    deadline = _deadline_for(attempt.started_at, duration)
+    assert deadline is not None  # duration is not None here
+    if datetime.now(timezone.utc) > deadline + timedelta(seconds=config.SUBMIT_GRACE_SECONDS):
+        raise HTTPException(
+            status_code=410, detail="time's up — the assessment window has closed."
+        )
+
+
+def _candidate_question_view(
+    invite: Invite, session: Session, attempt: CandidateAttempt | None = None
+) -> InvitePublicOut:
     # Candidate-facing view only — never expose test_cases or expected outputs.
-    return InvitePublicOut(
-        question=CandidateQuestionView(
+    questions = _invite_questions(invite, session)
+    deadline = _deadline_for(attempt.started_at, _invite_duration(invite, session)) if attempt else None
+    # Which of these questions this candidate has already submitted, so the UI can
+    # mark them done and lock their editors.
+    submitted_ids: set[str] = set()
+    if attempt is not None:
+        submitted_ids = set(
+            session.exec(
+                select(Submission.question_id).where(
+                    Submission.invite_id == invite.id,
+                    Submission.candidate_email == attempt.candidate_email,
+                )
+            ).all()
+        )
+    public = [
+        CandidateQuestionPublic(
+            id=q.id,
             title=q.title,
             prompt=q.prompt,
             constraints=q.constraints,
             example_input=q.example_input,
             example_output=q.example_output,
             time_limit_s=q.time_limit_s,
+            submitted=q.id in submitted_ids,
+        )
+        for q in questions
+    ]
+    first = questions[0]
+    return InvitePublicOut(
+        # Legacy singular view = the first question (keeps the pre-T4 UI working).
+        question=CandidateQuestionView(
+            title=first.title,
+            prompt=first.prompt,
+            constraints=first.constraints,
+            example_input=first.example_input,
+            example_output=first.example_output,
+            time_limit_s=first.time_limit_s,
         ),
+        questions=public,
         languages=config.SUPPORTED_LANGUAGES,
+        deadline=deadline,
     )
 
 
@@ -797,23 +1190,30 @@ def start_invite(
     invite = _load_invite_or_error(token, session)
     email = _normalize_email(body.candidate_email)
     _check_invited(invite, email)
-    _check_not_already_submitted(invite, email, session)
-    return _candidate_question_view(invite, session)
+    # A legacy single-question invite is one attempt: block re-entry once submitted.
+    # A multi-question assessment invite lets the candidate return to finish other
+    # questions — the view carries per-question submitted status instead.
+    if invite.assessment_id is None and invite.question_id is not None:
+        _check_not_already_submitted(invite, email, invite.question_id, session)
+    # Stamp (or re-read) the clock start for this candidate, so the returned
+    # deadline is stable across reloads and device switches.
+    attempt = _get_or_start_attempt(invite, email, session)
+    return _candidate_question_view(invite, session, attempt)
 
 
-def _load_invite_for_candidate(token: str, email: str, session: Session) -> tuple[Invite, Question]:
+def _load_invite_for_candidate(
+    token: str, email: str, question_id: str | None, session: Session
+) -> tuple[Invite, Question]:
     """Shared guard for the candidate's in-editor actions (run / run-tests).
 
     Same gates as /start: the link must be live, the caller must be an invited
-    recipient, and they must not have submitted already. Without this, anyone
-    holding the link could burn agent compute for free.
+    recipient, and they must not have submitted THIS question already. Without
+    this, anyone holding the link could burn agent compute for free.
     """
     invite = _load_invite_or_error(token, session)
     _check_invited(invite, email)
-    _check_not_already_submitted(invite, email, session)
-    question = session.get(Question, invite.question_id)
-    if question is None:
-        raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
+    question = _resolve_question(invite, question_id, session)
+    _check_not_already_submitted(invite, email, question.id, session)
     return invite, question
 
 
@@ -845,7 +1245,7 @@ async def candidate_run(
     """
     limiter.check("run", client_ip(request), config.RUN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S)
     email = _normalize_email(body.candidate_email)
-    _load_invite_for_candidate(token, email, session)
+    _load_invite_for_candidate(token, email, body.question_id, session)
 
     result = await _agent_run_call(
         "run", lambda: agent_client.run_code(body.code, body.language, body.stdin)
@@ -880,7 +1280,7 @@ async def candidate_run_tests(
     """
     limiter.check("run", client_ip(request), config.RUN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S)
     email = _normalize_email(body.candidate_email)
-    _, question = _load_invite_for_candidate(token, email, session)
+    _, question = _load_invite_for_candidate(token, email, body.question_id, session)
 
     result = await _agent_run_call(
         "run-tests", lambda: agent_client.run_tests(question, body.code, body.language)
@@ -916,15 +1316,17 @@ async def candidate_submit(
         "submit", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
     invite = _load_invite_or_error(token, session)
-    question = session.get(Question, invite.question_id)
-    if question is None:
-        raise HTTPException(status_code=404, detail="the question for this invite no longer exists.")
-
-    # Re-check both gates here, not just in /start: the start screen is only UI,
-    # so a caller can POST straight to this route and skip it.
+    # Re-check the gates here, not just in /start: the start screen is only UI, so a
+    # caller can POST straight to this route and skip it.
     email = _normalize_email(body.candidate_email)
     _check_invited(invite, email)
-    _check_not_already_submitted(invite, email, session)
+    # Which question this submits (the single one for a legacy invite; a named one
+    # for an assessment). One attempt per (invite, candidate, question).
+    question = _resolve_question(invite, body.question_id, session)
+    _check_not_already_submitted(invite, email, question.id, session)
+    # Server-enforced timer: refuse a submit that missed the window (past the
+    # deadline + grace). No-op for an untimed sitting.
+    _enforce_deadline(invite, email, session)
 
     sub = Submission(
         id=uuid.uuid4().hex,
@@ -1102,6 +1504,55 @@ def list_submissions(
     results = _results_by_submission(subs, session)
     items = [_submission_summary(sub, results.get(sub.id)) for sub in subs]
     return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@app.get("/submissions/export")
+def export_submissions(
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Owner-scoped CSV of every submission across the caller's questions.
+
+    A full export (not paginated) for spreadsheets / ATS import — the lean summary
+    columns plus the question title, so a row is readable without a second lookup.
+    Declared BEFORE `/submissions/{submission_id}` so "export" isn't swallowed as
+    an id by the path-param route.
+    """
+    _reap_stale_running(session)
+    subs = session.exec(
+        select(Submission)
+        .join(Question)
+        .where(Question.owner_id == current.id)
+        .order_by(col(Submission.created_at).desc(), col(Submission.id))
+    ).all()
+    results = _results_by_submission(subs, session)
+    titles = {
+        q.id: q.title
+        for q in session.exec(select(Question).where(Question.owner_id == current.id)).all()
+    }
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "submission_id", "question_id", "question_title", "candidate",
+            "candidate_email", "language", "status", "verdict", "score_pct", "created_at",
+        ]
+    )
+    for sub in subs:
+        r = results.get(sub.id)
+        writer.writerow(
+            [
+                sub.id, sub.question_id, titles.get(sub.question_id, ""), sub.candidate,
+                sub.candidate_email or "", sub.language, sub.status,
+                r.verdict if r else "", r.score_pct if r else "", sub.created_at.isoformat(),
+            ]
+        )
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="submissions.csv"'},
+    )
 
 
 @app.get("/submissions/{submission_id}", response_model=SubmissionOut)

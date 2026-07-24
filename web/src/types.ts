@@ -47,6 +47,9 @@ export interface QuestionIn {
   example_input: string
   example_output: string
   difficulty?: string
+  reference_solution?: string | null
+  reference_language?: string | null
+  duration_minutes?: number | null
   test_cases: TestCaseIn[]
 }
 
@@ -112,6 +115,13 @@ export interface InviteQuestionPublic {
   time_limit_s: number
 }
 
+/** A question inside the multi-question assessment flow (T4): the safe view plus
+ *  the id run/submit target and whether this candidate has already submitted it. */
+export interface CandidateQuestionPublic extends InviteQuestionPublic {
+  id: string
+  submitted: boolean
+}
+
 /** `GET /invite/{token}` — a liveness probe only. The question deliberately isn't
  *  here: it's handed out by `POST /invite/{token}/start` once the candidate has
  *  identified as an invited recipient. */
@@ -121,8 +131,15 @@ export interface InviteStatusResponse {
 
 /** `POST /invite/{token}/start` — the question, released after the email check. */
 export interface InviteStartResponse {
+  /** The first question — kept so the pre-T4 single-question UI keeps working. */
   question: InviteQuestionPublic
+  /** The ordered question set (T4). Length 1 for a legacy invite; the
+   *  multi-question flow renders when there's more than one. */
+  questions?: CandidateQuestionPublic[]
   languages: Language[]
+  /** Server-authoritative submit deadline (ISO). null when untimed. The countdown
+   *  runs to this, and the server enforces it on submit. */
+  deadline?: string | null
 }
 
 export interface SubmitResponse {
@@ -168,6 +185,21 @@ export interface SubmissionRow {
   verdict?: string
   score_pct?: number
   created_at: string
+}
+
+/** A row in the global Submissions list (`GET /submissions`). Lean by design —
+ *  the heavy `code`/`full_result` blobs are fetched per-id on the detail page. */
+export interface SubmissionSummary {
+  id: string
+  question_id: string
+  candidate: string
+  candidate_email?: string | null
+  language: Language
+  status: string
+  agent_job_id: string | null
+  created_at: string
+  verdict?: string
+  score_pct?: number
 }
 
 /** How one test case came out. Mirrors the agent's runner outcome. */

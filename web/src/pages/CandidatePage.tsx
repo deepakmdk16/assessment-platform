@@ -1,9 +1,14 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
-import { badgeClass } from '../badges'
+import { ThemeCycleButton } from '../components/ThemeToggle'
+import { useTheme } from '../theme/ThemeContext'
+import { monacoTheme } from '../theme/theme'
 import type { InviteStartResponse, Language, RunResponse, RunTestsResponse } from '../types'
+import { AssessmentFlow } from './AssessmentFlow'
+import { ConsoleResult } from './ConsoleResult'
+import { CRIT_MS, formatRemaining, WARN_MS } from './candidateTimer'
 
 type Stage =
   | 'loading'
@@ -52,6 +57,7 @@ function clearDraft(token: string): void {
 
 export function CandidatePage() {
   const { token } = useParams<{ token: string }>()
+  const { resolved } = useTheme()
   const [stage, setStage] = useState<Stage>('loading')
   const [invite, setInvite] = useState<InviteStartResponse | null>(null)
 
@@ -65,6 +71,14 @@ export function CandidatePage() {
   const [draftRestored, setDraftRestored] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  // Server-authoritative deadline (ISO) from /start; null = untimed. The
+  // countdown ticks to it, and `timeUp` flips once when it passes, triggering the
+  // one-shot auto-submit below.
+  const [deadline, setDeadline] = useState<string | null>(null)
+  const [remainingMs, setRemainingMs] = useState<number | null>(null)
+  const [timeUp, setTimeUp] = useState(false)
+  const autoSubmitFired = useRef(false)
 
   const [consoleTab, setConsoleTab] = useState<'testcase' | 'result'>('testcase')
   const [stdin, setStdin] = useState('')
@@ -108,6 +122,7 @@ export function CandidatePage() {
     try {
       const data = await api.startInvite(token, candidateEmail)
       setInvite(data)
+      setDeadline(data.deadline ?? null)
       // Restore an autosaved draft for this invite, if any; only keep a saved
       // language that's still offered, else fall back to the first choice.
       const saved = loadDraft(token)
@@ -173,8 +188,7 @@ export function CandidatePage() {
     }
   }
 
-  async function handleSubmitCode(e: FormEvent) {
-    e.preventDefault()
+  async function doSubmit() {
     if (!token || !language) return
     setSubmitError(null)
     setSubmitting(true)
@@ -195,6 +209,36 @@ export function CandidatePage() {
       setSubmitting(false)
     }
   }
+
+  function handleSubmitCode(e: FormEvent) {
+    e.preventDefault()
+    void doSubmit()
+  }
+
+  // Tick the countdown once a second while the editor is open and the assessment
+  // is timed. Reads the server deadline against the local clock — the server is
+  // the real authority (it enforces the deadline on submit); this is the display.
+  useEffect(() => {
+    if (stage !== 'editor' || !deadline) return
+    const tick = () => {
+      const ms = new Date(deadline).getTime() - Date.now()
+      setRemainingMs(ms)
+      if (ms <= 0) setTimeUp(true)
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [stage, deadline])
+
+  // At zero, auto-submit whatever's in the editor — exactly once — so time running
+  // out records the attempt rather than losing it.
+  useEffect(() => {
+    if (!timeUp || autoSubmitFired.current) return
+    autoSubmitFired.current = true
+    void doSubmit()
+    // doSubmit reads the latest code/language via closure at fire time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeUp])
 
   if (stage === 'loading') return <p className="page-loading">Loading…</p>
   if (stage === 'invalid')
@@ -271,6 +315,22 @@ export function CandidatePage() {
   }
 
   // stage === 'editor'
+  // A multi-question assessment invite (T4) uses the free-navigation flow; a
+  // single-question invite keeps the original single-question IDE below unchanged.
+  if (token && invite && invite.questions && invite.questions.length > 1) {
+    return (
+      <AssessmentFlow
+        token={token}
+        candidateName={candidateName}
+        candidateEmail={candidateEmail}
+        questions={invite.questions}
+        languages={invite.languages}
+        deadline={deadline}
+        onExpired={() => setStage('expired')}
+      />
+    )
+  }
+
   const q = invite?.question
   const hasExample = Boolean(q?.example_input || q?.example_output)
   return (
@@ -278,7 +338,33 @@ export function CandidatePage() {
       <header className="ide-top">
         <span className="ide-mark" aria-hidden="true" />
         <span className="ide-title">{q?.title}</span>
-        <span className="chip chip-neutral">Time limit {q?.time_limit_s}s</span>
+        <div className="ide-top-right">
+          <span className="chip chip-neutral">Per-test limit {q?.time_limit_s}s</span>
+          {deadline && !timeUp && remainingMs !== null && (
+            <span
+              className={
+                remainingMs <= CRIT_MS ? 'timer crit' : remainingMs <= WARN_MS ? 'timer warn' : 'timer'
+              }
+              role="timer"
+              title="Time remaining"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="13" r="8" />
+                <path d="M12 9v4l2 2M9 2h6" />
+              </svg>
+              {formatRemaining(remainingMs)} left
+            </span>
+          )}
+          {deadline && timeUp && (
+            <span className="timer-done" role="status">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+              Time&rsquo;s up — submitting…
+            </span>
+          )}
+          <ThemeCycleButton />
+        </div>
       </header>
 
       <div className="ide-split">
@@ -344,8 +430,13 @@ export function CandidatePage() {
                 setCode(value ?? '')
                 if (draftRestored) setDraftRestored(false)
               }}
-              theme="vs-dark"
-              options={{ minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }}
+              theme={monacoTheme(resolved)}
+              options={{
+                minimap: { enabled: false },
+                fontSize: 13,
+                scrollBeyondLastLine: false,
+                readOnly: timeUp,
+              }}
             />
           </div>
 
@@ -413,7 +504,7 @@ export function CandidatePage() {
               type="button"
               className="btn sec"
               onClick={() => doRun('run')}
-              disabled={running !== null || submitting || !code}
+              disabled={running !== null || submitting || timeUp || !code}
             >
               {running === 'run' ? 'Running…' : 'Run'}
             </button>
@@ -421,11 +512,15 @@ export function CandidatePage() {
               type="button"
               className="btn sec"
               onClick={() => doRun('tests')}
-              disabled={running !== null || submitting || !code}
+              disabled={running !== null || submitting || timeUp || !code}
             >
               {running === 'tests' ? 'Running tests…' : 'Run against test cases'}
             </button>
-            <button type="submit" className="btn submit" disabled={submitting || running !== null}>
+            <button
+              type="submit"
+              className="btn submit"
+              disabled={submitting || running !== null || timeUp}
+            >
               {submitting ? 'Submitting…' : 'Submit'}
             </button>
           </form>
@@ -433,95 +528,6 @@ export function CandidatePage() {
       </div>
     </div>
   )
-}
-
-/** The console's Result tab: output from Run, or the pass/fail strip from
- *  Run-against-test-cases. The candidate sees counts and statuses only — never
- *  a case's input or expected output. */
-function ConsoleResult({
-  running,
-  error,
-  run,
-  tests,
-}: {
-  running: 'run' | 'tests' | null
-  error: string | null
-  run: RunResponse | null
-  tests: RunTestsResponse | null
-}) {
-  if (running) return <p className="muted">Running…</p>
-  if (error)
-    return (
-      <p role="alert" className="form-error">
-        {error}
-      </p>
-    )
-
-  if (run) {
-    if (run.compile_error)
-      return (
-        <>
-          <span className="io-label">Compile error</span>
-          <pre className="code">{run.compile_error}</pre>
-        </>
-      )
-    if (run.timed_out)
-      return (
-        <p className="form-warning">
-          Your program ran out of time before it finished. It may be stuck waiting for input, or
-          too slow.
-        </p>
-      )
-    return (
-      <>
-        <span className="io-label">Output</span>
-        <pre className="code">{run.stdout || '(no output)'}</pre>
-        {run.stderr && (
-          <>
-            <span className="io-label">Errors</span>
-            <pre className="code">{run.stderr}</pre>
-          </>
-        )}
-        <p className="cellsub">Finished in {run.duration_s}s</p>
-      </>
-    )
-  }
-
-  if (tests) {
-    if (tests.compile_error)
-      return (
-        <>
-          <span className="io-label">Compile error</span>
-          <pre className="code">{tests.compile_error}</pre>
-        </>
-      )
-    const allPassed = tests.passed === tests.total && tests.total > 0
-    return (
-      <>
-        <p className={allPassed ? 'run-summary good' : 'run-summary'}>
-          {tests.passed} of {tests.total} test cases passed
-        </p>
-        <ul className="test-strip">
-          {tests.test_cases.map((c) => (
-            <li key={c.index}>
-              <span className="test-strip-name">
-                Test {c.index}
-                {c.category === 'performance' && <span className="cellsub"> · performance</span>}
-              </span>
-              <span className={badgeClass(c.status)}>{c.status}</span>
-              <span className="cellsub">{c.duration_s}s</span>
-            </li>
-          ))}
-        </ul>
-        <p className="cellsub">
-          These are the same tests used for grading. The inputs aren’t shown — Submit when you’re
-          ready to record your attempt.
-        </p>
-      </>
-    )
-  }
-
-  return <p className="muted">Run your code to see output here.</p>
 }
 
 function CandidateNotice({ title, body }: { title: string; body: string }) {

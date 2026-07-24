@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
+import { useMediaQuery } from '../hooks/useMediaQuery'
+import { useTheme } from '../theme/ThemeContext'
+import { monacoTheme } from '../theme/theme'
 import type { QuestionOut, ResultTestCase, SubmissionDetail } from '../types'
 
 /** The interviewer's report card. Unlike the candidate view this deliberately
@@ -10,6 +14,10 @@ import type { QuestionOut, ResultTestCase, SubmissionDetail } from '../types'
  *  whole point is judging the submission. */
 export function SubmissionDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const { resolved } = useTheme()
+  // Below 900px the panes stack (CX1) — render plain sections there; only offer
+  // the draggable split on wider screens.
+  const isNarrow = useMediaQuery('(max-width: 900px)')
   const [sub, setSub] = useState<SubmissionDetail | null>(null)
   const [question, setQuestion] = useState<QuestionOut | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -70,6 +78,115 @@ export function SubmissionDetailPage() {
   const quality = full?.quality
   const isPending = !result && (sub.status === 'pending' || sub.status === 'running') && !pollTimedOut
 
+  // The three panes, extracted so the resizable (desktop) and stacked (mobile)
+  // layouts share one source. `codePanel(stacked)` uses the fixed-height editor
+  // wrapper when stacked (the page scrolls) and a fill wrapper when it's inside a
+  // resizable pane that already has a height.
+  const problemPanel = (
+    <>
+      <div className="tabs">
+        <span className="tab on">Problem</span>
+      </div>
+      <div className="panel-body prose">
+        {question ? (
+          <>
+            <p className="pre-text">{question.prompt}</p>
+            {question.constraints && (
+              <>
+                <h3>Constraints</h3>
+                <p className="pre-text">{question.constraints}</p>
+              </>
+            )}
+            {(question.example_input || question.example_output) && (
+              <div className="example-block">
+                <h3>Example</h3>
+                {question.example_input && (
+                  <div className="io">
+                    <span className="io-label">Input</span>
+                    <pre className="code">{question.example_input}</pre>
+                  </div>
+                )}
+                {question.example_output && (
+                  <div className="io">
+                    <span className="io-label">Output</span>
+                    <pre className="code">{question.example_output}</pre>
+                  </div>
+                )}
+              </div>
+            )}
+            {question.reference_solution && (
+              <details className="draft-reference">
+                <summary>
+                  Show reference solution
+                  {question.reference_language ? ` (${question.reference_language})` : ''}
+                </summary>
+                <pre className="code">{question.reference_solution}</pre>
+              </details>
+            )}
+          </>
+        ) : (
+          <p className="muted">Loading problem…</p>
+        )}
+      </div>
+    </>
+  )
+
+  const codePanel = (stacked: boolean): ReactNode => (
+    <>
+      <div className="tabs">
+        <span className="tab on">Candidate solution</span>
+        <span className="tab-meta">{sub.language}</span>
+      </div>
+      <div className={`editor-wrapper${stacked ? ' editor-wrapper-review' : ''}`}>
+        <Editor
+          height="100%"
+          language={sub.language || undefined}
+          value={sub.code}
+          theme={monacoTheme(resolved)}
+          options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13 }}
+        />
+      </div>
+    </>
+  )
+
+  const reviewPanel = (
+    <div className="ide-review">
+      <div className="tabs">
+        <button
+          type="button"
+          className={tab === 'report' ? 'tab on' : 'tab'}
+          onClick={() => setTab('report')}
+        >
+          Report
+        </button>
+        <button
+          type="button"
+          className={tab === 'tests' ? 'tab on' : 'tab'}
+          onClick={() => setTab('tests')}
+        >
+          Test cases{cases.length > 0 && <span className="count">{cases.length}</span>}
+        </button>
+      </div>
+
+      {!result ? (
+        <GradingNotice status={sub.status} timedOut={pollTimedOut} />
+      ) : tab === 'report' ? (
+        <ReportTab
+          reason={result.reason}
+          compileError={full?.compile_error ?? null}
+          infraError={full?.infra_error ?? null}
+          agentError={full?.error ?? null}
+          pointsEarned={full?.points_earned}
+          pointsTotal={full?.points_total}
+          passThresholdPct={full?.pass_threshold_pct}
+          quality={quality ?? null}
+        />
+      ) : (
+        <TestsTab cases={cases} />
+      )}
+    </div>
+  )
+
   return (
     <div className="ide">
       <header className="ide-top">
@@ -94,97 +211,33 @@ export function SubmissionDetailPage() {
         </div>
       </header>
 
-      <div className="ide-split">
-        <section className="panel">
-          <div className="tabs">
-            <span className="tab on">Problem</span>
-          </div>
-          <div className="panel-body prose">
-            {question ? (
-              <>
-                <p className="pre-text">{question.prompt}</p>
-                {question.constraints && (
-                  <>
-                    <h3>Constraints</h3>
-                    <p className="pre-text">{question.constraints}</p>
-                  </>
-                )}
-                {(question.example_input || question.example_output) && (
-                  <div className="example-block">
-                    <h3>Example</h3>
-                    {question.example_input && (
-                      <div className="io">
-                        <span className="io-label">Input</span>
-                        <pre className="code">{question.example_input}</pre>
-                      </div>
-                    )}
-                    {question.example_output && (
-                      <div className="io">
-                        <span className="io-label">Output</span>
-                        <pre className="code">{question.example_output}</pre>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (
-              <p className="muted">Loading problem…</p>
-            )}
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="tabs">
-            <span className="tab on">Candidate solution</span>
-            <span className="tab-meta">{sub.language}</span>
-          </div>
-          <div className="editor-wrapper editor-wrapper-review">
-            <Editor
-              height="100%"
-              language={sub.language || undefined}
-              value={sub.code}
-              theme="vs-dark"
-              options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13 }}
-            />
-          </div>
-
-          <div className="ide-review">
-            <div className="tabs">
-              <button
-                type="button"
-                className={tab === 'report' ? 'tab on' : 'tab'}
-                onClick={() => setTab('report')}
-              >
-                Report
-              </button>
-              <button
-                type="button"
-                className={tab === 'tests' ? 'tab on' : 'tab'}
-                onClick={() => setTab('tests')}
-              >
-                Test cases{cases.length > 0 && <span className="count">{cases.length}</span>}
-              </button>
-            </div>
-
-            {!result ? (
-              <GradingNotice status={sub.status} timedOut={pollTimedOut} />
-            ) : tab === 'report' ? (
-              <ReportTab
-                reason={result.reason}
-                compileError={full?.compile_error ?? null}
-                infraError={full?.infra_error ?? null}
-                agentError={full?.error ?? null}
-                pointsEarned={full?.points_earned}
-                pointsTotal={full?.points_total}
-                passThresholdPct={full?.pass_threshold_pct}
-                quality={quality ?? null}
-              />
-            ) : (
-              <TestsTab cases={cases} />
-            )}
-          </div>
-        </section>
-      </div>
+      {isNarrow ? (
+        <div className="ide-split">
+          <section className="panel">{problemPanel}</section>
+          <section className="panel">
+            {codePanel(true)}
+            {reviewPanel}
+          </section>
+        </div>
+      ) : (
+        <PanelGroup direction="horizontal" autoSaveId="submission-split-h" className="ide-panels">
+          <Panel className="panel" defaultSize={40} minSize={22}>
+            {problemPanel}
+          </Panel>
+          <PanelResizeHandle className="rz rz-col" />
+          <Panel defaultSize={60} minSize={32}>
+            <PanelGroup direction="vertical" autoSaveId="submission-split-v">
+              <Panel className="panel" defaultSize={58} minSize={20}>
+                {codePanel(false)}
+              </Panel>
+              <PanelResizeHandle className="rz rz-row" />
+              <Panel className="panel" defaultSize={42} minSize={18}>
+                {reviewPanel}
+              </Panel>
+            </PanelGroup>
+          </Panel>
+        </PanelGroup>
+      )}
     </div>
   )
 }
