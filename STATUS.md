@@ -129,12 +129,18 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
 
 ## C. Backlog — table-stakes & hardening (open items moved from PRODUCT_BACKLOG)
 
-- **AR3 · PDF report isn't downloadable (cross-repo).** The agent renders a report
-  (`../AssesmentAgent/.../report.py`) but only via CLI/email — no HTTP endpoint, and
-  `build_report_pdf` takes the rich `AssessmentResult` while the platform stores the
-  serialized dict. Needs a new agent `POST /report` + a `result_from_dict` inverse of
-  `result_to_dict` (nested, parity-sensitive), then the platform proxies + serves it
-  with a download button. Agent half also tracked in the agent STATUS. **M.**
+- **AR3 · PDF report download — platform half DONE; agent half tracked in the agent
+  STATUS (cross-repo).** The platform now proxies + serves the PDF:
+  `agent_client.request_report()` POSTs to the agent's `POST /report` (signed like
+  every other outbound call), `GET /submissions/{id}/report` streams the PDF back
+  (409 ungraded / 404 unknown / 502 on agent error), and SubmissionDetailPage has a
+  "Download PDF report" button. **Refined contract** (differs from the original
+  wording — the serialized result alone couldn't render a report): the platform
+  sends `{result, question, code, candidate?}` — the stored `full_result` plus the
+  FULL question (same inline shape as the grade path) plus the candidate's submitted
+  `code`, because `result_to_dict` keeps only the question's id/title and omits the
+  source. The agent half (`POST /report` + `result_from_dict`) landed on the agent's
+  `feat/report-endpoint` branch; merge/deploy the two together.
 - **CX2 · In-progress candidate code lives only in `localStorage`.** Autosave is
   debounced to `localStorage` (`CandidatePage.tsx:37,95`) — lost on cleared storage,
   incognito, or a device switch. Optional server-side draft persistence keyed by

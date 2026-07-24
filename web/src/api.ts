@@ -262,3 +262,22 @@ export async function exportSubmissionsCsv(): Promise<void> {
   a.remove()
   URL.revokeObjectURL(url)
 }
+
+/** Fetch a submission's PDF report (authenticated) from the agent proxy and
+ *  trigger a browser download. A file, not JSON, so it bypasses `request`. */
+export async function downloadSubmissionReport(submissionId: string): Promise<void> {
+  const token = getToken()
+  const res = await fetch(`${BASE_URL}/submissions/${submissionId}/report`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (res.status === 401) unauthorizedHandler?.()
+  if (!res.ok) throw new ApiError(res.status, res.statusText)
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `report-${submissionId}.pdf`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}

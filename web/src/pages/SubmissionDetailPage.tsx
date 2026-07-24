@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
-import { api, ApiError } from '../api'
+import { api, ApiError, downloadSubmissionReport } from '../api'
 import { badgeClass } from '../badges'
 import { useMediaQuery } from '../hooks/useMediaQuery'
 import { useTheme } from '../theme/ThemeContext'
@@ -23,6 +23,19 @@ export function SubmissionDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<'report' | 'tests'>('report')
   const [pollTimedOut, setPollTimedOut] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+
+  async function handleDownloadReport() {
+    if (!id) return
+    setDownloading(true)
+    try {
+      await downloadSubmissionReport(id)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to download report')
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   // Poll while the submission is still being graded so the report appears without
   // a manual refresh. Stops on a terminal state (result present or status=error),
@@ -202,6 +215,14 @@ export function SubmissionDetailPage() {
             <>
               <span className={badgeClass(result.verdict)}>{result.verdict}</span>
               <span className="score">{result.score_pct}%</span>
+              <button
+                type="button"
+                className="btn sec"
+                onClick={handleDownloadReport}
+                disabled={downloading}
+              >
+                {downloading ? 'Preparing…' : 'Download PDF report'}
+              </button>
             </>
           ) : (
             <span className={`${badgeClass(sub.status)}${isPending ? ' chip-live' : ''}`}>
