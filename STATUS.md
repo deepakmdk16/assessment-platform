@@ -142,8 +142,8 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
 - **AR1 · No aggregate analytics endpoints.** No stats/metrics/summary route; the
   dashboard is a question list. No cross-candidate comparison, pass-rate, percentile,
   or time-to-solve. **L.**
-- **I1 · Integrity / proctoring suite (staged).** Nothing present today. Stage it
-  cheap-high-signal → heavy, and lean on the structural moat before buying webcams:
+- **I1 · Integrity / proctoring suite (staged; scope agreed 2026-07-24).** Nothing
+  present today. Build the first three; **webcam/video is DEFERRED.**
   - **Browser telemetry (do first, cheap):** tab/window blur + focus-loss timeline,
     fullscreen enforce + exit detection, paste events into the editor (size + whether
     it originated outside the page — flag a 200-line paste vs organic typing),
@@ -151,12 +151,13 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   - **Structural anti-cheat (our moat — prefer over surveillance):** per-candidate
     unique question variants (see D) makes a leaked bank useless and reduces the need
     for heavy proctoring at all.
-  - **Identity / webcam (heavy, sequence later behind demand):** start photo,
-    periodic snapshots, optional continuous video. Real cost isn't the capture — it's
-    consent/compliance (GDPR/BIPA), storage, and bias/false-positive risk. Table-stakes
-    for *some* enterprises; don't build before a deal needs it.
   - **Integrity report:** per-attempt risk score + flagged-event timeline for the
-    interviewer, so signals are actionable rather than raw logs. **L (whole suite).**
+    interviewer, so signals are actionable rather than raw logs.
+  - **Identity / webcam — DEFERRED (do not build yet).** Start photo, periodic
+    snapshots, optional continuous video. Held back deliberately: the cost isn't the
+    capture, it's consent/compliance (GDPR/BIPA), storage, and bias/false-positive
+    risk. Revisit only when a specific enterprise deal requires it. **M–L (the three
+    active parts).**
 - **I2 · Plagiarism / similarity detection** across submissions (token-fingerprint /
   MOSS-style; optionally match against public solutions + AI-generated-code detection).
   None present; largely mooted by per-candidate variants (see D). **L.**
