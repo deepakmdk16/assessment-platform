@@ -68,7 +68,6 @@ export function AddQuestionPage() {
 
   const [step, setStep] = useState(0)
 
-  const [id, setId] = useState('')
   const [title, setTitle] = useState('')
   const [prompt, setPrompt] = useState('')
 
@@ -123,7 +122,6 @@ export function AddQuestionPage() {
         target_complexity: targetComplexity.trim() || undefined,
       })
       const q = res.question
-      setId(q.id)
       setTitle(q.title)
       setPrompt(q.prompt)
       setConstraints(q.constraints)
@@ -160,7 +158,6 @@ export function AddQuestionPage() {
   // later fields, so native `required` can't guard them — this does.
   function validateStep(s: number): string | null {
     if (s === 0) {
-      if (!id.trim()) return 'Id is required.'
       if (!title.trim()) return 'Title is required.'
       if (!prompt.trim()) return 'Prompt is required.'
     }
@@ -203,7 +200,6 @@ export function AddQuestionPage() {
     setSubmitting(true)
     try {
       const created = await api.createQuestion({
-        id,
         title,
         prompt,
         constraints,
@@ -388,15 +384,9 @@ export function AddQuestionPage() {
           <div className="card pad">
             <div className="card-title">Basics</div>
             <div className="stack">
-              <div className="grid2">
-                <div className="field">
-                  <label htmlFor="id">Id (slug)</label>
-                  <input id="id" className="mono" value={id} onChange={(e) => setId(e.target.value)} />
-                </div>
-                <div className="field">
-                  <label htmlFor="title">Title</label>
-                  <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
-                </div>
+              <div className="field">
+                <label htmlFor="title">Title</label>
+                <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
               </div>
               <div className="field">
                 <label htmlFor="prompt">Prompt</label>
@@ -580,8 +570,6 @@ export function AddQuestionPage() {
           <div className="card pad">
             <div className="card-title">Review</div>
             <dl className="review-list">
-              <dt>Id</dt>
-              <dd>{id}</dd>
               <dt>Title</dt>
               <dd>{title}</dd>
               <dt>Difficulty</dt>

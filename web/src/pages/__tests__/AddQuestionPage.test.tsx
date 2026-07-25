@@ -46,7 +46,6 @@ describe('AddQuestionPage', () => {
     )
 
     // Step 1: Basics
-    await user.type(screen.getByLabelText(/id \(slug\)/i), 'two-sum')
     await user.type(screen.getByLabelText(/^title$/i), 'Two Sum')
     await user.type(screen.getByLabelText(/^prompt$/i), 'Return indices of two numbers that add up to target.')
     await next(user)
@@ -75,7 +74,8 @@ describe('AddQuestionPage', () => {
 
     await waitFor(() => expect(api.createQuestion).toHaveBeenCalledTimes(1))
     const payload = vi.mocked(api.createQuestion).mock.calls[0][0]
-    expect(payload.id).toBe('two-sum')
+    // The id is no longer entered here — the server generates it (A6).
+    expect(payload.id).toBeUndefined()
     expect(payload.title).toBe('Two Sum')
     expect(payload.time_limit_s).toBe(3)
     // Wizard shows 80%; the API receives the 0..1 fraction.
@@ -134,7 +134,6 @@ describe('AddQuestionPage', () => {
 
     await waitFor(() => expect(api.draftQuestion).toHaveBeenCalledTimes(1))
     // Fields populated from the draft.
-    expect(screen.getByLabelText(/id \(slug\)/i)).toHaveValue('longest-run')
     expect(screen.getByLabelText(/^title$/i)).toHaveValue('Longest increasing run')
     expect(screen.getByLabelText(/^prompt$/i)).toHaveValue('Print the longest strictly increasing run.')
     // Warning surfaced.
@@ -166,7 +165,7 @@ describe('AddQuestionPage', () => {
     vi.mocked(api.draftQuestion).mockResolvedValue(draftFixture())
     await user.click(screen.getByRole('button', { name: /try again/i }))
     await waitFor(() => expect(api.draftQuestion).toHaveBeenCalledTimes(2))
-    expect(screen.getByLabelText(/id \(slug\)/i)).toHaveValue('longest-run')
+    expect(screen.getByLabelText(/^title$/i)).toHaveValue('Longest increasing run')
   })
 
   it('does not offer a retry when the server has no model key (503)', async () => {
@@ -205,7 +204,6 @@ describe('AddQuestionPage', () => {
     )
 
     // Advance to the Test cases step (Basics → Grading → Test cases).
-    await user.type(screen.getByLabelText(/id \(slug\)/i), 'two-sum')
     await user.type(screen.getByLabelText(/^title$/i), 'Two Sum')
     await user.type(screen.getByLabelText(/^prompt$/i), 'Prompt text.')
     await next(user)

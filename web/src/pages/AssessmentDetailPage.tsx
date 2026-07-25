@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
-import type { AssessmentOut, Invite } from '../types'
+import type { AssessmentOut, Invite, InviteDelivery } from '../types'
 
 export function AssessmentDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -11,6 +11,7 @@ export function AssessmentDetailPage() {
   const [recipients, setRecipients] = useState('')
   const [sending, setSending] = useState(false)
   const [sentTo, setSentTo] = useState<string[]>([])
+  const [undelivered, setUndelivered] = useState<InviteDelivery[]>([])
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
 
@@ -43,7 +44,8 @@ export function AssessmentDetailPage() {
     try {
       const invite = await api.createAssessmentInvite(id, { recipients: list })
       setInvites((prev) => [invite, ...prev])
-      setSentTo(list)
+      setSentTo(invite.deliveries.filter((d) => d.sent).map((d) => d.recipient))
+      setUndelivered(invite.deliveries.filter((d) => !d.sent))
       setRecipients('')
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create invite')
@@ -116,7 +118,7 @@ export function AssessmentDetailPage() {
                   <thead>
                     <tr>
                       <th>Link</th>
-                      <th>Recipients</th>
+                      <th>Recipients &amp; delivery</th>
                       <th>Status</th>
                       <th></th>
                     </tr>
@@ -125,7 +127,23 @@ export function AssessmentDetailPage() {
                     {invites.map((inv) => (
                       <tr key={inv.token}>
                         <td className="invite-url">{inv.url}</td>
-                        <td>{inv.recipients.join(', ') || '—'}</td>
+                        <td>
+                          {inv.deliveries.length > 0 ? (
+                            <ul className="recip-list">
+                              {inv.deliveries.map((d) => (
+                                <li className="recip" key={d.recipient}>
+                                  <span className={`recip-dot ${d.sent ? 'ok' : 'fail'}`} />
+                                  <span className="recip-addr">{d.recipient}</span>
+                                  {!d.sent && d.error && (
+                                    <span className="recip-why">— {d.error}</span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            inv.recipients.join(', ') || '—'
+                          )}
+                        </td>
                         <td>
                           <span className={badgeClass(inv.status)}>{inv.status}</span>
                         </td>
@@ -152,8 +170,18 @@ export function AssessmentDetailPage() {
             <h3>Invite a candidate</h3>
             {sentTo.length > 0 && (
               <p role="status" className="form-success">
-                Invite created for {sentTo.join(', ')}.
+                Invite sent to {sentTo.join(', ')}.
               </p>
+            )}
+            {undelivered.length > 0 && (
+              <div role="alert" className="form-warning">
+                <p>
+                  The invite was created, but the email couldn’t be sent to{' '}
+                  {undelivered.map((d) => d.recipient).join(', ')}. Copy the link from the table and
+                  send it another way.
+                </p>
+                <p className="cellsub">{undelivered[0].error}</p>
+              </div>
             )}
             <div className="field">
               <label htmlFor="recipients">Candidate emails</label>
