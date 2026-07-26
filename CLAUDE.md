@@ -48,6 +48,9 @@ deterministic grade.
 - `schemas.py` — API request/response models. **`InvitePublicOut` is the
   candidate-facing view and must never expose `test_cases`/`expected`.**
 - `api.py` — FastAPI routes.
+- `analytics.py` — DB-free aggregation helpers (pass-rate, median/percentile,
+  daily trend, time-to-solve) behind the `/analytics/*` endpoints; the maths is
+  unit-tested without a database (AR1).
 - `auth.py` — interviewer auth: bcrypt hashing + stateless JWT bearer.
 - `agent_client.py` — the outbound call that triggers the agent (the mock
   boundary in tests).

@@ -143,9 +143,19 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   debounced to `localStorage` (`CandidatePage.tsx:37,95`) — lost on cleared storage,
   incognito, or a device switch. Optional server-side draft persistence keyed by
   invite token so work survives a browser/device change. **M.**
-- **AR1 · No aggregate analytics endpoints.** No stats/metrics/summary route; the
-  dashboard is a question list. No cross-candidate comparison, pass-rate, percentile,
-  or time-to-solve. **L.**
+- **AR1 · Aggregate analytics — backend DONE 2026-07-26; dashboard UI in
+  progress.** The dashboard was a bare question list with no stats/metrics route.
+  **Backend landed** (branch `feature/ar1-analytics`): a DB-free, unit-tested
+  `analytics.py` (pass-rate, median/percentile, daily trend, time-to-solve,
+  competition ranking) behind three owner-scoped endpoints —
+  `GET /analytics/overview` (workspace totals + submission trend),
+  `GET /analytics/questions` (`Page`; per-question pass-rate, avg/median score,
+  late count, avg/median time-to-solve; excludes archived + variant members),
+  and `GET /analytics/assessments/{id}` (cross-candidate: per-candidate
+  rank/percentile + whole-sitting time-to-solve, completion, score
+  distribution; reuses the attempts assembly extracted into
+  `_assessment_attempt_rows`). Offline pytest green. **Still to do:** the
+  dashboard UI (mockup-first) to surface these. **L.**
 - **I1 · Integrity / proctoring suite (staged; scope agreed 2026-07-24).** Nothing
   present today. Build the first three; **webcam/video is DEFERRED.**
   - **Browser telemetry (do first, cheap):** tab/window blur + focus-loss timeline,

@@ -7,7 +7,7 @@ cases and return a submission-plus-result view without leaking ORM internals.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -632,3 +632,87 @@ class DashboardSubmissionOut(BaseModel):
     score_pct: float | None = None
     late: bool = False  # arrived after the timed window closed (recorded + flagged)
     created_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# Analytics (AR1)                                                              #
+# --------------------------------------------------------------------------- #
+# All rates are fractions in [0, 1] (None = undefined, e.g. no graded rows);
+# scores are on the 0..100 scale, matching AssessmentResult.score_pct. Counts
+# are always well-defined even before anything is graded.
+
+
+class TrendPointOut(BaseModel):
+    """One day of the workspace submission trend."""
+
+    date: date  # the UTC calendar day (serializes as YYYY-MM-DD)
+    submissions: int
+    graded: int
+    passed: int
+    pass_rate: float | None = None  # passed / graded that day
+
+
+class OverviewAnalyticsOut(BaseModel):
+    """Workspace-level rollup across all of the interviewer's questions."""
+
+    questions: int  # active (non-archived, non-variant) questions
+    submissions: int
+    graded: int
+    candidates: int  # distinct candidate emails seen across submissions
+    passed: int
+    pass_rate: float | None = None  # passed / graded overall
+    avg_score_pct: float | None = None
+    trend: list[TrendPointOut]
+
+
+class QuestionAnalyticsOut(BaseModel):
+    """Per-question aggregate stats — the metrics the plain question list lacked."""
+
+    question_id: str
+    title: str
+    difficulty: str | None = None
+    submissions: int
+    graded: int
+    passed: int
+    pass_rate: float | None = None
+    avg_score_pct: float | None = None
+    median_score_pct: float | None = None
+    late: int  # count of submissions flagged late
+    avg_time_to_solve_s: float | None = None  # over submissions with a known start
+    median_time_to_solve_s: float | None = None
+
+
+class ScoreBucketOut(BaseModel):
+    """One bar of a score histogram: [low, high) (top bucket is inclusive)."""
+
+    low: float
+    high: float
+    count: int
+
+
+class AssessmentCandidateAnalyticsOut(BaseModel):
+    """One candidate's standing within a single assessment."""
+
+    candidate_name: str
+    candidate_email: str
+    passed_count: int
+    total_count: int
+    avg_score_pct: float | None = None
+    rank: int | None = None  # competition rank among graded candidates (1 = top)
+    percentile: float | None = None  # share of graded candidates at or below
+    time_to_solve_s: float | None = None  # first open -> last submission (whole sitting)
+
+
+class AssessmentAnalyticsOut(BaseModel):
+    """Cross-candidate rollup for one assessment (extends the attempts view with
+    ranking, time-to-solve, and workspace-style aggregates)."""
+
+    assessment_id: str
+    title: str
+    slot_count: int
+    candidates_started: int
+    candidates_completed: int  # submitted every slot
+    avg_score_pct: float | None = None  # mean of per-candidate averages
+    pass_rate: float | None = None  # graded question-attempts that passed
+    score_distribution: list[ScoreBucketOut]
+    candidates: list[AssessmentCandidateAnalyticsOut]
