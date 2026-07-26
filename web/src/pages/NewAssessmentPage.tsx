@@ -1,17 +1,21 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
+import { useAuth } from '../auth/AuthContext'
 import { difficultyClass } from '../badges'
 import type { QuestionOut } from '../types'
 
 export function NewAssessmentPage() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { user } = useAuth()
   const [title, setTitle] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(60)
   const [indefinite, setIndefinite] = useState(false)
-  const [orgName, setOrgName] = useState('')
-  const [logoUrl, setLogoUrl] = useState('')
+  // Prefilled from the interviewer's workspace default branding (A12); still
+  // editable per assessment, and only this assessment's value is stored.
+  const [orgName, setOrgName] = useState(user?.default_org_name ?? '')
+  const [logoUrl, setLogoUrl] = useState(user?.default_logo_url ?? '')
   // Pre-populated from the questions page's "Build assessment" multi-select
   // (A8). Any id not actually in the library (stale/archived/deleted) simply
   // never appears in `selected` below — no extra filtering needed.

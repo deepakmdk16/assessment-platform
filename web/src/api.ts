@@ -112,6 +112,9 @@ export const api = {
 
   me: () => request<User>('/auth/me', { auth: true }),
 
+  updateMe: (data: { default_org_name: string | null; default_logo_url: string | null }) =>
+    request<User>('/auth/me', { method: 'PATCH', body: data, auth: true }),
+
   listQuestions: (includeArchived = false, offset = 0, limit = 100) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
     if (includeArchived) params.set('include_archived', 'true')

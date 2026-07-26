@@ -82,6 +82,9 @@ export interface User {
   id: string
   email: string
   name: string
+  // Workspace default branding (A12) — prefills a new assessment's org/logo.
+  default_org_name: string | null
+  default_logo_url: string | null
 }
 
 export interface LoginResponse {

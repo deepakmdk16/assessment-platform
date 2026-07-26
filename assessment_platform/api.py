@@ -73,6 +73,7 @@ from .schemas import (
     CandidateTestOutcomeOut,
     DashboardSubmissionOut,
     InterviewerOut,
+    InterviewerUpdate,
     InviteCreate,
     InviteDeliveryOut,
     InviteOut,
@@ -336,6 +337,16 @@ def _secret_matches(provided: str | None, expected: str) -> bool:
     return secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
 
+def _interviewer_out(interviewer: Interviewer) -> InterviewerOut:
+    return InterviewerOut(
+        id=_require_id(interviewer.id),
+        email=interviewer.email,
+        name=interviewer.name,
+        default_org_name=interviewer.default_org_name,
+        default_logo_url=interviewer.default_logo_url,
+    )
+
+
 @app.post("/auth/register", response_model=InterviewerOut, status_code=201)
 def register(
     body: RegisterIn, request: Request, session: Session = Depends(get_session)
@@ -364,9 +375,7 @@ def register(
     session.add(interviewer)
     session.commit()
     session.refresh(interviewer)
-    return InterviewerOut(
-        id=_require_id(interviewer.id), email=interviewer.email, name=interviewer.name
-    )
+    return _interviewer_out(interviewer)
 
 
 @app.post("/auth/login", response_model=TokenOut)
@@ -386,7 +395,29 @@ def login(
 
 @app.get("/auth/me", response_model=InterviewerOut)
 def me(current: Interviewer = Depends(get_current_interviewer)) -> InterviewerOut:
-    return InterviewerOut(id=_require_id(current.id), email=current.email, name=current.name)
+    return _interviewer_out(current)
+
+
+@app.patch("/auth/me", response_model=InterviewerOut)
+def update_me(
+    body: InterviewerUpdate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> InterviewerOut:
+    """Update the caller's own workspace settings (A12 default branding). A partial
+    update: only fields present in the request are changed, so sending an explicit
+    null clears a default while omitting a field leaves it untouched. Blank strings
+    are normalised to null so an empty box means 'no default', not an empty brand."""
+    fields = body.model_dump(exclude_unset=True)
+    if "default_org_name" in fields:
+        current.default_org_name = (fields["default_org_name"] or "").strip() or None
+    if "default_logo_url" in fields:
+        current.default_logo_url = (fields["default_logo_url"] or "").strip() or None
+    current.updated_at = datetime.now(timezone.utc)
+    session.add(current)
+    session.commit()
+    session.refresh(current)
+    return _interviewer_out(current)
 
 
 # --------------------------------------------------------------------------- #

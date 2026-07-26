@@ -49,7 +49,13 @@ describe('LoginPage', () => {
   it('logs in with valid credentials and navigates to the dashboard', async () => {
     const user = userEvent.setup()
     vi.mocked(api.login).mockResolvedValue({ access_token: 'tok123', token_type: 'bearer' })
-    vi.mocked(api.me).mockResolvedValue({ id: '1', email: 'a@b.com', name: 'Ada' })
+    vi.mocked(api.me).mockResolvedValue({
+      id: '1',
+      email: 'a@b.com',
+      name: 'Ada',
+      default_org_name: null,
+      default_logo_url: null,
+    })
 
     renderLoginPage()
 

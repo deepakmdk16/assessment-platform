@@ -92,6 +92,45 @@ def test_me_requires_auth_401(anon_client: TestClient) -> None:
     assert anon_client.get("/auth/me", headers=_auth("garbage.token")).status_code == 401
 
 
+def test_workspace_default_branding_roundtrips(client: TestClient) -> None:
+    # A12: an interviewer starts with no default branding.
+    body = client.get("/auth/me").json()
+    assert body["default_org_name"] is None and body["default_logo_url"] is None
+
+    # Setting both persists and is echoed back by GET /auth/me.
+    resp = client.patch(
+        "/auth/me",
+        json={"default_org_name": "Acme Corp", "default_logo_url": "https://acme/logo.png"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["default_org_name"] == "Acme Corp"
+    got = client.get("/auth/me").json()
+    assert got["default_org_name"] == "Acme Corp"
+    assert got["default_logo_url"] == "https://acme/logo.png"
+
+
+def test_workspace_default_branding_partial_and_clear(client: TestClient) -> None:
+    client.patch(
+        "/auth/me",
+        json={"default_org_name": "Acme Corp", "default_logo_url": "https://acme/logo.png"},
+    )
+    # A partial update touches only the field sent; the other is left intact.
+    client.patch("/auth/me", json={"default_org_name": "Beta LLC"})
+    got = client.get("/auth/me").json()
+    assert got["default_org_name"] == "Beta LLC"
+    assert got["default_logo_url"] == "https://acme/logo.png"
+
+    # A blank string means "no default", normalised to null (not an empty brand);
+    # an explicit null clears the other.
+    client.patch("/auth/me", json={"default_org_name": "   ", "default_logo_url": None})
+    got = client.get("/auth/me").json()
+    assert got["default_org_name"] is None and got["default_logo_url"] is None
+
+
+def test_update_me_requires_auth_401(anon_client: TestClient) -> None:
+    assert anon_client.patch("/auth/me", json={"default_org_name": "X"}).status_code == 401
+
+
 def test_questions_require_auth_401(anon_client: TestClient) -> None:
     assert anon_client.get("/questions").status_code == 401
     assert anon_client.post("/questions", json=_sample_question()).status_code == 401

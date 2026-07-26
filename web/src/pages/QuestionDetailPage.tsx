@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass, difficultyClass } from '../badges'
 import { Pager } from '../components/Pager'
@@ -191,7 +191,7 @@ export function QuestionDetailPage() {
 
           {invites.length > 0 && (
             <>
-              <h2 className="sect-title">Invites</h2>
+              <h2 className="sect-title">Quick screens</h2>
               <div className="card tbl-wrap">
                 <table className="tbl">
                   <thead>
@@ -265,7 +265,7 @@ export function QuestionDetailPage() {
             {subTotal > 0 && <span className="count">{subTotal}</span>}
           </h2>
           {submissions.length === 0 ? (
-            <p className="empty-state">No submissions yet. Share an invite link to get started.</p>
+            <p className="empty-state">No submissions yet. Send a quick screen to get started.</p>
           ) : (
             <div className="card">
               <div className="tbl-wrap">
@@ -322,10 +322,10 @@ export function QuestionDetailPage() {
 
         <aside className="side">
           <div className="card pad">
-            <h3>Invite a candidate</h3>
+            <h3>Quick screen</h3>
             {sentTo.length > 0 && (
               <p role="status" className="form-success">
-                Invite sent to {sentTo.join(', ')}.
+                Quick screen sent to {sentTo.join(', ')}.
               </p>
             )}
             {undelivered.length > 0 && (
@@ -339,11 +339,12 @@ export function QuestionDetailPage() {
               </div>
             )}
             <button type="button" className="btn accent block" onClick={() => setInviteOpen(true)}>
-              Send invite
+              Send quick screen
             </button>
             <p className="invite-hint muted">
-              Each invite link is emailed to the candidates you name, and only works for those
-              addresses. You can also copy it from the table.
+              A quick screen tests a candidate on <strong>just this question</strong> — the link is
+              emailed to the addresses you name and only works for them. For a multi-question sitting
+              on one shared timer, build an <Link to="/assessments">assessment</Link> instead.
             </p>
           </div>
 
@@ -384,10 +385,10 @@ export function QuestionDetailPage() {
         onClose={closeInviteDialog}
       >
         <form className="stack" onSubmit={handleCreateInvite}>
-          <h2 id="invite-dialog-title">Send invite</h2>
+          <h2 id="invite-dialog-title">Send a quick screen</h2>
           <p className="muted">
-            The link is emailed to each address and only works for them — a candidate has to confirm
-            their email to start.
+            Screens each candidate on just this question. The link is emailed to each address and
+            only works for them — a candidate has to confirm their email to start.
           </p>
           <div className="field">
             <label htmlFor="recipients">Candidate emails</label>
@@ -415,7 +416,7 @@ export function QuestionDetailPage() {
               {isNudge ? 'Skip for now' : 'Cancel'}
             </button>
             <button type="submit" className="btn accent" disabled={creatingInvite}>
-              {creatingInvite ? 'Sending…' : 'Send invite'}
+              {creatingInvite ? 'Sending…' : 'Send quick screen'}
             </button>
           </div>
         </form>

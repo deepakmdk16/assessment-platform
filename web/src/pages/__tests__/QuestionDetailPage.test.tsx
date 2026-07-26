@@ -121,10 +121,10 @@ describe('QuestionDetailPage', () => {
     renderPage()
 
     // A question needs no invite, so nothing should imply one is required.
-    await screen.findByRole('button', { name: /send invite/i })
+    await screen.findByRole('button', { name: /send quick screen/i })
     expect(screen.queryByLabelText(/candidate emails/i)).not.toBeVisible()
 
-    await user.click(screen.getByRole('button', { name: /send invite/i }))
+    await user.click(screen.getByRole('button', { name: /send quick screen/i }))
     expect(screen.getByLabelText(/candidate emails/i)).toBeVisible()
   })
 
@@ -132,17 +132,17 @@ describe('QuestionDetailPage', () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(await screen.findByRole('button', { name: /send invite/i }))
+    await user.click(await screen.findByRole('button', { name: /send quick screen/i }))
     await user.click(screen.getByRole('button', { name: /cancel/i }))
 
     expect(api.createInvite).not.toHaveBeenCalled()
     expect(screen.getByLabelText(/candidate emails/i)).not.toBeVisible()
   })
 
-  /** Click the card's "Send invite" and return a scope for the dialog — both the
-   *  card button and the dialog's submit are called "Send invite". */
+  /** Click the card's "Send quick screen" and return a scope for the dialog — both
+   *  the card button and the dialog's submit are called "Send quick screen". */
   async function openInviteDialog(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(await screen.findByRole('button', { name: /send invite/i }))
+    await user.click(await screen.findByRole('button', { name: /send quick screen/i }))
     return within(screen.getByRole('dialog'))
   }
 
@@ -151,7 +151,7 @@ describe('QuestionDetailPage', () => {
     renderPage()
 
     const dialog = await openInviteDialog(user)
-    await user.click(dialog.getByRole('button', { name: /send invite/i }))
+    await user.click(dialog.getByRole('button', { name: /send quick screen/i }))
 
     expect(await dialog.findByRole('alert')).toHaveTextContent(/at least one candidate email/i)
     expect(api.createInvite).not.toHaveBeenCalled()
@@ -173,7 +173,7 @@ describe('QuestionDetailPage', () => {
 
     const dialog = await openInviteDialog(user)
     await user.type(dialog.getByLabelText(/candidate emails/i), 'alice@example.com, bob@example.com')
-    await user.click(dialog.getByRole('button', { name: /send invite/i }))
+    await user.click(dialog.getByRole('button', { name: /send quick screen/i }))
 
     await waitFor(() =>
       expect(api.createInvite).toHaveBeenCalledWith('two-sum', {
@@ -182,7 +182,7 @@ describe('QuestionDetailPage', () => {
     )
     // Dialog closes and the interviewer is told it went out.
     expect(await screen.findByRole('status')).toHaveTextContent(
-      /invite sent to alice@example.com, bob@example.com/i,
+      /quick screen sent to alice@example.com, bob@example.com/i,
     )
     expect(screen.getByLabelText(/candidate emails/i)).not.toBeVisible()
   })
@@ -201,7 +201,7 @@ describe('QuestionDetailPage', () => {
 
     const dialog = await openInviteDialog(user)
     await user.type(dialog.getByLabelText(/candidate emails/i), 'candidate@example.com')
-    await user.click(dialog.getByRole('button', { name: /send invite/i }))
+    await user.click(dialog.getByRole('button', { name: /send quick screen/i }))
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/couldn’t be sent to candidate@example.com/i)
