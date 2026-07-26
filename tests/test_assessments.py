@@ -198,6 +198,30 @@ def test_candidate_multi_question_flow(client, monkeypatch) -> None:
     assert client.post(f"/invite/{tok}/submit", json=_sub(tok, "cand@x.io", None)).status_code == 400
 
 
+def test_submissions_list_surfaces_assessment_link(client, monkeypatch) -> None:
+    """A3: a submission via an assessment invite is tagged with the assessment's
+    id/title in the summary list; a standalone direct submission is not."""
+    _make_questions(client, "q1", "q2")
+    client.post(
+        "/assessments", json={"id": "a1", "title": "Backend Screen", "question_ids": ["q1", "q2"]}
+    )
+    tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
+
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
+    assert client.post(f"/invite/{tok}/submit", json=_sub(tok, "cand@x.io", "q1")).status_code == 201
+    # A direct, non-invite submission against the same owner's question.
+    assert client.post(
+        "/submissions",
+        json={"question_id": "q2", "candidate": "Direct", "language": "python", "code": "print(1)"},
+    ).status_code == 201
+
+    by_candidate = {s["candidate"]: s for s in client.get("/submissions").json()["items"]}
+    assert by_candidate["C"]["assessment_id"] == "a1"
+    assert by_candidate["C"]["assessment_title"] == "Backend Screen"
+    assert by_candidate["Direct"]["assessment_id"] is None
+    assert by_candidate["Direct"]["assessment_title"] is None
+
+
 def test_delete_blocked_by_invite(client) -> None:
     _make_questions(client, "q1")
     client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1"]})

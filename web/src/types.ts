@@ -231,6 +231,9 @@ export interface SubmissionSummary {
   created_at: string
   verdict?: string
   score_pct?: number
+  // Set when this submission came in through an assessment invite (A3).
+  assessment_id?: string | null
+  assessment_title?: string | null
 }
 
 /** How one test case came out. Mirrors the agent's runner outcome. */

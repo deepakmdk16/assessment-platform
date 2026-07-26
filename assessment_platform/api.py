@@ -198,7 +198,9 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
 
 
 def _submission_summary(
-    sub: Submission, result: AssessmentResult | None
+    sub: Submission,
+    result: AssessmentResult | None,
+    assessment: Assessment | None = None,
 ) -> SubmissionSummaryOut:
     return SubmissionSummaryOut(
         id=sub.id,
@@ -211,7 +213,41 @@ def _submission_summary(
         created_at=sub.created_at,
         verdict=result.verdict if result else None,
         score_pct=result.score_pct if result else None,
+        assessment_id=assessment.id if assessment else None,
+        assessment_title=assessment.title if assessment else None,
     )
+
+
+def _assessments_by_submission(
+    subs: Sequence[Submission], session: Session
+) -> dict[str, Assessment]:
+    """Assessment (if any) each submission's invite belongs to, keyed by
+    submission_id — two batched queries (invites, then assessments), no N+1.
+    A submission with no invite, or a legacy single-question invite, is simply
+    absent from the result (A3)."""
+    invite_ids = [s.invite_id for s in subs if s.invite_id is not None]
+    if not invite_ids:
+        return {}
+    invites = session.exec(
+        select(Invite).where(col(Invite.id).in_(invite_ids), col(Invite.assessment_id).is_not(None))
+    ).all()
+    assessment_ids = [inv.assessment_id for inv in invites if inv.assessment_id is not None]
+    if not assessment_ids:
+        return {}
+    assessments = {
+        a.id: a
+        for a in session.exec(select(Assessment).where(col(Assessment.id).in_(assessment_ids))).all()
+    }
+    invite_to_assessment: dict[int, Assessment] = {}
+    for inv in invites:
+        if inv.assessment_id is not None and inv.assessment_id in assessments:
+            invite_to_assessment[_require_id(inv.id)] = assessments[inv.assessment_id]
+
+    result: dict[str, Assessment] = {}
+    for s in subs:
+        if s.invite_id is not None and s.invite_id in invite_to_assessment:
+            result[s.id] = invite_to_assessment[s.invite_id]
+    return result
 
 
 def _results_by_submission(
@@ -1552,7 +1588,10 @@ def list_submissions(
         .limit(limit)
     ).all()
     results = _results_by_submission(subs, session)
-    items = [_submission_summary(sub, results.get(sub.id)) for sub in subs]
+    assessments = _assessments_by_submission(subs, session)
+    items = [
+        _submission_summary(sub, results.get(sub.id), assessments.get(sub.id)) for sub in subs
+    ]
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 

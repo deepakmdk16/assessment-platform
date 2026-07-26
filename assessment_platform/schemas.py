@@ -208,6 +208,11 @@ class SubmissionSummaryOut(BaseModel):
     created_at: datetime
     verdict: str | None = None
     score_pct: float | None = None
+    # Set when this submission came in through an assessment invite (A3): lets the
+    # list tell an assessment sitting apart from a standalone single-question
+    # attempt without a second fetch per row.
+    assessment_id: str | None = None
+    assessment_title: str | None = None
 
 
 # --------------------------------------------------------------------------- #

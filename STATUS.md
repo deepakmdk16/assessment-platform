@@ -16,16 +16,14 @@ Effort key: **XS** (minutes) · **S** (self-contained) · **M** (multi-file) · 
 The T4 multi-question assessment epic shipped; driving it end-to-end surfaced these.
 Several are "the single-question flow had it, the assessment flow doesn't yet."
 
-- **A3 · Submissions list can't tell an assessment sitting from a standalone
-  attempt.** Every row shows only `question_id`; assessment-group and individual
-  submissions look identical (`SubmissionSummaryOut`, `schemas.py:193`). The link
-  exists (submission → `invite.assessment_id` → assessment title) but isn't
-  surfaced. Needs: an assessment column/grouping in the summary schema + list route
-  + `SubmissionsPage`, **and** ideally an **assessment-level attempt view** (one
-  candidate's whole sitting — all N questions + an aggregate — instead of N
-  scattered rows). **M.** Re-confirmed 2026-07-26: `SubmissionSummaryOut`
-  (`schemas.py:196-210`) has no `assessment_id`/title field at all, so the fix is
-  purely additive — no creator/owner field is needed or currently shown.
+- **A3 · Assessment-level attempt view (column linkage DONE 2026-07-26).**
+  `SubmissionSummaryOut` now carries `assessment_id`/`assessment_title`
+  (`_assessments_by_submission`, `api.py`, batched — no N+1) and
+  `SubmissionsPage.tsx` renders an "Assessment" column, tagging an
+  assessment-linked row with the assessment's title and a standalone row
+  "Standalone". **Still open:** an **assessment-level attempt view** — one
+  candidate's whole sitting (all N questions + an aggregate) instead of N
+  scattered rows. Pairs with A11's composite score. **M.**
 - **A5 · No completion screen in the multi-question flow — neither on timeout
   nor on manual completion.** `CandidatePage.tsx`'s single-question flow has a
   real terminal state: `doSubmit` sets `stage = 'submitted'`, which swaps the
