@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
-import type { AssessmentOut, Invite, InviteDelivery } from '../types'
+import type { AssessmentAttempt, AssessmentOut, Invite, InviteDelivery } from '../types'
 
 export function AssessmentDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const [assessment, setAssessment] = useState<AssessmentOut | null>(null)
   const [invites, setInvites] = useState<Invite[]>([])
+  const [attempts, setAttempts] = useState<AssessmentAttempt[]>([])
   const [recipients, setRecipients] = useState('')
   const [sending, setSending] = useState(false)
   const [sentTo, setSentTo] = useState<string[]>([])
@@ -18,11 +20,12 @@ export function AssessmentDetailPage() {
   useEffect(() => {
     if (!id) return
     let cancelled = false
-    Promise.all([api.getAssessment(id), api.listAssessmentInvites(id)])
-      .then(([a, inv]) => {
+    Promise.all([api.getAssessment(id), api.listAssessmentInvites(id), api.listAssessmentAttempts(id)])
+      .then(([a, inv, att]) => {
         if (cancelled) return
         setAssessment(a)
         setInvites(inv)
+        setAttempts(att)
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load assessment')
@@ -113,6 +116,69 @@ export function AssessmentDetailPage() {
               </table>
             </div>
           </section>
+
+          {attempts.length > 0 && (
+            <>
+              <h2 className="sect-title">Attempts</h2>
+              <div className="card tbl-wrap">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Candidate</th>
+                      <th>Progress</th>
+                      <th>Passed</th>
+                      <th>Avg score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attempts.map((att) => (
+                      <tr key={att.candidate_email}>
+                        <td>
+                          <div className="t-title">{att.candidate_name}</div>
+                          <div className="cellsub">{att.candidate_email}</div>
+                        </td>
+                        <td>
+                          <div className="attempt-progress">
+                            {att.questions.map((q, i) =>
+                              q.submission_id ? (
+                                <span
+                                  key={q.question_id}
+                                  className={`${badgeClass(q.verdict)} clickable`}
+                                  title={`${q.title}: ${q.verdict ?? 'grading…'}`}
+                                  role="link"
+                                  tabIndex={0}
+                                  onClick={() => navigate(`/submissions/${q.submission_id}`)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') navigate(`/submissions/${q.submission_id}`)
+                                  }}
+                                >
+                                  {i + 1}
+                                </span>
+                              ) : (
+                                <span
+                                  key={q.question_id}
+                                  className="chip chip-neutral"
+                                  title={`${q.title}: not submitted`}
+                                >
+                                  {i + 1}
+                                </span>
+                              ),
+                            )}
+                          </div>
+                        </td>
+                        <td className="num">
+                          {att.passed_count} / {att.total_count}
+                        </td>
+                        <td className="score">
+                          {att.avg_score_pct != null ? `${att.avg_score_pct.toFixed(0)}%` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
 
           {invites.length > 0 && (
             <>

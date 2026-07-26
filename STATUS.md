@@ -16,14 +16,6 @@ Effort key: **XS** (minutes) · **S** (self-contained) · **M** (multi-file) · 
 The T4 multi-question assessment epic shipped; driving it end-to-end surfaced these.
 Several are "the single-question flow had it, the assessment flow doesn't yet."
 
-- **A3 · Assessment-level attempt view (column linkage DONE 2026-07-26).**
-  `SubmissionSummaryOut` now carries `assessment_id`/`assessment_title`
-  (`_assessments_by_submission`, `api.py`, batched — no N+1) and
-  `SubmissionsPage.tsx` renders an "Assessment" column, tagging an
-  assessment-linked row with the assessment's title and a standalone row
-  "Standalone". **Still open:** an **assessment-level attempt view** — one
-  candidate's whole sitting (all N questions + an aggregate) instead of N
-  scattered rows. Pairs with A11's composite score. **M.**
 - **A7 · Invites should be assessment-level, not (also) question-level.** Now that
   assessments exist, offering "send invite" on a single question is duplicative and
   confusing. Decide the model: either deprecate per-question invites in the UI in
@@ -40,10 +32,6 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   *brand-new* question from inside the builder. Keep question creation simple
   and owned by the questions page; the builder assembles, it shouldn't grow a
   second authoring flow unless there's real demand.
-- **A11 · No assessment-level score / verdict.** An assessment stores N independent
-  per-question results; there's no composite (weighted score, "passed 2/3", overall
-  verdict) for the sitting. Interviewers need an at-a-glance assessment outcome.
-  Pairs with A3's attempt view. **M.**
 - **A12 · Enterprise branding — per-assessment upload DONE 2026-07-26; workspace
   default still open.** `Assessment.org_name`/`logo_url` (migration
   `0ae2d36aff72`, additive/nullable) are set on `NewAssessmentPage` (with a live

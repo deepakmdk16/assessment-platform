@@ -706,6 +706,17 @@ textarea {
   white-space: nowrap;
 }
 
+/* A row of per-question status chips in the assessment attempts table (A3/A11). */
+.attempt-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.attempt-progress .chip.clickable {
+  cursor: pointer;
+}
+
 .chip::before {
   content: "";
   width: 0.44rem;

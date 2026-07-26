@@ -308,6 +308,74 @@ def test_candidate_name_anchored_at_first_submit_when_start_had_none(client, mon
     assert names == {"q1": "Jane Doe", "q2": "Jane Doe"}
 
 
+def _callback(job_id: str, verdict: str, score: float) -> dict[str, Any]:
+    return {"job_id": job_id, "verdict": verdict, "score_pct": score, "reason": "r"}
+
+
+def test_assessment_attempts_composite(client, monkeypatch) -> None:
+    """A3/A11: one row per candidate who started, with every question's result
+    plus a composite — pass count always well-defined, avg score over graded
+    questions only (None until at least one is graded)."""
+    _make_questions(client, "q1", "q2")
+    client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1", "q2"]})
+    tok = client.post(
+        "/assessments/a1/invites", json={"recipients": ["cand1@x.io", "cand2@x.io"]}
+    ).json()["token"]
+
+    def submit(email: str, name: str, qid: str, job_id: str) -> None:
+        monkeypatch.setattr(agent_client, "trigger_assessment", async_return(job_id))
+        resp = client.post(
+            f"/invite/{tok}/submit",
+            json={
+                "candidate_name": name, "candidate_email": email,
+                "language": "python", "code": "x", "question_id": qid,
+            },
+        )
+        assert resp.status_code == 201
+
+    # cand1 starts and submits both questions; cand2 starts but only submits q1.
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand1@x.io", "candidate_name": "Cand One"})
+    submit("cand1@x.io", "Cand One", "q1", "job-1a")
+    submit("cand1@x.io", "Cand One", "q2", "job-1b")
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand2@x.io", "candidate_name": "Cand Two"})
+    submit("cand2@x.io", "Cand Two", "q1", "job-2a")
+
+    client.post("/assessments/callback", json=_callback("job-1a", "PASS", 100.0))
+    client.post("/assessments/callback", json=_callback("job-1b", "FAIL", 40.0))
+    client.post("/assessments/callback", json=_callback("job-2a", "PASS", 80.0))
+
+    rows = {r["candidate_email"]: r for r in client.get("/assessments/a1/attempts").json()}
+    assert set(rows) == {"cand1@x.io", "cand2@x.io"}
+
+    c1 = rows["cand1@x.io"]
+    assert c1["candidate_name"] == "Cand One"
+    assert (c1["passed_count"], c1["total_count"]) == (1, 2)
+    assert c1["avg_score_pct"] == 70.0  # (100 + 40) / 2
+    assert {q["question_id"]: q["verdict"] for q in c1["questions"]} == {"q1": "PASS", "q2": "FAIL"}
+
+    c2 = rows["cand2@x.io"]
+    assert (c2["passed_count"], c2["total_count"]) == (1, 2)
+    assert c2["avg_score_pct"] == 80.0  # only q1 is graded
+    q_by_id = {q["question_id"]: q for q in c2["questions"]}
+    assert q_by_id["q1"]["submitted"] is True
+    assert q_by_id["q1"]["submission_id"] is not None  # links to the full submission
+    assert q_by_id["q2"]["submitted"] is False
+    assert q_by_id["q2"]["submission_id"] is None
+    assert q_by_id["q2"]["verdict"] is None
+
+
+def test_assessment_attempts_owner_scoped_and_empty(client) -> None:
+    _make_questions(client, "q1")
+    client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1"]})
+
+    # No invites yet: empty, not an error.
+    assert client.get("/assessments/a1/attempts").json() == []
+
+    # Another interviewer can't see this assessment's attempts at all.
+    tok_b = register_interviewer(client, "other@x.io")
+    assert client.get("/assessments/a1/attempts", headers=_auth(tok_b)).status_code == 403
+
+
 def test_submissions_list_surfaces_assessment_link(client, monkeypatch) -> None:
     """A3: a submission via an assessment invite is tagged with the assessment's
     id/title in the summary list; a standalone direct submission is not."""

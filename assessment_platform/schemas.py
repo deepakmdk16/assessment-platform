@@ -153,6 +153,31 @@ class AssessmentOut(BaseModel):
     questions: list[AssessmentQuestionOut]
 
 
+class AssessmentAttemptQuestionOut(BaseModel):
+    """One question's result within a candidate's sitting (A3/A11)."""
+
+    question_id: str
+    title: str
+    submitted: bool
+    submission_id: str | None = None
+    verdict: str | None = None
+    score_pct: float | None = None
+
+
+class AssessmentAttemptOut(BaseModel):
+    """One candidate's whole sitting of an assessment: every question's result
+    plus a composite (A11) — pass count is the headline (always well-defined,
+    even with an ungraded question), average score across GRADED questions is
+    the secondary detail (None until at least one is graded)."""
+
+    candidate_name: str
+    candidate_email: str
+    questions: list[AssessmentAttemptQuestionOut]
+    passed_count: int
+    total_count: int
+    avg_score_pct: float | None = None
+
+
 class QuestionDraftIn(BaseModel):
     """An interviewer's brief for the AI question-authoring assistant."""
 

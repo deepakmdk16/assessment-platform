@@ -142,6 +142,28 @@ export interface AssessmentIn {
   logo_url?: string | null
 }
 
+/** One question's result within a candidate's sitting (A3/A11). */
+export interface AssessmentAttemptQuestion {
+  question_id: string
+  title: string
+  submitted: boolean
+  submission_id: string | null
+  verdict: string | null
+  score_pct: number | null
+}
+
+/** `GET /assessments/{id}/attempts` — one candidate's whole sitting: every
+ *  question's result plus a composite (A11). avg_score_pct is null until at
+ *  least one question is graded. */
+export interface AssessmentAttempt {
+  candidate_name: string
+  candidate_email: string
+  questions: AssessmentAttemptQuestion[]
+  passed_count: number
+  total_count: number
+  avg_score_pct: number | null
+}
+
 export interface InviteQuestionPublic {
   title: string
   prompt: string

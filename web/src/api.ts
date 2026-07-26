@@ -1,4 +1,5 @@
 import type {
+  AssessmentAttempt,
   AssessmentIn,
   AssessmentOut,
   Invite,
@@ -173,6 +174,9 @@ export const api = {
 
   listAssessmentInvites: (assessmentId: string) =>
     request<Invite[]>(`/assessments/${assessmentId}/invites`, { auth: true }),
+
+  listAssessmentAttempts: (assessmentId: string) =>
+    request<AssessmentAttempt[]>(`/assessments/${assessmentId}/attempts`, { auth: true }),
 
   createInvite: (
     questionId: string,

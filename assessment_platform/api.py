@@ -55,6 +55,8 @@ from .models import (
 from .question_rules import case_floor_violations
 from .ratelimit import client_ip, limiter
 from .schemas import (
+    AssessmentAttemptOut,
+    AssessmentAttemptQuestionOut,
     AssessmentCreate,
     AssessmentOut,
     AssessmentQuestionOut,
@@ -1036,6 +1038,90 @@ def list_assessment_invites(
     _owned_assessment(assessment_id, current, session)
     invites = session.exec(select(Invite).where(Invite.assessment_id == assessment_id)).all()
     return [_invite_out(inv) for inv in invites]
+
+
+@app.get("/assessments/{assessment_id}/attempts", response_model=list[AssessmentAttemptOut])
+def list_assessment_attempts(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> list[AssessmentAttemptOut]:
+    """One row per candidate who has started this assessment (A3): every
+    question's result plus a composite (A11) — pass count is the headline,
+    average score across graded questions is the secondary detail. An invited
+    recipient who never opened the link has no row here (nothing to attempt
+    yet); that's still visible via the invite list.
+    """
+    a = _owned_assessment(assessment_id, current, session)
+    ordered_questions = [
+        (aq.question_id, aq.question.title if aq.question else aq.question_id)
+        for aq in a.questions
+    ]
+    invite_ids = session.exec(
+        select(Invite.id).where(Invite.assessment_id == assessment_id)
+    ).all()
+    if not invite_ids:
+        return []
+    attempts = session.exec(
+        select(CandidateAttempt)
+        .where(col(CandidateAttempt.invite_id).in_(invite_ids))
+        .order_by(col(CandidateAttempt.started_at))
+    ).all()
+    # candidate_email is nullable on Submission only for the interviewer's
+    # direct (non-invite) path; every row here came through an invite, whose
+    # /submit route always sets it — the `is not None` narrows for mypy.
+    subs = [
+        s
+        for s in session.exec(
+            select(Submission).where(col(Submission.invite_id).in_(invite_ids))
+        ).all()
+        if s.candidate_email is not None
+    ]
+    results = _results_by_submission(subs, session)
+    # (candidate_email, question_id) -> the submission's result / id, if any.
+    graded: dict[tuple[str, str], AssessmentResult] = {}
+    submission_id_by_pair: dict[tuple[str, str], str] = {}
+    for s in subs:
+        assert s.candidate_email is not None  # filtered above
+        submission_id_by_pair[(s.candidate_email, s.question_id)] = s.id
+        r = results.get(s.id)
+        if r is not None:
+            graded[(s.candidate_email, s.question_id)] = r
+
+    out = []
+    for attempt in attempts:
+        q_rows = []
+        graded_scores: list[float] = []
+        passed = 0
+        for qid, title in ordered_questions:
+            r = graded.get((attempt.candidate_email, qid))
+            if r is not None:
+                graded_scores.append(r.score_pct)
+                if r.verdict == "PASS":
+                    passed += 1
+            q_rows.append(
+                AssessmentAttemptQuestionOut(
+                    question_id=qid,
+                    title=title,
+                    submitted=(attempt.candidate_email, qid) in submission_id_by_pair,
+                    submission_id=submission_id_by_pair.get((attempt.candidate_email, qid)),
+                    verdict=r.verdict if r else None,
+                    score_pct=r.score_pct if r else None,
+                )
+            )
+        out.append(
+            AssessmentAttemptOut(
+                candidate_name=attempt.candidate_name or attempt.candidate_email,
+                candidate_email=attempt.candidate_email,
+                questions=q_rows,
+                passed_count=passed,
+                total_count=len(ordered_questions),
+                avg_score_pct=(
+                    sum(graded_scores) / len(graded_scores) if graded_scores else None
+                ),
+            )
+        )
+    return out
 
 
 @app.post("/questions/{question_id}/invites/{token}/revoke", response_model=InviteOut)
