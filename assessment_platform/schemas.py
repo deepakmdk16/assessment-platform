@@ -630,4 +630,5 @@ class DashboardSubmissionOut(BaseModel):
     status: str
     verdict: str | None = None
     score_pct: float | None = None
+    late: bool = False  # arrived after the timed window closed (recorded + flagged)
     created_at: datetime

@@ -2281,7 +2281,8 @@ def export_submissions(
     writer.writerow(
         [
             "submission_id", "question_id", "question_title", "candidate",
-            "candidate_email", "language", "status", "verdict", "score_pct", "created_at",
+            "candidate_email", "language", "status", "verdict", "score_pct", "late",
+            "created_at",
         ]
     )
     for sub in subs:
@@ -2290,7 +2291,8 @@ def export_submissions(
             [
                 sub.id, sub.question_id, titles.get(sub.question_id, ""), sub.candidate,
                 sub.candidate_email or "", sub.language, sub.status,
-                r.verdict if r else "", r.score_pct if r else "", sub.created_at.isoformat(),
+                r.verdict if r else "", r.score_pct if r else "", sub.late,
+                sub.created_at.isoformat(),
             ]
         )
     return Response(
@@ -2399,6 +2401,7 @@ def question_submissions(
                 status=sub.status,
                 verdict=result.verdict if result else None,
                 score_pct=result.score_pct if result else None,
+                late=sub.late,
                 created_at=sub.created_at,
             )
         )

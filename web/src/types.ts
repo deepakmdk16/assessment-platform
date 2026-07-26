@@ -351,6 +351,7 @@ export interface SubmissionRow {
   status: string
   verdict?: string
   score_pct?: number
+  late?: boolean // arrived after the timed window closed (recorded + flagged)
   created_at: string
 }
 

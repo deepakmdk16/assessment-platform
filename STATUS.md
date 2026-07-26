@@ -102,10 +102,12 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   the submission either way, setting `Submission.late` (migration `f6c4d0b9e3a2`,
   additive, default False). The invite's own lifecycle (revoked / expired via
   `_load_invite_or_error`) still hard-blocks a submit — only the per-candidate
-  timer is relaxed. `late` is surfaced on every interviewer submission surface:
-  the attempts grid (amber-ring chip + "submitted late" tooltip, keyed per
-  candidate/slot so it works for VS2 variants too), the submission detail header,
-  and the submissions list — all as a `chip-late` amber pill. Backend + web tests
+  timer is relaxed. `late` is surfaced on **every** interviewer submission
+  surface (traced by `/integration-check`): the attempts grid (amber-ring chip +
+  "submitted late" tooltip, keyed per candidate/slot so it works for VS2 variants
+  too), the submission detail header, the global submissions list, the
+  per-question ("Quick screen") results table, and the CSV export (`late` column)
+  — the pills are the `chip-late` amber style. Backend + web tests
   updated (the old "past-grace ⇒ 410" timer test now asserts 201 + `late=true`);
   full suites green. **Note:** editing an existing assessment's duration does *not*
   rescue already-expired attempts (deadline = each attempt's own `started_at` +

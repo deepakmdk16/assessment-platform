@@ -136,5 +136,16 @@ def test_submit_past_deadline_is_recorded_and_flagged_late(
         json={"candidate_name": "C", "candidate_email": "c@x.io", "language": "python", "code": "print(7)"},
     )
     assert resp.status_code == 201
-    sub = anon_client.get(f"/submissions/{resp.json()['submission_id']}", headers=_auth(tok))
-    assert sub.json()["late"] is True
+    sid = resp.json()["submission_id"]
+    assert anon_client.get(f"/submissions/{sid}", headers=_auth(tok)).json()["late"] is True
+
+    # The flag reaches every interviewer submission surface, not just the detail:
+    # the per-question dashboard list and the CSV export both carry it.
+    rows = anon_client.get("/questions/q_late/submissions", headers=_auth(tok)).json()["items"]
+    assert any(r["submission_id"] == sid and r["late"] is True for r in rows)
+    csv = anon_client.get("/submissions/export", headers=_auth(tok)).text
+    header, *lines = csv.strip().splitlines()
+    assert "late" in header.split(",")
+    late_idx = header.split(",").index("late")
+    row = next(line for line in lines if line.startswith(sid))
+    assert row.split(",")[late_idx] == "True"
