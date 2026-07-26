@@ -25,18 +25,29 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   (opt-in `?include_variants=true`), so a set shows as one thing, not N look-alikes.
   Backend-only — both the dashboard and the picker call the same `listQuestions`,
   so no frontend change. Was the stopgap for VS2.
-- **VS2 · Assessment-slot integration for variant sets (OPEN — feature; the real
-  fix VS1 stops-gaps).** The assessment builder has no "add a variant set" slot, so
-  you can't build "one slot → each candidate gets a different variant." The hard
-  part is *where the variant is chosen*: an `Assessment` is shared across invites
-  but assignment is per-candidate, so a slot can only store "this slot is variant-
-  set X" and the concrete variant must resolve **per candidate at invite/start
-  time** — exactly the direct-invite round-robin, but inside a multi-question
-  sitting. Needs: `AssessmentQuestion` gains a nullable `variant_set_id` (a slot is
-  a fixed question OR a set); `_invite_questions` resolves each set-slot to that
-  candidate's assigned variant; builder UI gains the slot type. Deliberately
-  deferred when the direct-invite path shipped (see the variant-sets item in §C).
-  **L.**
+- **VS2 · Assessment-slot integration for variant sets — backend DONE 2026-07-26;
+  builder UI remains.** A slot of an assessment can now be a variant-set pool
+  instead of a fixed question, and each candidate is handed a different variant
+  (round-robin), so "one slot → each candidate gets a different variant" works
+  inside a multi-question sitting. **Data model:** `AssessmentQuestion.variant_set_id`
+  (nullable; a slot is a fixed `question_id` XOR a `variant_set_id`) +
+  `CandidateSlotVariant` keyed by `(invite, candidate_email, slot)`, which freezes
+  the per-candidate pick — decoupled from `CandidateAttempt` so resolving a variant
+  never stamps the timer and the interviewer results path can read it without
+  creating an attempt (migration `e5b3c9d7a2f1`, additive; `question_id` made
+  nullable). **Resolution:** `_invite_questions(invite, session, email)` is now
+  candidate-aware — a set-slot resolves (and freezes, get-or-create + round-robin so
+  the pool stays evenly used) to that candidate's variant, whose `question_id` then
+  flows through view/run/submit/results exactly like a fixed question (zero
+  candidate-side change). The results view (`/assessments/{id}/attempts`) resolves
+  each candidate's own variant per set-slot and shows it under the set's title +
+  the variant label. **API:** create/update take ordered `slots` (question XOR
+  variant set); the legacy flat `question_ids` still maps to all-fixed slots so
+  pre-VS2 clients need no change; the A9 lock compares the full slot signature.
+  Backend + migration + 11 offline tests green (`tests/test_slice_vs2.py`).
+  **Still to do:** the **builder UI** — a "variant set" slot type in
+  `NewAssessmentPage` and set-slot display on `AssessmentDetailPage` (mockup-first
+  per CONVENTIONS). **L (backend done; UI remaining).**
 - **A7 · Invite paths separated, not merged — DONE 2026-07-26.** Both paths were
   duplicative/confusing once assessments existed. Decision (product): **keep both,
   relabel to two distinct tools** rather than deprecate either. The per-question

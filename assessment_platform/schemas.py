@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from .models import as_utc
 
@@ -109,36 +109,79 @@ class QuestionOut(BaseModel):
     test_cases: list[TestCaseOut]
 
 
-class AssessmentCreate(BaseModel):
-    """An interviewer's assessment: a named, ordered set of their own questions
-    with an optional total time budget (T4)."""
+class AssessmentSlotIn(BaseModel):
+    """One slot of an assessment: EITHER a fixed question OR a variant-set pool
+    (VS2), exactly one set. A set-slot hands each candidate a different variant
+    at start time; a question-slot is the same question for everyone."""
+
+    question_id: str | None = None
+    variant_set_id: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> AssessmentSlotIn:
+        if bool(self.question_id) == bool(self.variant_set_id):
+            raise ValueError(
+                "each slot must set exactly one of question_id / variant_set_id"
+            )
+        return self
+
+
+class _AssessmentSlots(BaseModel):
+    """Shared slot-input handling for create/update. A caller supplies EITHER the
+    legacy flat `question_ids` (all fixed slots — the pre-VS2 shape, still accepted
+    so existing clients need no change) OR the ordered `slots` list (mixed fixed
+    questions + variant sets). Exactly one, at least one slot."""
+
+    question_ids: list[str] | None = None
+    slots: list[AssessmentSlotIn] | None = None
+
+    @model_validator(mode="after")
+    def _one_source(self) -> _AssessmentSlots:
+        if self.question_ids is not None and self.slots is not None:
+            raise ValueError("provide either question_ids or slots, not both")
+        if not self.ordered_slots():
+            raise ValueError("an assessment needs at least one question or variant-set slot")
+        return self
+
+    def ordered_slots(self) -> list[AssessmentSlotIn]:
+        if self.slots is not None:
+            return self.slots
+        return [AssessmentSlotIn(question_id=qid) for qid in (self.question_ids or [])]
+
+
+class AssessmentCreate(_AssessmentSlots):
+    """An interviewer's assessment: a named, ordered set of question / variant-set
+    slots with an optional total time budget (T4, VS2)."""
 
     # Optional: the UI omits it and the server generates slug(title)+suffix.
     id: str | None = None
     title: str
     duration_minutes: int | None = Field(default=None, gt=0)  # None = untimed total
-    # Ordered question ids; order here becomes the candidate's question order.
-    question_ids: list[str] = Field(min_length=1)
     # Per-assessment branding (A12): shown on the candidate IDE header. Both
     # optional; logo_url is a URL reference, never base64.
     org_name: str | None = None
     logo_url: str | None = None
 
 
-class AssessmentUpdate(BaseModel):
+class AssessmentUpdate(_AssessmentSlots):
     """Full replace of an assessment's mutable fields (PUT semantics)."""
 
     title: str
     duration_minutes: int | None = Field(default=None, gt=0)
-    question_ids: list[str] = Field(min_length=1)
     org_name: str | None = None
     logo_url: str | None = None
 
 
 class AssessmentQuestionOut(BaseModel):
-    question_id: str
+    """One slot of an assessment. A fixed slot carries `question_id`; a variant-set
+    slot (VS2) carries `variant_set_id` and `variant_count` instead. `title` is the
+    question title or the set title, denormalized so the builder needs no 2nd fetch."""
+
+    question_id: str | None = None
+    variant_set_id: str | None = None
+    variant_count: int | None = None
     position: int
-    title: str  # denormalized for the builder/results UI — no second fetch needed
+    title: str
 
 
 class AssessmentOut(BaseModel):
@@ -154,9 +197,14 @@ class AssessmentOut(BaseModel):
 
 
 class AssessmentAttemptQuestionOut(BaseModel):
-    """One question's result within a candidate's sitting (A3/A11)."""
+    """One question's result within a candidate's sitting (A3/A11). For a
+    variant-set slot (VS2), `question_id` is the variant this candidate was
+    assigned and `variant_label` names it (different candidates get different
+    variants of the same slot); null when they never started the slot."""
 
-    question_id: str
+    question_id: str | None = None
+    variant_set_id: str | None = None
+    variant_label: str | None = None
     title: str
     submitted: bool
     submission_id: str | None = None
