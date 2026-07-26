@@ -11,7 +11,7 @@ Effort key: **XS** (minutes) · **S** (self-contained) · **M** (multi-file) · 
 
 ---
 
-## A. Assessment-era gaps — found in manual testing 2026-07-24 (highest priority)
+## A. Assessment-era gaps — found in manual testing 2026-07-24, updated 2026-07-26 (highest priority)
 
 The T4 multi-question assessment epic shipped; driving it end-to-end surfaced these.
 Several are "the single-question flow had it, the assessment flow doesn't yet."
@@ -23,15 +23,29 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   surfaced. Needs: an assessment column/grouping in the summary schema + list route
   + `SubmissionsPage`, **and** ideally an **assessment-level attempt view** (one
   candidate's whole sitting — all N questions + an aggregate — instead of N
-  scattered rows). **M.**
-- **A5 · No completion screen after time's up in the multi-question flow.** The
-  single-question `CandidatePage` shows "Thanks, {name}! Your solution has been
-  submitted and is being graded." (`CandidatePage.tsx:268`). `AssessmentFlow` has
-  **no terminal state** — at zero it auto-submits with errors swallowed
-  (`AssessmentFlow.tsx:104-126`) and leaves the locked IDE on "Time's up · 0/N
-  submitted." Because A1's rejection makes the auto-submits fail, candidates land
-  on a dead "0/N" screen with no acknowledgement. Needs an "assessment complete"
-  screen + non-silent handling of auto-submit failures (retry/report). **M.**
+  scattered rows). **M.** Re-confirmed 2026-07-26: `SubmissionSummaryOut`
+  (`schemas.py:196-210`) has no `assessment_id`/title field at all, so the fix is
+  purely additive — no creator/owner field is needed or currently shown.
+- **A5 · No completion screen in the multi-question flow — neither on timeout
+  nor on manual completion.** `CandidatePage.tsx`'s single-question flow has a
+  real terminal state: `doSubmit` sets `stage = 'submitted'`, which swaps the
+  whole IDE for a `"Thanks, {name}! Your solution has been submitted and is
+  being graded."` notice (`CandidatePage.tsx:264-270`). `AssessmentFlow.tsx` has
+  **no equivalent** — the IDE (header/question-strip/description/editor/console)
+  stays mounted and merely disables itself (`locked = isDone || timeUp`,
+  `AssessmentFlow.tsx:72-73`) in both cases confirmed in manual QA
+  (2026-07-24/26):
+  1. **Timeout** — the auto-submit effect (`AssessmentFlow.tsx:104-126`) does
+     submit every question's current editor content (A1 no longer rejects it),
+     but afterward the candidate is left on the same IDE with only a "Time's up"
+     timer badge (`:215-222`) — no acknowledgement.
+  2. **Manual completion** — nothing in the file reacts to
+     `submittedCount === questions.length`; a candidate who submits every
+     question themselves before time is up is left sitting on the last
+     question's now-read-only editor with zero confirmation.
+  Needs a genuine terminal screen — mirror `CandidatePage`'s `'submitted'` stage
+  / `"Thanks, {name}! ..."` pattern — reached from **both** triggers, replacing
+  the IDE view entirely rather than just disabling it. **M.**
 - **A7 · Invites should be assessment-level, not (also) question-level.** Now that
   assessments exist, offering "send invite" on a single question is duplicative and
   confusing. Decide the model: either deprecate per-question invites in the UI in
@@ -57,13 +71,32 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   per-question results; there's no composite (weighted score, "passed 2/3", overall
   verdict) for the sitting. Interviewers need an at-a-glance assessment outcome.
   Pairs with A3's attempt view. **M.**
-- **A12 · Enterprise branding / uploadable logo.** The candidate IDE header hardcodes
-  "Coding assessment" (`AssessmentFlow.tsx:201`) and doesn't even show the
-  assessment's own title. Add **workspace-level branding** (logo + display name, e.g.
-  "Amazon") stored on the interviewer/workspace, rendered as `{logo} {Org} —
-  {assessment title}` with a small "Powered by assess.dev"; optional per-assessment
-  override later. Store the logo as an asset/URL reference, not base64 in a row.
-  Meaningful for selling white-labeled to enterprises. **L.**
+- **A12 · Enterprise branding / uploadable logo — per-assessment first (re-scoped
+  2026-07-26).** The candidate IDE header hardcodes "Coding assessment"
+  (`AssessmentFlow.tsx:201`) and doesn't even show the assessment's own title.
+  Build the **per-assessment** logo + display name upload first — set on
+  `NewAssessmentPage`/`AssessmentDetailPage`, stored on the `Assessment` row,
+  rendered as `{logo} {Org} — {assessment title}` with a small "Powered by
+  assess.dev" on the candidate IDE header. A workspace-level default (set once
+  per interviewer, used when an assessment has no override) is a natural
+  follow-up once the per-assessment path exists, not a prerequisite. Store the
+  logo as an asset/URL reference, not base64 in a row. Meaningful for selling
+  white-labeled to enterprises. **L.**
+- **A13 · Redundant per-question timer once a question lives in an assessment
+  (low priority, found 2026-07-26).** Both `QuestionCreate` and
+  `AssessmentCreate` carry `duration_minutes` (`schemas.py:68`, `:119`), and
+  `AddQuestionPage.tsx` renders its own "Time allowed" input + "Indefinite"
+  checkbox (`:444`, `:465`) alongside `NewAssessmentPage.tsx`'s "Time allowed
+  (whole assessment)" control (`:94`). Once a question is added to an
+  assessment, the assessment's timer is what actually gates the candidate, so
+  the per-question value becomes confusing/unused there. Either hide or
+  relabel the per-question control when the question is used inside an
+  assessment, or clarify in copy that it only governs a standalone
+  single-question invite. **XS-S.**
+- **A14 · New-assessment page's empty question library is a dead end (found
+  2026-07-26).** `NewAssessmentPage.tsx` shows `"You have no questions yet."`
+  when the library is empty, but offers no way out — no link/button to
+  `/questions/new`. Add a "New question" CTA to that empty state. **XS.**
 
 ---
 
