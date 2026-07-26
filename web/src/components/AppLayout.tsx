@@ -10,6 +10,9 @@ function crumbFor(pathname: string): string {
   if (pathname === '/assessments/new') return 'New assessment'
   if (pathname === '/assessments') return 'Assessments'
   if (pathname.startsWith('/assessments/')) return 'Assessment'
+  if (pathname === '/variant-sets/new') return 'New variant set'
+  if (pathname === '/variant-sets') return 'Variant sets'
+  if (pathname.startsWith('/variant-sets/')) return 'Variant set'
   return ''
 }
 

@@ -11,6 +11,9 @@ import { SubmissionDetailPage } from './pages/SubmissionDetailPage'
 import { AssessmentsListPage } from './pages/AssessmentsListPage'
 import { NewAssessmentPage } from './pages/NewAssessmentPage'
 import { AssessmentDetailPage } from './pages/AssessmentDetailPage'
+import { VariantSetsListPage } from './pages/VariantSetsListPage'
+import { NewVariantSetPage } from './pages/NewVariantSetPage'
+import { VariantSetDetailPage } from './pages/VariantSetDetailPage'
 import { CandidatePage } from './pages/CandidatePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { NotFoundPage } from './pages/NotFoundPage'
@@ -88,6 +91,37 @@ export function App() {
           <ProtectedRoute>
             <AppLayout>
               <AssessmentDetailPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/variant-sets"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <VariantSetsListPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/variant-sets/new"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <NewVariantSetPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/variant-sets/:id"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <VariantSetDetailPage />
             </AppLayout>
           </ProtectedRoute>
         }

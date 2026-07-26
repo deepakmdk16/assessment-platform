@@ -19,6 +19,7 @@ export function Sidebar() {
   const onNew = pathname === '/questions/new'
   const onQuestions = pathname === '/dashboard' || (pathname.startsWith('/questions/') && !onNew)
   const onSubmissions = pathname.startsWith('/submissions')
+  const onVariantSets = pathname.startsWith('/variant-sets')
   const onAssessments = pathname.startsWith('/assessments')
   const onSettings = pathname.startsWith('/settings')
 
@@ -36,6 +37,15 @@ export function Sidebar() {
             <path d="M4 6h16M4 12h16M4 18h10" />
           </svg>
           Questions
+        </Link>
+        <Link to="/variant-sets" className={onVariantSets ? 'on' : undefined}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="3" y="3" width="7" height="7" rx="1.5" />
+            <rect x="14" y="3" width="7" height="7" rx="1.5" />
+            <rect x="3" y="14" width="7" height="7" rx="1.5" />
+            <rect x="14" y="14" width="7" height="7" rx="1.5" />
+          </svg>
+          Variant sets
         </Link>
         <Link to="/assessments" className={onAssessments ? 'on' : undefined}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
