@@ -50,6 +50,7 @@ from .models import (
     Question,
     QuestionTestCase,
     Submission,
+    VariantSet,
     as_utc,
 )
 from .question_rules import case_floor_violations
@@ -94,6 +95,13 @@ from .schemas import (
     TestCaseIn,
     TestCaseOut,
     TokenOut,
+    VariantDraftOut,
+    VariantOut,
+    VariantSetCreate,
+    VariantSetDraftIn,
+    VariantSetDraftOut,
+    VariantSetOut,
+    VariantSetSummaryOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -540,6 +548,31 @@ def _agent_detail(exc: httpx.HTTPStatusError) -> str:
     return str(detail)
 
 
+def _question_create_from_agent(q: dict) -> QuestionCreate:
+    """Reshape one agent-drafted question payload into the create form's shape.
+
+    Shared by the single-draft and variant-set-draft endpoints. The agent should
+    send `pass_threshold`/`time_limit_s`, but guard explicit nulls so a stray one
+    is a usable draft, not a 500 (`.get(k, default)` only defaults an absent key)."""
+    example = q.get("example") or {}
+    pass_threshold = q.get("pass_threshold")
+    time_limit_s = q.get("time_limit_s")
+    return QuestionCreate(
+        id=q.get("id", ""),
+        title=q.get("title", ""),
+        prompt=q.get("prompt", ""),
+        constraints=q.get("constraints", ""),
+        time_limit_s=time_limit_s if time_limit_s is not None else 2.0,
+        # Keep the agent's 0..1 fraction (QuestionCreate stores a fraction); the
+        # wizard scales it to percent for display and back to a fraction on save.
+        pass_threshold=pass_threshold if pass_threshold is not None else 0.9,
+        required_complexity=q.get("required_complexity"),
+        example_input=example.get("input"),
+        example_output=example.get("output"),
+        test_cases=q.get("test_cases", []),
+    )
+
+
 @app.post("/questions/draft", response_model=QuestionDraftOut)
 async def draft_question(
     body: QuestionDraftIn,
@@ -575,26 +608,7 @@ async def draft_question(
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"agent unreachable: {exc}") from exc
 
-    q = payload.get("question") or {}
-    example = q.get("example") or {}
-    # The agent should send these, but guard explicit nulls so a stray one is a
-    # usable draft, not a 500 (`.get(k, default)` only defaults an absent key).
-    pass_threshold = q.get("pass_threshold")
-    time_limit_s = q.get("time_limit_s")
-    question = QuestionCreate(
-        id=q.get("id", ""),
-        title=q.get("title", ""),
-        prompt=q.get("prompt", ""),
-        constraints=q.get("constraints", ""),
-        time_limit_s=time_limit_s if time_limit_s is not None else 2.0,
-        # Keep the agent's 0..1 fraction (QuestionCreate stores a fraction); the
-        # wizard scales it to percent for display and back to a fraction on save.
-        pass_threshold=pass_threshold if pass_threshold is not None else 0.9,
-        required_complexity=q.get("required_complexity"),
-        example_input=example.get("input"),
-        example_output=example.get("output"),
-        test_cases=q.get("test_cases", []),
-    )
+    question = _question_create_from_agent(payload.get("question") or {})
     return QuestionDraftOut(
         question=question,
         warnings=payload.get("warnings", []),
@@ -603,6 +617,234 @@ async def draft_question(
         engine=payload.get("engine", ""),
         cost_usd=payload.get("cost_usd"),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Variant sets (per-candidate unique variants)                                  #
+# --------------------------------------------------------------------------- #
+
+# Short display tags for the variants within a set (A, B, C…). A set is capped at
+# 8 on the agent side, so the alphabet never runs out.
+_VARIANT_LABELS = "ABCDEFGH"
+
+
+def _owned_variant_set(set_id: str, current: Interviewer, session: Session) -> VariantSet:
+    """Load a variant set and enforce ownership (404 if missing/not the caller's —
+    a single status so one owner can't probe another's ids)."""
+    vs = session.get(VariantSet, set_id)
+    if vs is None or vs.owner_id != current.id:
+        raise HTTPException(status_code=404, detail=f"no variant set with id {set_id!r}.")
+    return vs
+
+
+def _variant_out(q: Question) -> VariantOut:
+    return VariantOut(**_question_out(q).model_dump(), variant_label=q.variant_label)
+
+
+def _variant_set_out(vs: VariantSet, variants: list[Question]) -> VariantSetOut:
+    return VariantSetOut(
+        id=vs.id,
+        title=vs.title,
+        brief=vs.brief,
+        language=vs.language,
+        difficulty=vs.difficulty,
+        target_complexity=vs.target_complexity,
+        status=vs.status,
+        created_at=vs.created_at,
+        updated_at=vs.updated_at,
+        variants=[_variant_out(q) for q in variants],
+    )
+
+
+def _set_variants(set_id: str, session: Session) -> list[Question]:
+    """A set's variant questions, ordered by their label (A, B, C…)."""
+    return list(
+        session.exec(
+            select(Question)
+            .where(Question.variant_set_id == set_id)
+            .order_by(col(Question.variant_label))
+        ).all()
+    )
+
+
+@app.post("/variant-sets/draft", response_model=VariantSetDraftOut)
+async def draft_variant_set(
+    body: VariantSetDraftIn,
+    request: Request,
+    current: Interviewer = Depends(get_current_interviewer),
+) -> VariantSetDraftOut:
+    """Draft a SET of sibling variants from one brief via the agent. Stateless:
+    stores NOTHING — the interviewer reviews the variants (and the parity warnings)
+    and then saves via POST /variant-sets. Rate-limited on the same 'draft' bucket
+    as single drafting; a set costs `count` full drafts, so it is the pricier call."""
+    limiter.check(
+        "draft", client_ip(request), config.DRAFT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
+    try:
+        payload = await agent_client.draft_set(
+            brief=body.brief,
+            language=body.language,
+            count=body.count,
+            difficulty=body.difficulty,
+            target_complexity=body.target_complexity,
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code, detail=_agent_detail(exc)
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"agent unreachable: {exc}") from exc
+
+    variants: list[VariantDraftOut] = []
+    total_cost = 0.0
+    have_cost = False
+    for v in payload.get("variants", []):
+        cost = v.get("cost_usd")
+        if cost is not None:
+            total_cost += cost
+            have_cost = True
+        q = v.get("question")
+        if not q:
+            # A variant the agent couldn't draft carries no question; it's counted
+            # in the set-level shortfall warning, not shown as an empty card.
+            continue
+        variants.append(
+            VariantDraftOut(
+                label=_VARIANT_LABELS[len(variants)] if len(variants) < len(_VARIANT_LABELS) else None,
+                question=_question_create_from_agent(q),
+                reference_solution=v.get("reference_solution"),
+                reference_language=v.get("reference_language"),
+                warnings=v.get("warnings", []),
+            )
+        )
+    return VariantSetDraftOut(
+        variants=variants,
+        warnings=payload.get("warnings", []),
+        engine=payload.get("engine", ""),
+        cost_usd=total_cost if have_cost else None,
+    )
+
+
+@app.post("/variant-sets", response_model=VariantSetOut, status_code=201)
+def create_variant_set(
+    body: VariantSetCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> VariantSetOut:
+    """Persist a reviewed variant set: the set row plus one Question per variant,
+    each tagged with `variant_set_id`/`variant_label`. Each variant clears the same
+    case-count floor a standalone question does."""
+    owner = _require_id(current.id)
+    set_id = (body.id or "").strip() or _generate_id(
+        body.title, lambda c: session.get(VariantSet, c) is not None
+    )
+    if session.get(VariantSet, set_id) is not None:
+        raise HTTPException(status_code=409, detail=f"variant set {set_id!r} already exists.")
+
+    vs = VariantSet(
+        id=set_id,
+        owner_id=owner,
+        title=body.title,
+        brief=body.brief,
+        language=body.language,
+        difficulty=body.difficulty,
+        target_complexity=body.target_complexity,
+    )
+    session.add(vs)
+
+    variants: list[Question] = []
+    for i, v in enumerate(body.variants):
+        _enforce_case_floor(v.test_cases)
+        qid = (v.id or "").strip() or _generate_id(
+            v.title, lambda c: session.get(Question, c) is not None
+        )
+        if session.get(Question, qid) is not None:
+            raise HTTPException(status_code=409, detail=f"question {qid!r} already exists.")
+        q = Question(
+            id=qid,
+            owner_id=owner,
+            title=v.title,
+            prompt=v.prompt,
+            constraints=v.constraints,
+            time_limit_s=v.time_limit_s,
+            pass_threshold=v.pass_threshold,
+            required_complexity=v.required_complexity,
+            example_input=v.example_input,
+            example_output=v.example_output,
+            difficulty=v.difficulty,
+            reference_solution=v.reference_solution,
+            reference_language=v.reference_language,
+            duration_minutes=v.duration_minutes,
+            variant_set_id=set_id,
+            variant_label=v.label or (_VARIANT_LABELS[i] if i < len(_VARIANT_LABELS) else str(i + 1)),
+            test_cases=[
+                QuestionTestCase(
+                    name=tc.name,
+                    stdin=tc.stdin,
+                    expected=tc.expected,
+                    category=tc.category,
+                    weight=tc.weight,
+                )
+                for tc in v.test_cases
+            ],
+        )
+        session.add(q)
+        variants.append(q)
+
+    session.commit()
+    session.refresh(vs)
+    for q in variants:
+        session.refresh(q)
+    return _variant_set_out(vs, variants)
+
+
+@app.get("/variant-sets", response_model=Page[VariantSetSummaryOut])
+def list_variant_sets(
+    include_archived: bool = False,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> Page[VariantSetSummaryOut]:
+    where = [VariantSet.owner_id == current.id]
+    if not include_archived:
+        where.append(VariantSet.status == "active")
+    total = session.exec(select(func.count()).select_from(VariantSet).where(*where)).one()
+    stmt = (
+        select(VariantSet)
+        .where(*where)
+        .order_by(col(VariantSet.created_at).desc(), col(VariantSet.id))
+        .offset(offset)
+        .limit(limit)
+    )
+    items: list[VariantSetSummaryOut] = []
+    for vs in session.exec(stmt).all():
+        count = session.exec(
+            select(func.count()).select_from(Question).where(Question.variant_set_id == vs.id)
+        ).one()
+        items.append(
+            VariantSetSummaryOut(
+                id=vs.id,
+                title=vs.title,
+                language=vs.language,
+                difficulty=vs.difficulty,
+                variant_count=count,
+                status=vs.status,
+                created_at=vs.created_at,
+                updated_at=vs.updated_at,
+            )
+        )
+    return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@app.get("/variant-sets/{set_id}", response_model=VariantSetOut)
+def get_variant_set(
+    set_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> VariantSetOut:
+    vs = _owned_variant_set(set_id, current, session)
+    return _variant_set_out(vs, _set_variants(set_id, session))
 
 
 @app.get("/questions", response_model=Page[QuestionOut])
