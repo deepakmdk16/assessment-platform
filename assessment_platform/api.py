@@ -45,6 +45,7 @@ from .models import (
     AssessmentQuestion,
     AssessmentResult,
     CandidateAttempt,
+    CandidateSlotVariant,
     Interviewer,
     Invite,
     Question,
@@ -61,6 +62,7 @@ from .schemas import (
     AssessmentCreate,
     AssessmentOut,
     AssessmentQuestionOut,
+    AssessmentSlotIn,
     AssessmentUpdate,
     CandidateQuestionPublic,
     CandidateQuestionView,
@@ -205,6 +207,7 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
         status=sub.status,
         agent_job_id=sub.agent_job_id,
         created_at=sub.created_at,
+        late=sub.late,
         result=result_out,
     )
 
@@ -225,6 +228,7 @@ def _submission_summary(
         created_at=sub.created_at,
         verdict=result.verdict if result else None,
         score_pct=result.score_pct if result else None,
+        late=sub.late,
         assessment_id=assessment.id if assessment else None,
         assessment_title=assessment.title if assessment else None,
     )
@@ -1020,9 +1024,32 @@ def _owned_assessment(assessment_id: str, current: Interviewer, session: Session
     return a
 
 
-def _assessment_out(a: Assessment) -> AssessmentOut:
-    # `a.questions` is ordered by position (relationship order_by). Each carries
-    # the question title so the builder / results UI needs no second fetch.
+def _assessment_slot_out(aq: AssessmentQuestion, session: Session) -> AssessmentQuestionOut:
+    """One slot for the builder/results UI, denormalized so no 2nd fetch is needed.
+    A fixed slot carries its question title; a variant-set slot (VS2) carries the
+    set title + how many variants it pools."""
+    if aq.variant_set_id is not None:
+        vs = session.get(VariantSet, aq.variant_set_id)
+        count = session.exec(
+            select(func.count())
+            .select_from(Question)
+            .where(Question.variant_set_id == aq.variant_set_id)
+        ).one()
+        return AssessmentQuestionOut(
+            variant_set_id=aq.variant_set_id,
+            variant_count=count,
+            position=aq.position,
+            title=vs.title if vs else aq.variant_set_id,
+        )
+    return AssessmentQuestionOut(
+        question_id=aq.question_id,
+        position=aq.position,
+        title=aq.question.title if aq.question else (aq.question_id or ""),
+    )
+
+
+def _assessment_out(a: Assessment, session: Session) -> AssessmentOut:
+    # `a.questions` is ordered by position (relationship order_by).
     return AssessmentOut(
         id=a.id,
         title=a.title,
@@ -1032,32 +1059,34 @@ def _assessment_out(a: Assessment) -> AssessmentOut:
         status=a.status,
         created_at=a.created_at,
         updated_at=a.updated_at,
-        questions=[
-            AssessmentQuestionOut(
-                question_id=aq.question_id,
-                position=aq.position,
-                title=aq.question.title if aq.question else aq.question_id,
-            )
-            for aq in a.questions
-        ],
+        questions=[_assessment_slot_out(aq, session) for aq in a.questions],
     )
 
 
 def _membership_rows(
-    question_ids: list[str], current: Interviewer, session: Session
+    slots: list[AssessmentSlotIn], current: Interviewer, session: Session
 ) -> list[AssessmentQuestion]:
-    """Validate an ordered question-id list and build the membership rows.
-
-    Every id must be one of the caller's questions (404/403 via _owned_question),
-    and a question may appear at most once (the join's unique constraint would
-    reject a repeat — reported here as a clean 400)."""
-    if len(set(question_ids)) != len(question_ids):
+    """Validate an ordered slot list and build the membership rows. Each slot is a
+    fixed question OR a variant set (VS2), both owner-scoped (404/403 via
+    `_owned_question` / `_owned_variant_set`). A question or variant set may appear
+    at most once — reported as a clean 400 (the join's unique key also backs the
+    question case, but not the set case, so this is the real guard)."""
+    q_ids = [s.question_id for s in slots if s.question_id is not None]
+    vs_ids = [s.variant_set_id for s in slots if s.variant_set_id is not None]
+    if len(set(q_ids)) != len(q_ids):
         raise HTTPException(status_code=400, detail="a question may appear at most once.")
-    for qid in question_ids:
-        _owned_question(qid, current, session)  # 404/403
-    return [
-        AssessmentQuestion(question_id=qid, position=i) for i, qid in enumerate(question_ids)
-    ]
+    if len(set(vs_ids)) != len(vs_ids):
+        raise HTTPException(status_code=400, detail="a variant set may appear at most once.")
+    rows: list[AssessmentQuestion] = []
+    for i, s in enumerate(slots):
+        if s.question_id is not None:
+            _owned_question(s.question_id, current, session)  # 404/403
+            rows.append(AssessmentQuestion(question_id=s.question_id, position=i))
+        else:
+            assert s.variant_set_id is not None  # slot validator guarantees exactly one
+            _owned_variant_set(s.variant_set_id, current, session)  # 404/403
+            rows.append(AssessmentQuestion(variant_set_id=s.variant_set_id, position=i))
+    return rows
 
 
 def _assessment_has_invite(assessment_id: str, session: Session) -> bool:
@@ -1092,12 +1121,12 @@ def create_assessment(
         duration_minutes=body.duration_minutes,
         org_name=body.org_name,
         logo_url=body.logo_url,
-        questions=_membership_rows(body.question_ids, current, session),
+        questions=_membership_rows(body.ordered_slots(), current, session),
     )
     session.add(a)
     session.commit()
     session.refresh(a)
-    return _assessment_out(a)
+    return _assessment_out(a, session)
 
 
 @app.get("/assessments", response_model=Page[AssessmentOut])
@@ -1119,7 +1148,7 @@ def list_assessments(
         .offset(offset)
         .limit(limit)
     )
-    items = [_assessment_out(a) for a in session.exec(stmt).all()]
+    items = [_assessment_out(a, session) for a in session.exec(stmt).all()]
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -1129,7 +1158,7 @@ def get_assessment(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> AssessmentOut:
-    return _assessment_out(_owned_assessment(assessment_id, current, session))
+    return _assessment_out(_owned_assessment(assessment_id, current, session), session)
 
 
 @app.put("/assessments/{assessment_id}", response_model=AssessmentOut)
@@ -1141,11 +1170,14 @@ def update_assessment(
 ) -> AssessmentOut:
     a = _owned_assessment(assessment_id, current, session)
     # A9: once an invite has gone out (or, transitively, a submission exists),
-    # two candidates in the "same" assessment must sit the same questions in
-    # the same order — lock the SET, not the whole record. Title/duration/
-    # branding stay freely editable; only a real membership/order change 409s.
-    current_ids = [aq.question_id for aq in a.questions]
-    if body.question_ids != current_ids and _assessment_has_invite(assessment_id, session):
+    # two candidates in the "same" assessment must sit the same slots in the same
+    # order — lock the SET, not the whole record. Title/duration/branding stay
+    # freely editable; only a real membership/order change 409s. The signature
+    # compares each slot's identity (fixed question OR variant set, VS2).
+    new_slots = body.ordered_slots()
+    current_sig = [(aq.question_id, aq.variant_set_id) for aq in a.questions]
+    new_sig = [(s.question_id, s.variant_set_id) for s in new_slots]
+    if new_sig != current_sig and _assessment_has_invite(assessment_id, session):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -1164,11 +1196,11 @@ def update_assessment(
     # (assessment_id, question_id) unique key during a single flush.
     a.questions.clear()
     session.flush()
-    a.questions.extend(_membership_rows(body.question_ids, current, session))
+    a.questions.extend(_membership_rows(new_slots, current, session))
     session.add(a)
     session.commit()
     session.refresh(a)
-    return _assessment_out(a)
+    return _assessment_out(a, session)
 
 
 @app.post("/assessments/{assessment_id}/archive", response_model=AssessmentOut)
@@ -1184,7 +1216,7 @@ def archive_assessment(
     session.add(a)
     session.commit()
     session.refresh(a)
-    return _assessment_out(a)
+    return _assessment_out(a, session)
 
 
 @app.post("/assessments/{assessment_id}/unarchive", response_model=AssessmentOut)
@@ -1200,7 +1232,7 @@ def unarchive_assessment(
     session.add(a)
     session.commit()
     session.refresh(a)
-    return _assessment_out(a)
+    return _assessment_out(a, session)
 
 
 @app.delete("/assessments/{assessment_id}", status_code=204)
@@ -1420,15 +1452,33 @@ def list_assessment_attempts(
     yet); that's still visible via the invite list.
     """
     a = _owned_assessment(assessment_id, current, session)
-    ordered_questions = [
-        (aq.question_id, aq.question.title if aq.question else aq.question_id)
-        for aq in a.questions
-    ]
+    slots = list(a.questions)  # ordered by position
     invite_ids = session.exec(
         select(Invite.id).where(Invite.assessment_id == assessment_id)
     ).all()
     if not invite_ids:
         return []
+    # Display data for variant-set slots (VS2): the set's title (stable column
+    # header across candidates) and each variant's label. Plus the per-candidate
+    # assignment — a set-slot's concrete variant differs by candidate, so a
+    # submission matches via the variant handed to THAT candidate, not the slot.
+    set_title: dict[int, str] = {}
+    label_of: dict[str, str] = {}
+    assigned: dict[tuple[int, str, int], str] = {}
+    for aq in slots:
+        if aq.variant_set_id is not None and aq.id is not None:
+            vs = session.get(VariantSet, aq.variant_set_id)
+            set_title[aq.id] = vs.title if vs else aq.variant_set_id
+            for v in _set_variants(aq.variant_set_id, session):
+                label_of[v.id] = v.variant_label or ""
+    for csv_row in session.exec(
+        select(CandidateSlotVariant).where(
+            col(CandidateSlotVariant.invite_id).in_(invite_ids)
+        )
+    ).all():
+        assigned[
+            (csv_row.invite_id, csv_row.candidate_email, csv_row.assessment_question_id)
+        ] = csv_row.question_id
     attempts = session.exec(
         select(CandidateAttempt)
         .where(col(CandidateAttempt.invite_id).in_(invite_ids))
@@ -1445,12 +1495,14 @@ def list_assessment_attempts(
         if s.candidate_email is not None
     ]
     results = _results_by_submission(subs, session)
-    # (candidate_email, question_id) -> the submission's result / id, if any.
+    # (candidate_email, question_id) -> the submission's result / id / late flag.
     graded: dict[tuple[str, str], AssessmentResult] = {}
     submission_id_by_pair: dict[tuple[str, str], str] = {}
+    late_by_pair: dict[tuple[str, str], bool] = {}
     for s in subs:
         assert s.candidate_email is not None  # filtered above
         submission_id_by_pair[(s.candidate_email, s.question_id)] = s.id
+        late_by_pair[(s.candidate_email, s.question_id)] = s.late
         r = results.get(s.id)
         if r is not None:
             graded[(s.candidate_email, s.question_id)] = r
@@ -1460,18 +1512,38 @@ def list_assessment_attempts(
         q_rows = []
         graded_scores: list[float] = []
         passed = 0
-        for qid, title in ordered_questions:
-            r = graded.get((attempt.candidate_email, qid))
+        for aq in slots:
+            if aq.variant_set_id is not None:
+                # This candidate's assigned variant for the set-slot (may be absent
+                # if they never resolved it, e.g. never started — show it unfilled).
+                qid = assigned.get(
+                    (attempt.invite_id, attempt.candidate_email, aq.id)
+                ) if aq.id is not None else None
+                title = set_title.get(aq.id or -1, aq.variant_set_id)
+                variant_label = label_of.get(qid) if qid else None
+                variant_set_id = aq.variant_set_id
+            else:
+                qid = aq.question_id
+                title = aq.question.title if aq.question else (aq.question_id or "")
+                variant_label = None
+                variant_set_id = None
+            r = graded.get((attempt.candidate_email, qid)) if qid else None
             if r is not None:
                 graded_scores.append(r.score_pct)
                 if r.verdict == "PASS":
                     passed += 1
+            submitted = bool(qid and (attempt.candidate_email, qid) in submission_id_by_pair)
             q_rows.append(
                 AssessmentAttemptQuestionOut(
                     question_id=qid,
+                    variant_set_id=variant_set_id,
+                    variant_label=variant_label,
                     title=title,
-                    submitted=(attempt.candidate_email, qid) in submission_id_by_pair,
-                    submission_id=submission_id_by_pair.get((attempt.candidate_email, qid)),
+                    submitted=submitted,
+                    late=late_by_pair.get((attempt.candidate_email, qid), False) if qid else False,
+                    submission_id=submission_id_by_pair.get((attempt.candidate_email, qid))
+                    if qid
+                    else None,
                     verdict=r.verdict if r else None,
                     score_pct=r.score_pct if r else None,
                 )
@@ -1482,7 +1554,7 @@ def list_assessment_attempts(
                 candidate_email=attempt.candidate_email,
                 questions=q_rows,
                 passed_count=passed,
-                total_count=len(ordered_questions),
+                total_count=len(slots),
                 avg_score_pct=(
                     sum(graded_scores) / len(graded_scores) if graded_scores else None
                 ),
@@ -1573,14 +1645,80 @@ def _check_not_already_submitted(
         raise HTTPException(status_code=409, detail=_ALREADY_SUBMITTED_DETAIL)
 
 
-def _invite_questions(invite: Invite, session: Session) -> list[Question]:
-    """The ordered questions this invite presents: an assessment's questions (T4)
-    or a legacy invite's single question. 404 if the referenced thing is gone."""
+def _resolve_slot_variant(
+    invite: Invite, aq: AssessmentQuestion, email: str, session: Session
+) -> Question:
+    """The concrete variant this candidate gets for a variant-set slot (VS2),
+    frozen on first call and stable afterwards. Round-robin across the
+    assessment's candidates (count of prior assignments for this slot) so the pool
+    stays evenly used. The (invite, email, slot) unique key makes the get-or-create
+    race-safe, like `_get_or_start_attempt`; it never touches the clock."""
+    key = (
+        CandidateSlotVariant.invite_id == invite.id,
+        CandidateSlotVariant.candidate_email == email,
+        CandidateSlotVariant.assessment_question_id == aq.id,
+    )
+    existing = session.exec(select(CandidateSlotVariant).where(*key)).first()
+    if existing is not None:
+        q = session.get(Question, existing.question_id)
+        if q is not None:
+            return q  # a deleted variant falls through to a fresh assignment
+    assert aq.variant_set_id is not None  # caller only passes set-slots
+    variants = _set_variants(aq.variant_set_id, session)
+    if not variants:
+        raise HTTPException(
+            status_code=404, detail="a variant set in this assessment has no variants."
+        )
+    cursor = session.exec(
+        select(func.count())
+        .select_from(CandidateSlotVariant)
+        .where(CandidateSlotVariant.assessment_question_id == aq.id)
+    ).one()
+    chosen = variants[cursor % len(variants)]
+    row = CandidateSlotVariant(
+        invite_id=_require_id(invite.id),
+        candidate_email=email,
+        assessment_question_id=_require_id(aq.id),
+        question_id=chosen.id,
+    )
+    session.add(row)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raced = session.exec(select(CandidateSlotVariant).where(*key)).first()
+        if raced is None:  # pragma: no cover — the constraint guarantees a row here
+            raise
+        q = session.get(Question, raced.question_id)
+        assert q is not None  # just-written variant exists
+        return q
+    return chosen
+
+
+def _invite_questions(
+    invite: Invite, session: Session, email: str | None = None
+) -> list[Question]:
+    """The ordered questions this invite presents to `email`: an assessment's slots
+    (T4) or a legacy invite's single question. A variant-set slot (VS2) resolves to
+    this candidate's assigned variant — so the list is per-candidate. 404 if a
+    referenced thing is gone. `email` is required to resolve a set-slot; without it
+    (should not happen on a candidate path) a set-slot falls back to its first
+    variant so nothing crashes."""
     if invite.assessment_id is not None:
         a = session.get(Assessment, invite.assessment_id)
         if a is None:
             raise HTTPException(status_code=404, detail="this assessment no longer exists.")
-        qs = [aq.question for aq in a.questions if aq.question is not None]
+        qs: list[Question] = []
+        for aq in a.questions:
+            if aq.variant_set_id is not None:
+                if email is not None:
+                    qs.append(_resolve_slot_variant(invite, aq, email, session))
+                else:
+                    pool = _set_variants(aq.variant_set_id, session)
+                    if pool:
+                        qs.append(pool[0])
+            elif aq.question is not None:
+                qs.append(aq.question)
         if not qs:
             raise HTTPException(status_code=404, detail="this assessment has no questions.")
         return qs
@@ -1600,11 +1738,15 @@ def _invite_duration(invite: Invite, session: Session) -> int | None:
     return q.duration_minutes if q else None
 
 
-def _resolve_question(invite: Invite, question_id: str | None, session: Session) -> Question:
-    """The question a run/submit targets. `question_id` None targets the single
-    question of a legacy invite; for a multi-question assessment it is required and
-    must name one of its questions."""
-    questions = _invite_questions(invite, session)
+def _resolve_question(
+    invite: Invite, question_id: str | None, email: str, session: Session
+) -> Question:
+    """The question a run/submit targets for `email`. `question_id` None targets the
+    single question of a legacy invite; for a multi-question assessment it is
+    required and must name one of the candidate's questions — for a variant-set slot
+    (VS2) that is the variant assigned to this candidate, so it must be resolved
+    against this candidate's own question list."""
+    questions = _invite_questions(invite, session, email)
     if question_id is None:
         if len(questions) == 1:
             return questions[0]
@@ -1672,30 +1814,34 @@ def _get_or_start_attempt(
     return attempt
 
 
-def _enforce_deadline(invite: Invite, attempt: CandidateAttempt, session: Session) -> None:
-    """Reject a submit that arrives after the sitting's window has closed.
+def _submit_is_late(invite: Invite, attempt: CandidateAttempt, session: Session) -> bool:
+    """Whether a submit arriving now is past the sitting's window — recorded but
+    flagged, no longer rejected, so a candidate's actual work is never discarded
+    (the client auto-submits at the buzzer for exactly this reason).
 
-    Server-authoritative: the deadline is `attempt.started_at` (stamped at
-    /start) + the invite's total duration (the assessment's, or a legacy
-    question's), plus a grace window for the auto-submit round-trip. No-op for
-    an untimed sitting.
+    Server-authoritative: the deadline is `attempt.started_at` (stamped at /start)
+    + the invite's total duration (the assessment's, or a legacy question's), plus
+    a grace window that absorbs the auto-submit round-trip — a submit inside grace
+    counts as on-time. Always False for an untimed sitting. Note the invite's own
+    lifecycle (revoked / expired) is enforced separately in `_load_invite_or_error`
+    and still hard-blocks a submit; only the per-candidate timer is relaxed here.
     """
     duration = _invite_duration(invite, session)
     if duration is None:
-        return
+        return False
     deadline = _deadline_for(attempt.started_at, duration)
     assert deadline is not None  # duration is not None here
-    if datetime.now(timezone.utc) > deadline + timedelta(seconds=config.SUBMIT_GRACE_SECONDS):
-        raise HTTPException(
-            status_code=410, detail="time's up — the assessment window has closed."
-        )
+    return datetime.now(timezone.utc) > deadline + timedelta(seconds=config.SUBMIT_GRACE_SECONDS)
 
 
 def _candidate_question_view(
     invite: Invite, session: Session, attempt: CandidateAttempt | None = None
 ) -> InvitePublicOut:
     # Candidate-facing view only — never expose test_cases or expected outputs.
-    questions = _invite_questions(invite, session)
+    # Pass the candidate's email so a variant-set slot (VS2) resolves (and freezes)
+    # to this candidate's own variant; None before /start just lists placeholders.
+    email = attempt.candidate_email if attempt is not None else None
+    questions = _invite_questions(invite, session, email)
     deadline = _deadline_for(attempt.started_at, _invite_duration(invite, session)) if attempt else None
     # Which of these questions this candidate has already submitted, so the UI can
     # mark them done and lock their editors.
@@ -1800,7 +1946,7 @@ def _load_invite_for_candidate(
     """
     invite = _load_invite_or_error(token, session)
     _check_invited(invite, email)
-    question = _resolve_question(invite, question_id, session)
+    question = _resolve_question(invite, question_id, email, session)
     _check_not_already_submitted(invite, email, question.id, session)
     return invite, question
 
@@ -1909,17 +2055,19 @@ async def candidate_submit(
     email = _normalize_email(body.candidate_email)
     _check_invited(invite, email)
     # Which question this submits (the single one for a legacy invite; a named one
-    # for an assessment). One attempt per (invite, candidate, question).
-    question = _resolve_question(invite, body.question_id, session)
+    # for an assessment — the candidate's assigned variant for a set-slot). One
+    # attempt per (invite, candidate, question).
+    question = _resolve_question(invite, body.question_id, email, session)
     _check_not_already_submitted(invite, email, question.id, session)
     # Anchor identity once per (invite, email) — A10: the attempt's stored name
     # always wins once set (from the first /start or, lacking that, this first
     # /submit), so a later resubmission with a differently-typed name can't
     # fork one candidate's sitting into inconsistently-labeled rows.
     attempt = _get_or_start_attempt(invite, email, session, candidate_name=body.candidate_name)
-    # Server-enforced timer: refuse a submit that missed the window (past the
-    # deadline + grace). No-op for an untimed sitting.
-    _enforce_deadline(invite, attempt, session)
+    # Timed sitting: a submit past the window is RECORDED (flagged late), not
+    # discarded — the candidate's work always counts; the flag lets the
+    # interviewer weigh it. No-op (late=False) for an untimed sitting.
+    late = _submit_is_late(invite, attempt, session)
 
     sub = Submission(
         id=uuid.uuid4().hex,
@@ -1930,6 +2078,7 @@ async def candidate_submit(
         language=body.language,
         code=body.code,
         status="pending",
+        late=late,
     )
     session.add(sub)
     try:
@@ -2132,7 +2281,8 @@ def export_submissions(
     writer.writerow(
         [
             "submission_id", "question_id", "question_title", "candidate",
-            "candidate_email", "language", "status", "verdict", "score_pct", "created_at",
+            "candidate_email", "language", "status", "verdict", "score_pct", "late",
+            "created_at",
         ]
     )
     for sub in subs:
@@ -2141,7 +2291,8 @@ def export_submissions(
             [
                 sub.id, sub.question_id, titles.get(sub.question_id, ""), sub.candidate,
                 sub.candidate_email or "", sub.language, sub.status,
-                r.verdict if r else "", r.score_pct if r else "", sub.created_at.isoformat(),
+                r.verdict if r else "", r.score_pct if r else "", sub.late,
+                sub.created_at.isoformat(),
             ]
         )
     return Response(
@@ -2250,6 +2401,7 @@ def question_submissions(
                 status=sub.status,
                 verdict=result.verdict if result else None,
                 score_pct=result.score_pct if result else None,
+                late=sub.late,
                 created_at=sub.created_at,
             )
         )

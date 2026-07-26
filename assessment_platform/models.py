@@ -181,9 +181,17 @@ class Assessment(SQLModel, table=True):
 
 
 class AssessmentQuestion(SQLModel, table=True):
-    """Membership of a question in an assessment, with its display order. A
-    question may belong to many assessments (they are shared), so the FK to
-    `question` deliberately does not cascade."""
+    """One slot in an assessment, with its display order. A slot is EITHER a fixed
+    question (`question_id`) OR a variant-set pool (`variant_set_id`, VS2) — exactly
+    one is set. A set-slot resolves to a concrete variant per candidate at start
+    time (see `CandidateSlotVariant`); a fixed slot is the same question for
+    everyone. A question/set may belong to many assessments (they are shared), so
+    neither FK cascades.
+
+    `question_id` is nullable because a set-slot carries no fixed question. The
+    unique key stays on `(assessment_id, question_id)` — NULLs compare distinct, so
+    it still forbids the same question twice while allowing many set-slots; a
+    duplicate variant set is caught in `_membership_rows` instead."""
 
     __table_args__ = (
         UniqueConstraint("assessment_id", "question_id", name="uq_assessment_question"),
@@ -191,7 +199,8 @@ class AssessmentQuestion(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     assessment_id: str = Field(foreign_key="assessment.id", index=True)
-    question_id: str = Field(foreign_key="question.id", index=True)
+    question_id: str | None = Field(default=None, foreign_key="question.id", index=True)
+    variant_set_id: str | None = Field(default=None, foreign_key="variantset.id", index=True)
     position: int = 0
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
@@ -261,6 +270,37 @@ class CandidateAttempt(SQLModel, table=True):
     updated_at: datetime = _updated_at()
 
 
+class CandidateSlotVariant(SQLModel, table=True):
+    """The concrete variant a candidate was assigned for a variant-set slot of an
+    assessment (VS2), frozen on first resolution and stable thereafter.
+
+    A set-slot resolves per candidate — round-robin across the assessment's
+    candidates so the pool stays evenly used — and this row records the choice so
+    it can't drift across reloads, resubmissions, or the interviewer's results
+    view. Keyed by `(invite_id, candidate_email, assessment_question_id)`, NOT by
+    `CandidateAttempt`: resolving a variant must never stamp the timer, and the
+    interviewer results path reads these without ever creating an attempt. The
+    unique key makes the get-or-create race-safe, exactly like `CandidateAttempt`.
+    `question_id` holds the assigned variant, so the whole candidate flow (view /
+    run / submit / results) treats a set-slot exactly like a fixed question."""
+
+    __table_args__ = (
+        UniqueConstraint(
+            "invite_id",
+            "candidate_email",
+            "assessment_question_id",
+            name="uq_candidate_slot_variant",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    invite_id: int = Field(foreign_key="invite.id", index=True)
+    candidate_email: str = Field(index=True)
+    assessment_question_id: int = Field(foreign_key="assessmentquestion.id", index=True)
+    question_id: str = Field(foreign_key="question.id", index=True)
+    created_at: datetime = _created_at()
+
+
 class Submission(SQLModel, table=True):
     # One attempt per candidate per invite PER QUESTION, enforced by the DATABASE.
     # (T4: an assessment invite carries several questions, so the candidate gets one
@@ -291,6 +331,12 @@ class Submission(SQLModel, table=True):
     language: str
     code: str
     status: str = "pending"  # "pending" | "running" | "done" | "error"
+    # True when this submission arrived after the timed sitting's window closed
+    # (past deadline + grace). A candidate's work is recorded and graded either
+    # way — the timer no longer discards it — but a late submit is flagged so the
+    # interviewer can see it came in after time and weigh it accordingly. Always
+    # False for an untimed sitting or a submit within the window.
+    late: bool = False
     agent_job_id: str | None = Field(default=None, index=True)
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()

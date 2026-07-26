@@ -25,18 +25,36 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   (opt-in `?include_variants=true`), so a set shows as one thing, not N look-alikes.
   Backend-only — both the dashboard and the picker call the same `listQuestions`,
   so no frontend change. Was the stopgap for VS2.
-- **VS2 · Assessment-slot integration for variant sets (OPEN — feature; the real
-  fix VS1 stops-gaps).** The assessment builder has no "add a variant set" slot, so
-  you can't build "one slot → each candidate gets a different variant." The hard
-  part is *where the variant is chosen*: an `Assessment` is shared across invites
-  but assignment is per-candidate, so a slot can only store "this slot is variant-
-  set X" and the concrete variant must resolve **per candidate at invite/start
-  time** — exactly the direct-invite round-robin, but inside a multi-question
-  sitting. Needs: `AssessmentQuestion` gains a nullable `variant_set_id` (a slot is
-  a fixed question OR a set); `_invite_questions` resolves each set-slot to that
-  candidate's assigned variant; builder UI gains the slot type. Deliberately
-  deferred when the direct-invite path shipped (see the variant-sets item in §C).
-  **L.**
+- **VS2 · Assessment-slot integration for variant sets — DONE 2026-07-26.** A
+  slot of an assessment can now be a variant-set pool
+  instead of a fixed question, and each candidate is handed a different variant
+  (round-robin), so "one slot → each candidate gets a different variant" works
+  inside a multi-question sitting. **Data model:** `AssessmentQuestion.variant_set_id`
+  (nullable; a slot is a fixed `question_id` XOR a `variant_set_id`) +
+  `CandidateSlotVariant` keyed by `(invite, candidate_email, slot)`, which freezes
+  the per-candidate pick — decoupled from `CandidateAttempt` so resolving a variant
+  never stamps the timer and the interviewer results path can read it without
+  creating an attempt (migration `e5b3c9d7a2f1`, additive; `question_id` made
+  nullable). **Resolution:** `_invite_questions(invite, session, email)` is now
+  candidate-aware — a set-slot resolves (and freezes, get-or-create + round-robin so
+  the pool stays evenly used) to that candidate's variant, whose `question_id` then
+  flows through view/run/submit/results exactly like a fixed question (zero
+  candidate-side change). The results view (`/assessments/{id}/attempts`) resolves
+  each candidate's own variant per set-slot and shows it under the set's title +
+  the variant label. **API:** create/update take ordered `slots` (question XOR
+  variant set); the legacy flat `question_ids` still maps to all-fixed slots so
+  pre-VS2 clients need no change; the A9 lock compares the full slot signature.
+  **Builder UI:** `NewAssessmentPage` now builds an ordered list of *slots* — the
+  question library and a new "Your variant sets" source group both feed it, a
+  set-slot renders with a cobalt rail + "Variant set" chip + "each candidate gets
+  a random variant · N variants". `AssessmentDetailPage` shows the set-slot in the
+  questions table and, in the attempts grid, names each candidate's assigned
+  variant in the chip tooltip (column stays keyed by the set so it aligns).
+  Backend + migration + 11 offline pytest + web vitest (builder mixed-slot create,
+  detail set-slot + per-candidate variant) all green; mockup was signed off before
+  the `.tsx`. **Feature complete end-to-end.** Only follow-up deliberately left:
+  *regenerate a drifting variant* instead of the current advisory parity warning
+  (tracked agent-side).
 - **A7 · Invite paths separated, not merged — DONE 2026-07-26.** Both paths were
   duplicative/confusing once assessments existed. Decision (product): **keep both,
   relabel to two distinct tools** rather than deprecate either. The per-question
@@ -73,6 +91,27 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   from the current interviewer, still editable per assessment) — a snapshot, never
   applied retroactively, so changing the default leaves existing assessments
   untouched.
+- **A13 · Timed-out submissions are recorded + flagged late — DONE 2026-07-26.**
+  Found while testing VS2: a timed sitting (Google Assessment, `duration_minutes`
+  was 2) showed no submissions even though candidates took it — every `/submit`
+  past `deadline + grace` was rejected with a **410 and discarded**, silently
+  losing the candidate's work (and contradicting the client, which already
+  auto-submits at the buzzer *"so time running out records work instead of losing
+  it"*). Now the timer no longer discards: `_submit_is_late` (replacing the raising
+  `_enforce_deadline`) returns a bool, and `candidate_submit` **stores + grades**
+  the submission either way, setting `Submission.late` (migration `f6c4d0b9e3a2`,
+  additive, default False). The invite's own lifecycle (revoked / expired via
+  `_load_invite_or_error`) still hard-blocks a submit — only the per-candidate
+  timer is relaxed. `late` is surfaced on **every** interviewer submission
+  surface (traced by `/integration-check`): the attempts grid (amber-ring chip +
+  "submitted late" tooltip, keyed per candidate/slot so it works for VS2 variants
+  too), the submission detail header, the global submissions list, the
+  per-question ("Quick screen") results table, and the CSV export (`late` column)
+  — the pills are the `chip-late` amber style. Backend + web tests
+  updated (the old "past-grace ⇒ 410" timer test now asserts 201 + `late=true`);
+  full suites green. **Note:** editing an existing assessment's duration does *not*
+  rescue already-expired attempts (deadline = each attempt's own `started_at` +
+  duration); re-invite to give a fresh clock.
 
 ---
 

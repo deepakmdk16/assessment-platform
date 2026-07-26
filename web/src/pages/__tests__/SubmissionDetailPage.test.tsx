@@ -100,6 +100,7 @@ const submission: SubmissionDetail = {
   status: 'done',
   agent_job_id: 'job1',
   created_at: '2026-07-16T00:00:00Z',
+  late: false,
   result: {
     verdict: 'FAIL',
     score_pct: 50,

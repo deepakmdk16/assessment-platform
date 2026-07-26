@@ -194,11 +194,22 @@ export interface VariantSetInviteIn {
   overrides?: Record<string, string>
 }
 
-/** A question inside an assessment, with its order and denormalized title. */
+/** A slot inside an assessment, with its order and denormalized title. A fixed
+ *  slot carries `question_id`; a variant-set slot (VS2) carries `variant_set_id`
+ *  + `variant_count` instead — each candidate is handed a different variant. */
 export interface AssessmentQuestionRef {
-  question_id: string
+  question_id: string | null
+  variant_set_id: string | null
+  variant_count: number | null
   position: number
   title: string
+}
+
+/** One slot when creating/updating an assessment: EITHER a fixed question OR a
+ *  variant set (VS2), exactly one set. */
+export interface AssessmentSlotIn {
+  question_id?: string
+  variant_set_id?: string
 }
 
 /** `GET/POST /assessments` — a named, ordered set of questions with a total timer. */
@@ -220,16 +231,25 @@ export interface AssessmentIn {
   id?: string
   title: string
   duration_minutes?: number | null
-  question_ids: string[]
+  // Ordered slots (VS2): each a fixed question or a variant set. The legacy flat
+  // `question_ids` is still accepted server-side but the builder now sends slots.
+  slots: AssessmentSlotIn[]
   org_name?: string | null
   logo_url?: string | null
 }
 
-/** One question's result within a candidate's sitting (A3/A11). */
+/** One question's result within a candidate's sitting (A3/A11). For a variant-set
+ *  slot (VS2), `question_id` is the variant this candidate was assigned and
+ *  `variant_label` names it; `title` is the set title so the column stays aligned. */
 export interface AssessmentAttemptQuestion {
-  question_id: string
+  question_id: string | null
+  variant_set_id: string | null
+  variant_label: string | null
   title: string
   submitted: boolean
+  // True when this candidate's submission for the slot arrived after the timed
+  // window closed — recorded and graded, but flagged.
+  late: boolean
   submission_id: string | null
   verdict: string | null
   score_pct: number | null
@@ -331,6 +351,7 @@ export interface SubmissionRow {
   status: string
   verdict?: string
   score_pct?: number
+  late?: boolean // arrived after the timed window closed (recorded + flagged)
   created_at: string
 }
 
@@ -347,6 +368,7 @@ export interface SubmissionSummary {
   created_at: string
   verdict?: string
   score_pct?: number
+  late?: boolean // arrived after the timed window closed (recorded + flagged)
   // Set when this submission came in through an assessment invite (A3).
   assessment_id?: string | null
   assessment_title?: string | null
@@ -431,5 +453,6 @@ export interface SubmissionDetail {
   status: string
   agent_job_id: string | null
   created_at: string
+  late: boolean // arrived after the timed window closed (recorded + flagged)
   result: SubmissionResult | null
 }

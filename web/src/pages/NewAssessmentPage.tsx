@@ -3,7 +3,10 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { difficultyClass } from '../badges'
-import type { QuestionOut } from '../types'
+import type { QuestionOut, VariantSetSummary } from '../types'
+
+// A slot is either a fixed question or a variant set (VS2); order is preserved.
+type Slot = { kind: 'question' | 'set'; id: string }
 
 export function NewAssessmentPage() {
   const navigate = useNavigate()
@@ -17,48 +20,60 @@ export function NewAssessmentPage() {
   const [orgName, setOrgName] = useState(user?.default_org_name ?? '')
   const [logoUrl, setLogoUrl] = useState(user?.default_logo_url ?? '')
   // Pre-populated from the questions page's "Build assessment" multi-select
-  // (A8). Any id not actually in the library (stale/archived/deleted) simply
-  // never appears in `selected` below — no extra filtering needed.
-  const [selectedIds, setSelectedIds] = useState<string[]>(
-    () => (location.state as { preselected?: string[] } | null)?.preselected ?? [],
+  // (A8) — question slots. Any id not actually in the library (stale/archived/
+  // deleted) is dropped below once the library loads.
+  const [slots, setSlots] = useState<Slot[]>(
+    () =>
+      ((location.state as { preselected?: string[] } | null)?.preselected ?? []).map((id) => ({
+        kind: 'question' as const,
+        id,
+      })),
   )
   const [library, setLibrary] = useState<QuestionOut[]>([])
+  const [sets, setSets] = useState<VariantSetSummary[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    api
-      .listQuestions(false, 0, 200)
-      .then((page) => {
+    Promise.all([api.listQuestions(false, 0, 200), api.listVariantSets(false, 0, 200)])
+      .then(([qPage, sPage]) => {
         if (cancelled) return
-        setLibrary(page.items)
-        // Drop any preselected id that isn't actually in the library (stale,
-        // archived, or deleted) — otherwise it'd be silently included on
-        // create despite never appearing in the "in this assessment" list.
-        const validIds = new Set(page.items.map((q) => q.id))
-        setSelectedIds((ids) => ids.filter((id) => validIds.has(id)))
+        setLibrary(qPage.items)
+        setSets(sPage.items)
+        // Drop any preselected slot whose thing isn't actually available (stale,
+        // archived, or deleted) — otherwise it'd be silently included on create
+        // despite never appearing in the "in this assessment" list.
+        const qIds = new Set(qPage.items.map((q) => q.id))
+        const sIds = new Set(sPage.items.map((s) => s.id))
+        setSlots((cur) =>
+          cur.filter((s) => (s.kind === 'question' ? qIds.has(s.id) : sIds.has(s.id))),
+        )
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load questions')
+        if (!cancelled)
+          setError(err instanceof ApiError ? err.message : 'Failed to load your library')
       })
     return () => {
       cancelled = true
     }
   }, [])
 
-  const byId = new Map(library.map((q) => [q.id, q]))
-  const selected = selectedIds.map((qid) => byId.get(qid)).filter((q): q is QuestionOut => !!q)
-  const available = library.filter((q) => !selectedIds.includes(q.id))
+  const qById = new Map(library.map((q) => [q.id, q]))
+  const setById = new Map(sets.map((s) => [s.id, s]))
+  const has = (kind: Slot['kind'], id: string) =>
+    slots.some((s) => s.kind === kind && s.id === id)
+  const availableQuestions = library.filter((q) => !has('question', q.id))
+  const availableSets = sets.filter((s) => !has('set', s.id))
 
-  function add(qid: string) {
-    setSelectedIds((s) => [...s, qid])
+  function add(kind: Slot['kind'], id: string) {
+    setSlots((s) => [...s, { kind, id }])
   }
-  function remove(qid: string) {
-    setSelectedIds((s) => s.filter((x) => x !== qid))
+  function remove(i: number) {
+    setSlots((s) => s.filter((_, idx) => idx !== i))
   }
   function move(i: number, delta: number) {
-    setSelectedIds((s) => {
+    setSlots((s) => {
       const j = i + delta
       if (j < 0 || j >= s.length) return s
       const next = [...s]
@@ -69,14 +84,16 @@ export function NewAssessmentPage() {
 
   async function handleCreate() {
     if (!title.trim()) return setError('Title is required.')
-    if (selectedIds.length === 0) return setError('Add at least one question.')
+    if (slots.length === 0) return setError('Add at least one question or variant set.')
     setError(null)
     setSubmitting(true)
     try {
       const created = await api.createAssessment({
         title,
         duration_minutes: indefinite ? null : durationMinutes,
-        question_ids: selectedIds,
+        slots: slots.map((s) =>
+          s.kind === 'question' ? { question_id: s.id } : { variant_set_id: s.id },
+        ),
         org_name: orgName.trim() || null,
         logo_url: logoUrl.trim() || null,
       })
@@ -178,69 +195,106 @@ export function NewAssessmentPage() {
       </div>
 
       <div className="card pad">
-        <div className="card-title">Questions</div>
+        <div className="card-title">Questions &amp; variant sets</div>
         <p className="draft-hint">
-          Add questions from your library; their order here is the order the candidate sees.
+          Add fixed questions or variant sets from your library; their order here is the order the
+          candidate sees. A variant set hands each candidate a different variant of the same problem.
         </p>
         <div className="grid2">
           <div>
-            <div className="picker-label">In this assessment ({selected.length})</div>
-            {selected.length === 0 ? (
-              <p className="empty-state">No questions added yet.</p>
+            <div className="picker-label">In this assessment ({slots.length})</div>
+            {slots.length === 0 ? (
+              <p className="empty-state">No questions or variant sets added yet.</p>
             ) : (
-              selected.map((q, i) => (
-                <div className="q-pick" key={q.id}>
-                  <span className="q-ord">{i + 1}</span>
-                  <span className="q-pick-t">
-                    <span className="title">{q.title}</span>
-                    {q.difficulty && (
-                      <span className={difficultyClass(q.difficulty)}>{q.difficulty}</span>
-                    )}
-                  </span>
-                  <button type="button" className="mini" title="Move up" onClick={() => move(i, -1)}>
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    className="mini"
-                    title="Move down"
-                    onClick={() => move(i, 1)}
-                  >
-                    ↓
-                  </button>
-                  <button type="button" className="mini" title="Remove" onClick={() => remove(q.id)}>
-                    ✕
-                  </button>
-                </div>
-              ))
+              slots.map((slot, i) => {
+                const q = slot.kind === 'question' ? qById.get(slot.id) : undefined
+                const vs = slot.kind === 'set' ? setById.get(slot.id) : undefined
+                return (
+                  <div className={`q-pick${vs ? ' set' : ''}`} key={`${slot.kind}:${slot.id}`}>
+                    <span className="q-ord">{i + 1}</span>
+                    <span className="q-pick-t">
+                      <span className="title">{q?.title ?? vs?.title ?? slot.id}</span>
+                      {vs && <span className="chip chip-accent">Variant set</span>}
+                      {q?.difficulty && (
+                        <span className={difficultyClass(q.difficulty)}>{q.difficulty}</span>
+                      )}
+                      {vs && (
+                        <span className="cellsub">
+                          Each candidate gets a random variant · {vs.variant_count} variant
+                          {vs.variant_count === 1 ? '' : 's'}
+                        </span>
+                      )}
+                    </span>
+                    <button type="button" className="mini" title="Move up" onClick={() => move(i, -1)}>
+                      ↑
+                    </button>
+                    <button type="button" className="mini" title="Move down" onClick={() => move(i, 1)}>
+                      ↓
+                    </button>
+                    <button type="button" className="mini" title="Remove" onClick={() => remove(i)}>
+                      ✕
+                    </button>
+                  </div>
+                )
+              })
             )}
           </div>
           <div>
-            <div className="picker-label">Your question library</div>
-            {available.length === 0 ? (
-              library.length === 0 ? (
-                <p className="empty-state">
-                  You have no questions yet.{' '}
-                  <Link to="/questions/new">Create your first question</Link>.
-                </p>
+            <div className="src-group">
+              <div className="picker-label">Your question library</div>
+              {availableQuestions.length === 0 ? (
+                library.length === 0 ? (
+                  <p className="empty-state">
+                    You have no questions yet.{' '}
+                    <Link to="/questions/new">Create your first question</Link>.
+                  </p>
+                ) : (
+                  <p className="empty-state">All questions added.</p>
+                )
               ) : (
-                <p className="empty-state">All questions added.</p>
-              )
-            ) : (
-              available.map((q) => (
-                <div className="q-pick" key={q.id}>
-                  <span className="q-pick-t">
-                    <span className="title">{q.title}</span>
-                    {q.difficulty && (
-                      <span className={difficultyClass(q.difficulty)}>{q.difficulty}</span>
-                    )}
-                  </span>
-                  <button type="button" className="btn sec sm" onClick={() => add(q.id)}>
-                    Add
-                  </button>
-                </div>
-              ))
-            )}
+                availableQuestions.map((q) => (
+                  <div className="q-pick" key={q.id}>
+                    <span className="q-pick-t">
+                      <span className="title">{q.title}</span>
+                      {q.difficulty && (
+                        <span className={difficultyClass(q.difficulty)}>{q.difficulty}</span>
+                      )}
+                    </span>
+                    <button type="button" className="btn sec sm" onClick={() => add('question', q.id)}>
+                      Add
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="src-group">
+              <div className="picker-label">Your variant sets</div>
+              {sets.length === 0 ? (
+                <p className="empty-state">
+                  You have no variant sets yet.{' '}
+                  <Link to="/variant-sets/new">Create one</Link>.
+                </p>
+              ) : availableSets.length === 0 ? (
+                <p className="empty-state">All variant sets added.</p>
+              ) : (
+                availableSets.map((s) => (
+                  <div className="q-pick set" key={s.id}>
+                    <span className="q-pick-t">
+                      <span className="title">{s.title}</span>
+                      <span className="chip chip-accent">
+                        {s.variant_count} variant{s.variant_count === 1 ? '' : 's'}
+                      </span>
+                      {s.difficulty && (
+                        <span className={difficultyClass(s.difficulty)}>{s.difficulty}</span>
+                      )}
+                    </span>
+                    <button type="button" className="btn sec sm" onClick={() => add('set', s.id)}>
+                      Add
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       </div>

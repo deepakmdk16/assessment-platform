@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NewAssessmentPage } from '../NewAssessmentPage'
 import { api } from '../../api'
-import type { AssessmentOut, Page, QuestionOut, User } from '../../types'
+import type { AssessmentOut, Page, QuestionOut, User, VariantSetSummary } from '../../types'
 
 const navigateMock = vi.fn()
 
@@ -27,7 +27,7 @@ vi.mock('../../api', () => {
     }
   }
   return {
-    api: { listQuestions: vi.fn(), createAssessment: vi.fn() },
+    api: { listQuestions: vi.fn(), listVariantSets: vi.fn(), createAssessment: vi.fn() },
     ApiError,
   }
 })
@@ -35,13 +35,17 @@ vi.mock('../../api', () => {
 const q = (id: string, title: string): QuestionOut =>
   ({ id, title, difficulty: 'easy' }) as QuestionOut
 
-function libraryPage(items: QuestionOut[]): Page<QuestionOut> {
+const vset = (id: string, title: string, variant_count = 3): VariantSetSummary =>
+  ({ id, title, variant_count, difficulty: 'medium' }) as VariantSetSummary
+
+function page<T>(items: T[]): Page<T> {
   return { items, total: items.length, limit: 200, offset: 0 }
 }
 
-/** Render and wait for the library to load. */
-async function renderLoaded(items: QuestionOut[]) {
-  vi.mocked(api.listQuestions).mockResolvedValue(libraryPage(items))
+/** Render and wait for the library + variant sets to load. */
+async function renderLoaded(items: QuestionOut[], sets: VariantSetSummary[] = []) {
+  vi.mocked(api.listQuestions).mockResolvedValue(page(items))
+  vi.mocked(api.listVariantSets).mockResolvedValue(page(sets))
   render(
     <MemoryRouter>
       <NewAssessmentPage />
@@ -57,6 +61,7 @@ describe('NewAssessmentPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     authState.user = null
+    vi.mocked(api.listVariantSets).mockResolvedValue(page([]))
   })
 
   it('adds questions, preserves order, and creates the assessment', async () => {
@@ -77,7 +82,7 @@ describe('NewAssessmentPage', () => {
     expect(payload).toMatchObject({
       title: 'Week 1 Screen',
       duration_minutes: 60,
-      question_ids: ['two-sum', 'islands'],
+      slots: [{ question_id: 'two-sum' }, { question_id: 'islands' }],
       org_name: null,
       logo_url: null,
     })
@@ -86,6 +91,30 @@ describe('NewAssessmentPage', () => {
         state: { justCreated: true },
       }),
     )
+  })
+
+  it('adds a variant set as a slot and creates a mixed assessment (VS2)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.createAssessment).mockResolvedValue({ id: 'mixed' } as AssessmentOut)
+    await renderLoaded([q('two-sum', 'Two Sum')], [vset('pairs', 'Two-pointer pairs', 4)])
+
+    await user.type(screen.getByLabelText(/^title$/i), 'Mixed')
+
+    // One Add per source group: the question, then the variant set.
+    await user.click(screen.getByText('Two Sum').closest('.q-pick')!.querySelector('button')!)
+    await user.click(
+      screen.getByText('Two-pointer pairs').closest('.q-pick')!.querySelector('button')!,
+    )
+
+    // The set slot reads as a variant set with its variant count.
+    expect(screen.getByText(/each candidate gets a random variant · 4 variants/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /create assessment/i }))
+    await waitFor(() => expect(api.createAssessment).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.createAssessment).mock.calls[0][0].slots).toEqual([
+      { question_id: 'two-sum' },
+      { variant_set_id: 'pairs' },
+    ])
   })
 
   it('prefills branding from the workspace default and sends it on create (A12)', async () => {
@@ -117,7 +146,7 @@ describe('NewAssessmentPage', () => {
 
   it('pre-populates the selection from router state (A8), dropping stale ids', async () => {
     vi.mocked(api.listQuestions).mockResolvedValue(
-      libraryPage([q('two-sum', 'Two Sum'), q('islands', 'Count Islands')]),
+      page([q('two-sum', 'Two Sum'), q('islands', 'Count Islands')]),
     )
     render(
       <MemoryRouter
@@ -177,9 +206,9 @@ describe('NewAssessmentPage', () => {
     await user.click(screen.getByRole('button', { name: /create assessment/i }))
 
     await waitFor(() => expect(api.createAssessment).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(api.createAssessment).mock.calls[0][0].question_ids).toEqual([
-      'islands',
-      'two-sum',
+    expect(vi.mocked(api.createAssessment).mock.calls[0][0].slots).toEqual([
+      { question_id: 'islands' },
+      { question_id: 'two-sum' },
     ])
   })
 
@@ -210,7 +239,7 @@ describe('NewAssessmentPage', () => {
   })
 
   it('offers a way to create a question when the library is empty (A14)', async () => {
-    vi.mocked(api.listQuestions).mockResolvedValue(libraryPage([]))
+    vi.mocked(api.listQuestions).mockResolvedValue(page([]))
     render(
       <MemoryRouter>
         <NewAssessmentPage />

@@ -302,6 +302,14 @@ export function QuestionDetailPage() {
                         ) : (
                           <span className="muted">—</span>
                         )}
+                        {s.late && (
+                          <span
+                            className="chip chip-late"
+                            title="Submitted after the assessment window closed"
+                          >
+                            Late
+                          </span>
+                        )}
                       </td>
                       <td className="score">{s.score_pct != null ? `${s.score_pct}%` : '—'}</td>
                       <td>{s.created_at}</td>

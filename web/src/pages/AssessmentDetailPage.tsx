@@ -104,11 +104,19 @@ export function AssessmentDetailPage() {
                 </thead>
                 <tbody>
                   {assessment.questions.map((q) => (
-                    <tr key={q.question_id}>
+                    <tr key={q.variant_set_id ?? q.question_id ?? q.position}>
                       <td className="num">{q.position + 1}</td>
                       <td>
-                        <div className="t-title">{q.title}</div>
-                        <div className="t-id">{q.question_id}</div>
+                        <div className="t-title">
+                          {q.title}
+                          {q.variant_set_id && (
+                            <span className="chip chip-accent">
+                              Variant set · {q.variant_count} variant
+                              {q.variant_count === 1 ? '' : 's'}
+                            </span>
+                          )}
+                        </div>
+                        <div className="t-id">{q.variant_set_id ?? q.question_id}</div>
                       </td>
                     </tr>
                   ))}
@@ -139,12 +147,19 @@ export function AssessmentDetailPage() {
                         </td>
                         <td>
                           <div className="attempt-progress">
-                            {att.questions.map((q, i) =>
-                              q.submission_id ? (
+                            {att.questions.map((q, i) => {
+                              // For a variant-set slot, name the variant this
+                              // candidate was handed so the interviewer can see who
+                              // got which variant.
+                              const base = q.variant_label
+                                ? `${q.title} (variant ${q.variant_label})`
+                                : q.title
+                              const label = q.late ? `${base} · submitted late` : base
+                              return q.submission_id ? (
                                 <span
-                                  key={q.question_id}
-                                  className={`${badgeClass(q.verdict)} clickable`}
-                                  title={`${q.title}: ${q.verdict ?? 'grading…'}`}
+                                  key={i}
+                                  className={`${badgeClass(q.verdict)} clickable${q.late ? ' late' : ''}`}
+                                  title={`${label}: ${q.verdict ?? 'grading…'}`}
                                   role="link"
                                   tabIndex={0}
                                   onClick={() => navigate(`/submissions/${q.submission_id}`)}
@@ -155,15 +170,11 @@ export function AssessmentDetailPage() {
                                   {i + 1}
                                 </span>
                               ) : (
-                                <span
-                                  key={q.question_id}
-                                  className="chip chip-neutral"
-                                  title={`${q.title}: not submitted`}
-                                >
+                                <span key={i} className="chip chip-neutral" title={`${label}: not submitted`}>
                                   {i + 1}
                                 </span>
-                              ),
-                            )}
+                              )
+                            })}
                           </div>
                         </td>
                         <td className="num">

@@ -34,7 +34,9 @@ const assessment: AssessmentOut = {
   status: 'active',
   created_at: '2026-07-14T00:00:00Z',
   updated_at: '2026-07-14T00:00:00Z',
-  questions: [{ question_id: 'two-sum', position: 0, title: 'Two Sum' }],
+  questions: [
+    { question_id: 'two-sum', variant_set_id: null, variant_count: null, position: 0, title: 'Two Sum' },
+  ],
 }
 
 function baseInvite(overrides: Partial<Invite>): Invite {
@@ -130,8 +132,11 @@ describe('AssessmentDetailPage — attempts (A3/A11)', () => {
     questions: [
       {
         question_id: 'two-sum',
+        variant_set_id: null,
+        variant_label: null,
         title: 'Two Sum',
         submitted: true,
+        late: false,
         submission_id: 'sub-1',
         verdict: 'PASS',
         score_pct: 92,
@@ -166,5 +171,55 @@ describe('AssessmentDetailPage — attempts (A3/A11)', () => {
 
     await screen.findByRole('heading', { name: /backend screen/i })
     expect(screen.queryByRole('heading', { name: /attempts/i })).not.toBeInTheDocument()
+  })
+
+  it('shows a variant-set slot and each candidate’s assigned variant (VS2)', async () => {
+    vi.mocked(api.getAssessment).mockResolvedValue({
+      ...assessment,
+      questions: [
+        { question_id: null, variant_set_id: 's1', variant_count: 3, position: 0, title: 'Pairs' },
+      ],
+    })
+    vi.mocked(api.listAssessmentAttempts).mockResolvedValue([
+      {
+        ...attempt,
+        questions: [
+          {
+            question_id: 's1_b',
+            variant_set_id: 's1',
+            variant_label: 'B',
+            title: 'Pairs',
+            submitted: true,
+            late: false,
+            submission_id: 'sub-1',
+            verdict: 'PASS',
+            score_pct: 80,
+          },
+        ],
+      },
+    ])
+    renderPage()
+
+    // The questions table marks it as a variant set with its variant count.
+    expect(await screen.findByText(/variant set · 3 variants/i)).toBeInTheDocument()
+    // The attempt chip names the variant THIS candidate was handed.
+    expect(screen.getByTitle(/pairs \(variant b\): pass/i)).toBeInTheDocument()
+  })
+
+  it('flags a submission that arrived after the timed window closed', async () => {
+    vi.mocked(api.listAssessmentAttempts).mockResolvedValue([
+      {
+        ...attempt,
+        questions: [{ ...attempt.questions[0], late: true }],
+      },
+    ])
+    renderPage()
+
+    await screen.findByText('Jane Doe')
+    // The chip tooltip tells the interviewer the work came in late (and it keeps
+    // its PASS verdict — a late submission is still recorded and graded).
+    const chip = screen.getByTitle(/two sum · submitted late: pass/i)
+    expect(chip).toHaveTextContent('1')
+    expect(chip).toHaveClass('late')
   })
 })
