@@ -237,7 +237,7 @@ export function AssessmentDetailPage() {
 
         <aside className="side">
           <div className="card pad">
-            <h3>Invite a candidate</h3>
+            <h3>Invite to this assessment</h3>
             {sentTo.length > 0 && (
               <p role="status" className="form-success">
                 Invite sent to {sentTo.join(', ')}.

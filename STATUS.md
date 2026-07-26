@@ -16,12 +16,15 @@ Effort key: **XS** (minutes) · **S** (self-contained) · **M** (multi-file) · 
 The T4 multi-question assessment epic shipped; driving it end-to-end surfaced these.
 Several are "the single-question flow had it, the assessment flow doesn't yet."
 
-- **A7 · Invites should be assessment-level, not (also) question-level.** Now that
-  assessments exist, offering "send invite" on a single question is duplicative and
-  confusing. Decide the model: either deprecate per-question invites in the UI in
-  favour of assessment invites (a single question becomes a one-question
-  assessment), or clearly separate "quick single-question screen" from "assessment".
-  Today both paths exist (`/questions/{id}/invites` and `/assessments/{id}/invites`). **M.**
+- **A7 · Invite paths separated, not merged — DONE 2026-07-26.** Both paths were
+  duplicative/confusing once assessments existed. Decision (product): **keep both,
+  relabel to two distinct tools** rather than deprecate either. The per-question
+  path is now a **"Quick screen"** (card, button, dialog, and results table on
+  `QuestionDetailPage` all relabelled; copy says it screens on *just this question*
+  and links to Assessments for a multi-question sitting); the per-assessment path
+  is **"Invite to this assessment"** (whole assessment, one shared timer). No data
+  model change — both routes (`/questions/{id}/invites`, `/assessments/{id}/invites`)
+  are unchanged; this is UI/copy only. Frontend tests updated for the new labels.
 - **A8 · Authoring ↔ assessment connective tissue — (a) DONE 2026-07-26.**
   `DashboardPage.tsx` now has a per-row checkbox multi-select and a "Build
   assessment (N)" button that navigates to `/assessments/new` with `state:
