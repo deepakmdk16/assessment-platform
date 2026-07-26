@@ -21,6 +21,7 @@ import type {
   VariantSetDraftIn,
   VariantSetDraftOut,
   VariantSetIn,
+  VariantSetInviteIn,
   VariantSetOut,
   VariantSetSummary,
 } from './types'
@@ -160,6 +161,12 @@ export const api = {
   },
 
   getVariantSet: (id: string) => request<VariantSetOut>(`/variant-sets/${id}`, { auth: true }),
+
+  createVariantSetInvites: (setId: string, data: VariantSetInviteIn) =>
+    request<Invite[]>(`/variant-sets/${setId}/invites`, { method: 'POST', body: data, auth: true }),
+
+  listVariantSetInvites: (setId: string) =>
+    request<Invite[]>(`/variant-sets/${setId}/invites`, { auth: true }),
 
   // --- Assessments (T4) ----------------------------------------------------
   listAssessments: (includeArchived = false, offset = 0, limit = 100) => {

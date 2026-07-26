@@ -405,6 +405,14 @@ class InviteDeliveryOut(BaseModel):
     error: str | None = None
 
 
+class VariantSetInviteCreate(InviteCreate):
+    """Invite candidates to a variant set. One invite is minted per recipient, each
+    handed a variant round-robin; `overrides` pins specific recipients to a chosen
+    variant (email → variant question id) instead of the rotation."""
+
+    overrides: dict[str, str] = Field(default_factory=dict)
+
+
 class InviteOut(BaseModel):
     token: str
     url: str
@@ -412,6 +420,10 @@ class InviteOut(BaseModel):
     # assessment invite has assessment_id.
     question_id: str | None = None
     assessment_id: str | None = None
+    # Set when the invite drew its question from a variant set (question_id is the
+    # assigned variant); variant_label is that variant's tag, for the assignment UI.
+    variant_set_id: str | None = None
+    variant_label: str | None = None
     recipients: list[str]
     expires_at: datetime | None
     status: str

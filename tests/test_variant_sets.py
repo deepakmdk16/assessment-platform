@@ -163,3 +163,76 @@ def test_variant_set_owner_scoped(anon_client: TestClient) -> None:
 def test_create_variant_set_needs_two_variants(client: TestClient) -> None:
     body = _set_create_body(variants=[_variant_create("solo", "A")])
     assert client.post("/variant-sets", json=body).status_code == 422
+
+
+# --- assignment (invites) ---------------------------------------------------
+
+
+def _make_set(client: TestClient) -> dict[str, Any]:
+    """Create a 2-variant set and return its detail (id + variants)."""
+    return client.post("/variant-sets", json=_set_create_body()).json()
+
+
+def test_variant_set_invites_round_robin(client: TestClient) -> None:
+    vs = _make_set(client)
+    labels = [v["variant_label"] for v in vs["variants"]]  # ['A', 'B']
+    r = client.post(
+        f"/variant-sets/{vs['id']}/invites",
+        json={"recipients": ["a@x.io", "b@x.io", "c@x.io"]},
+    )
+    assert r.status_code == 201
+    invites = r.json()
+    assert len(invites) == 3  # one invite per recipient
+    # A, B, then wraps back to A
+    assert [i["variant_label"] for i in invites] == [labels[0], labels[1], labels[0]]
+    assert all(i["variant_set_id"] == vs["id"] for i in invites)
+    # each invite is a normal single-question invite (question_id = assigned variant)
+    assert all(i["question_id"] for i in invites)
+
+
+def test_variant_set_invites_continue_rotation_across_calls(client: TestClient) -> None:
+    vs = _make_set(client)
+    labels = [v["variant_label"] for v in vs["variants"]]
+    first = client.post(f"/variant-sets/{vs['id']}/invites", json={"recipients": ["a@x.io"]}).json()
+    second = client.post(f"/variant-sets/{vs['id']}/invites", json={"recipients": ["b@x.io"]}).json()
+    # the second call picks up where the first left off (A then B), not A again
+    assert first[0]["variant_label"] == labels[0]
+    assert second[0]["variant_label"] == labels[1]
+
+
+def test_variant_set_invite_override_pins_a_variant(client: TestClient) -> None:
+    vs = _make_set(client)
+    pinned = vs["variants"][1]  # variant B's question id
+    r = client.post(
+        f"/variant-sets/{vs['id']}/invites",
+        json={"recipients": ["a@x.io"], "overrides": {"a@x.io": pinned["id"]}},
+    )
+    assert r.status_code == 201
+    assert r.json()[0]["question_id"] == pinned["id"]
+    assert r.json()[0]["variant_label"] == pinned["variant_label"]
+
+
+def test_variant_set_invite_override_must_be_in_set(client: TestClient) -> None:
+    vs = _make_set(client)
+    r = client.post(
+        f"/variant-sets/{vs['id']}/invites",
+        json={"recipients": ["a@x.io"], "overrides": {"a@x.io": "not-a-variant"}},
+    )
+    assert r.status_code == 422
+
+
+def test_list_variant_set_invites_shows_assignment(client: TestClient) -> None:
+    vs = _make_set(client)
+    client.post(f"/variant-sets/{vs['id']}/invites", json={"recipients": ["a@x.io", "b@x.io"]})
+    listed = client.get(f"/variant-sets/{vs['id']}/invites").json()
+    assert {i["variant_label"] for i in listed} == {v["variant_label"] for v in vs["variants"]}
+
+
+def test_variant_set_invites_owner_scoped(anon_client: TestClient) -> None:
+    tok_a = register_interviewer(anon_client, "vsi-a@x.io")
+    tok_b = register_interviewer(anon_client, "vsi-b@x.io")
+    set_id = anon_client.post("/variant-sets", json=_set_create_body(), headers=_auth(tok_a)).json()["id"]
+    r = anon_client.post(
+        f"/variant-sets/{set_id}/invites", json={"recipients": ["c@x.io"]}, headers=_auth(tok_b)
+    )
+    assert r.status_code == 404

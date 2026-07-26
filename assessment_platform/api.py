@@ -100,6 +100,7 @@ from .schemas import (
     VariantSetCreate,
     VariantSetDraftIn,
     VariantSetDraftOut,
+    VariantSetInviteCreate,
     VariantSetOut,
     VariantSetSummaryOut,
 )
@@ -278,12 +279,14 @@ def _invite_url(token: str) -> str:
     return f"{config.FRONTEND_BASE_URL}/t/{token}"
 
 
-def _invite_out(inv: Invite) -> InviteOut:
+def _invite_out(inv: Invite, variant_label: str | None = None) -> InviteOut:
     return InviteOut(
         token=inv.token,
         url=_invite_url(inv.token),
         question_id=inv.question_id,
         assessment_id=inv.assessment_id,
+        variant_set_id=inv.variant_set_id,
+        variant_label=variant_label,
         recipients=inv.recipients,
         expires_at=inv.expires_at,
         status=inv.status,
@@ -1311,6 +1314,84 @@ def list_assessment_invites(
     _owned_assessment(assessment_id, current, session)
     invites = session.exec(select(Invite).where(Invite.assessment_id == assessment_id)).all()
     return [_invite_out(inv) for inv in invites]
+
+
+@app.post("/variant-sets/{set_id}/invites", response_model=list[InviteOut], status_code=201)
+def create_variant_set_invites(
+    set_id: str,
+    body: VariantSetInviteCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> list[InviteOut]:
+    """Invite candidates to a variant set: ONE invite per recipient, each handed a
+    variant. Variants rotate round-robin, and the rotation continues from however
+    many invites the set already produced, so repeated calls keep the whole set
+    evenly used instead of always starting at A. `overrides` (email → variant
+    question id) pins a recipient to a chosen variant instead of the rotation. Each
+    invite carries `question_id` = its assigned variant, so the candidate flow
+    resolves it exactly like a single-question invite."""
+    vs = _owned_variant_set(set_id, current, session)
+    variants = _set_variants(set_id, session)
+    if not variants:
+        raise HTTPException(status_code=400, detail="cannot invite to a variant set with no variants.")
+    by_id = {q.id: q for q in variants}
+
+    # Continue the rotation across calls (count what this set already handed out).
+    cursor = session.exec(
+        select(func.count()).select_from(Invite).where(Invite.variant_set_id == set_id)
+    ).one()
+
+    created: list[tuple[Invite, str | None]] = []
+    for recipient in body.recipients:
+        email = _normalize_email(recipient)
+        override = body.overrides.get(recipient) or body.overrides.get(email)
+        if override is not None:
+            if override not in by_id:
+                raise HTTPException(
+                    status_code=422, detail=f"variant {override!r} is not part of this set."
+                )
+            chosen = by_id[override]  # a pin does not consume a rotation slot
+        else:
+            chosen = variants[cursor % len(variants)]
+            cursor += 1
+        invite = Invite(
+            token=secrets.token_urlsafe(32),
+            question_id=chosen.id,
+            variant_set_id=set_id,
+            created_by=_require_id(current.id),
+            recipients=[email],
+            expires_at=body.expires_at,
+        )
+        session.add(invite)
+        created.append((invite, chosen.variant_label))
+    session.commit()
+
+    for invite, _label in created:
+        session.refresh(invite)
+        deliveries = email_client.send_invite_emails(
+            invite.recipients, _invite_url(invite.token), vs.title
+        )
+        invite.deliveries = [
+            {"recipient": d.recipient, "sent": d.sent, "error": d.error} for d in deliveries
+        ]
+        session.add(invite)
+    session.commit()
+    return [_invite_out(inv, label) for inv, label in created]
+
+
+@app.get("/variant-sets/{set_id}/invites", response_model=list[InviteOut])
+def list_variant_set_invites(
+    set_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> list[InviteOut]:
+    _owned_variant_set(set_id, current, session)
+    label_of = {q.id: q.variant_label for q in _set_variants(set_id, session)}
+    invites = session.exec(select(Invite).where(Invite.variant_set_id == set_id)).all()
+    return [
+        _invite_out(inv, label_of.get(inv.question_id) if inv.question_id else None)
+        for inv in invites
+    ]
 
 
 @app.get("/assessments/{assessment_id}/attempts", response_model=list[AssessmentAttemptOut])

@@ -4,8 +4,17 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { NewVariantSetPage } from '../NewVariantSetPage'
 import { VariantSetsListPage } from '../VariantSetsListPage'
+import { VariantSetInvitePanel } from '../../components/VariantSetInvitePanel'
 import { api } from '../../api'
-import type { Page, QuestionIn, VariantDraftOut, VariantSetDraftOut, VariantSetSummary } from '../../types'
+import type {
+  Invite,
+  Page,
+  QuestionIn,
+  VariantDraftOut,
+  VariantOut,
+  VariantSetDraftOut,
+  VariantSetSummary,
+} from '../../types'
 
 const navigateMock = vi.fn()
 
@@ -27,6 +36,8 @@ vi.mock('../../api', () => {
       draftVariantSet: vi.fn(),
       createVariantSet: vi.fn(),
       listVariantSets: vi.fn(),
+      listVariantSetInvites: vi.fn(),
+      createVariantSetInvites: vi.fn(),
     },
     ApiError,
   }
@@ -135,5 +146,56 @@ describe('VariantSetsListPage', () => {
       </MemoryRouter>,
     )
     expect(await screen.findByText(/no variant sets yet/i)).toBeInTheDocument()
+  })
+})
+
+describe('VariantSetInvitePanel', () => {
+  const variants = [
+    { id: 'va', variant_label: 'A', title: 'Variant A' },
+    { id: 'vb', variant_label: 'B', title: 'Variant B' },
+  ] as unknown as VariantOut[]
+
+  function invite(email: string, label: string): Invite {
+    return {
+      token: `tok-${email}`,
+      url: `http://x/t/tok-${email}`,
+      variant_set_id: 'set-1',
+      variant_label: label,
+      recipients: [email],
+    } as unknown as Invite
+  }
+
+  it('sends round-robin invites and lists them', async () => {
+    vi.mocked(api.listVariantSetInvites).mockResolvedValue([])
+    vi.mocked(api.createVariantSetInvites).mockResolvedValue([invite('a@x.io', 'A'), invite('b@x.io', 'B')])
+
+    render(<VariantSetInvitePanel setId="set-1" variants={variants} />)
+    await waitFor(() => expect(api.listVariantSetInvites).toHaveBeenCalled())
+
+    await userEvent.type(screen.getByLabelText(/candidate emails/i), 'a@x.io, b@x.io')
+    await userEvent.click(screen.getByRole('button', { name: /send 2 invites/i }))
+
+    await waitFor(() => expect(api.createVariantSetInvites).toHaveBeenCalled())
+    const [, body] = vi.mocked(api.createVariantSetInvites).mock.calls[0]
+    expect(body.recipients).toEqual(['a@x.io', 'b@x.io'])
+    expect(body.overrides).toEqual({})
+    // the created invites now appear under "Sent"
+    expect(await screen.findByText('a@x.io')).toBeInTheDocument()
+  })
+
+  it('passes a per-candidate override when one is pinned', async () => {
+    vi.mocked(api.listVariantSetInvites).mockResolvedValue([])
+    vi.mocked(api.createVariantSetInvites).mockResolvedValue([invite('a@x.io', 'B')])
+
+    render(<VariantSetInvitePanel setId="set-1" variants={variants} />)
+    await waitFor(() => expect(api.listVariantSetInvites).toHaveBeenCalled())
+
+    await userEvent.type(screen.getByLabelText(/candidate emails/i), 'a@x.io')
+    await userEvent.selectOptions(screen.getByRole('combobox'), 'vb')
+    await userEvent.click(screen.getByRole('button', { name: /send 1 invite/i }))
+
+    await waitFor(() => expect(api.createVariantSetInvites).toHaveBeenCalled())
+    const [, body] = vi.mocked(api.createVariantSetInvites).mock.calls[0]
+    expect(body.overrides).toEqual({ 'a@x.io': 'vb' })
   })
 })

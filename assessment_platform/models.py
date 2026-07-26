@@ -208,6 +208,12 @@ class Invite(SQLModel, table=True):
     # exactly one of the two is set. Legacy single-question invites keep question_id.
     question_id: str | None = Field(default=None, foreign_key="question.id", index=True)
     assessment_id: str | None = Field(default=None, foreign_key="assessment.id", index=True)
+    # When the invite handed the candidate a variant from a set, this records which
+    # set it came from; `question_id` still holds the *assigned* variant, so the
+    # whole candidate flow resolves it exactly like a single-question invite. Only
+    # the interviewer-side assignment UI (which variant went to whom, round-robin)
+    # needs this provenance. Null for ordinary question/assessment invites.
+    variant_set_id: str | None = Field(default=None, foreign_key="variantset.id", index=True)
     created_by: int = Field(foreign_key="interviewer.id", index=True)
     recipients: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     # Per-recipient send outcome captured at creation, so who-was-emailed is an

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { difficultyClass } from '../badges'
+import { VariantSetInvitePanel } from '../components/VariantSetInvitePanel'
 import type { VariantSetOut } from '../types'
 
 export function VariantSetDetailPage() {
@@ -78,6 +79,9 @@ export function VariantSetDetailPage() {
         A variant is a full question — editing one won’t change any invite already sent, since each
         invite keeps the variant it was handed.
       </p>
+
+      <h2 className="sect-title">Assign &amp; invite</h2>
+      <VariantSetInvitePanel setId={set.id} variants={set.variants} />
     </div>
   )
 }
