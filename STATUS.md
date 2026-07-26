@@ -24,26 +24,6 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   "Standalone". **Still open:** an **assessment-level attempt view** — one
   candidate's whole sitting (all N questions + an aggregate) instead of N
   scattered rows. Pairs with A11's composite score. **M.**
-- **A5 · No completion screen in the multi-question flow — neither on timeout
-  nor on manual completion.** `CandidatePage.tsx`'s single-question flow has a
-  real terminal state: `doSubmit` sets `stage = 'submitted'`, which swaps the
-  whole IDE for a `"Thanks, {name}! Your solution has been submitted and is
-  being graded."` notice (`CandidatePage.tsx:264-270`). `AssessmentFlow.tsx` has
-  **no equivalent** — the IDE (header/question-strip/description/editor/console)
-  stays mounted and merely disables itself (`locked = isDone || timeUp`,
-  `AssessmentFlow.tsx:72-73`) in both cases confirmed in manual QA
-  (2026-07-24/26):
-  1. **Timeout** — the auto-submit effect (`AssessmentFlow.tsx:104-126`) does
-     submit every question's current editor content (A1 no longer rejects it),
-     but afterward the candidate is left on the same IDE with only a "Time's up"
-     timer badge (`:215-222`) — no acknowledgement.
-  2. **Manual completion** — nothing in the file reacts to
-     `submittedCount === questions.length`; a candidate who submits every
-     question themselves before time is up is left sitting on the last
-     question's now-read-only editor with zero confirmation.
-  Needs a genuine terminal screen — mirror `CandidatePage`'s `'submitted'` stage
-  / `"Thanks, {name}! ..."` pattern — reached from **both** triggers, replacing
-  the IDE view entirely rather than just disabling it. **M.**
 - **A7 · Invites should be assessment-level, not (also) question-level.** Now that
   assessments exist, offering "send invite" on a single question is duplicative and
   confusing. Decide the model: either deprecate per-question invites in the UI in

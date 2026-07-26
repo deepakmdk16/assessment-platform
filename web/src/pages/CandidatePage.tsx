@@ -7,6 +7,7 @@ import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
 import type { InviteStartResponse, Language, RunResponse, RunTestsResponse } from '../types'
 import { AssessmentFlow } from './AssessmentFlow'
+import { CandidateNotice } from './CandidateNotice'
 import { ConsoleResult } from './ConsoleResult'
 import { CRIT_MS, formatRemaining, WARN_MS } from './candidateTimer'
 
@@ -60,6 +61,13 @@ export function CandidatePage() {
   const { resolved } = useTheme()
   const [stage, setStage] = useState<Stage>('loading')
   const [invite, setInvite] = useState<InviteStartResponse | null>(null)
+  // A multi-question assessment invite (T4) hands off entirely to AssessmentFlow,
+  // which keeps its own deadline/timeout/auto-submit state. This page's OWN
+  // deadline effect below must not also run in that case — it used to fire
+  // unconditionally, auto-submitting this page's (unused, empty) top-level
+  // `code`/`language` state at timeout and flipping to the single-question
+  // 'submitted' stage, which pre-empted AssessmentFlow's own terminal screen.
+  const isMultiQuestion = Boolean(invite?.questions && invite.questions.length > 1)
 
   const [candidateName, setCandidateName] = useState('')
   const [candidateEmail, setCandidateEmail] = useState('')
@@ -219,7 +227,7 @@ export function CandidatePage() {
   // is timed. Reads the server deadline against the local clock — the server is
   // the real authority (it enforces the deadline on submit); this is the display.
   useEffect(() => {
-    if (stage !== 'editor' || !deadline) return
+    if (stage !== 'editor' || !deadline || isMultiQuestion) return
     const tick = () => {
       const ms = new Date(deadline).getTime() - Date.now()
       setRemainingMs(ms)
@@ -228,7 +236,7 @@ export function CandidatePage() {
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [stage, deadline])
+  }, [stage, deadline, isMultiQuestion])
 
   // At zero, auto-submit whatever's in the editor — exactly once — so time running
   // out records the attempt rather than losing it.
@@ -317,7 +325,7 @@ export function CandidatePage() {
   // stage === 'editor'
   // A multi-question assessment invite (T4) uses the free-navigation flow; a
   // single-question invite keeps the original single-question IDE below unchanged.
-  if (token && invite && invite.questions && invite.questions.length > 1) {
+  if (token && invite && isMultiQuestion && invite.questions) {
     return (
       <AssessmentFlow
         token={token}
@@ -530,13 +538,3 @@ export function CandidatePage() {
   )
 }
 
-function CandidateNotice({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="auth">
-      <div className="auth-card notice-card">
-        <h1>{title}</h1>
-        <p className="muted">{body}</p>
-      </div>
-    </div>
-  )
-}
