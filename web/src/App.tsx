@@ -12,6 +12,7 @@ import { AssessmentsListPage } from './pages/AssessmentsListPage'
 import { NewAssessmentPage } from './pages/NewAssessmentPage'
 import { AssessmentDetailPage } from './pages/AssessmentDetailPage'
 import { CandidatePage } from './pages/CandidatePage'
+import { SettingsPage } from './pages/SettingsPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { CandidateErrorFallback, ErrorBoundary } from './components/ErrorBoundary'
 
@@ -107,6 +108,17 @@ export function App() {
         element={
           <ProtectedRoute>
             <SubmissionDetailPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <SettingsPage />
+            </AppLayout>
           </ProtectedRoute>
         }
       />

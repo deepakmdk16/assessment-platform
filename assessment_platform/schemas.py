@@ -265,6 +265,16 @@ class InterviewerOut(BaseModel):
     id: int
     email: str
     name: str
+    # Workspace-level default branding (A12) — prefills a new assessment's org/logo.
+    default_org_name: str | None = None
+    default_logo_url: str | None = None
+
+
+class InterviewerUpdate(BaseModel):
+    # Partial update of the caller's own workspace settings (PATCH /auth/me).
+    # Only the fields sent are changed; sending an explicit null clears one.
+    default_org_name: str | None = None
+    default_logo_url: str | None = None
 
 
 class LoginIn(BaseModel):

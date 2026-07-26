@@ -45,6 +45,12 @@ class Interviewer(SQLModel, table=True):
     email: str = Field(unique=True, index=True)
     password_hash: str
     name: str
+    # Workspace-level default branding (A12): pre-fills a new assessment's
+    # org_name/logo_url so the interviewer sets it once instead of per assessment.
+    # Both optional; a prefill only, never applied retroactively — each Assessment
+    # still stores its own snapshot. logo_url is a URL reference, never base64.
+    default_org_name: str | None = None
+    default_logo_url: str | None = None
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 

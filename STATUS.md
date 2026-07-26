@@ -32,19 +32,22 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   *brand-new* question from inside the builder. Keep question creation simple
   and owned by the questions page; the builder assembles, it shouldn't grow a
   second authoring flow unless there's real demand.
-- **A12 · Enterprise branding — per-assessment upload DONE 2026-07-26; workspace
-  default still open.** `Assessment.org_name`/`logo_url` (migration
-  `0ae2d36aff72`, additive/nullable) are set on `NewAssessmentPage` (with a live
-  preview) and shown read-only on `AssessmentDetailPage`; `InvitePublicOut`
-  carries `assessment_title`/`org_name`/`logo_url` to the candidate, and
-  `AssessmentFlow`'s IDE header renders `{logo} {org} — {title}` plus a small
-  "Powered by assess.dev" when set, falling back to the generic "Coding
-  assessment" header otherwise (a legacy single-question invite has no
-  `Assessment` to brand from, so it's always unbranded). The logo is stored as a
-  URL reference, never base64. **Still open:** a workspace-level default (set
-  once per interviewer, used when an assessment has no override) — a natural
-  follow-up now that the per-assessment path exists, not a prerequisite. **S**
-  for the remaining piece.
+- **A12 · Enterprise branding — DONE 2026-07-26 (per-assessment + workspace
+  default).** `Assessment.org_name`/`logo_url` (migration `0ae2d36aff72`,
+  additive/nullable) are set on `NewAssessmentPage` (with a live preview) and
+  shown read-only on `AssessmentDetailPage`; `InvitePublicOut` carries
+  `assessment_title`/`org_name`/`logo_url` to the candidate, and `AssessmentFlow`'s
+  IDE header renders `{logo} {org} — {title}` plus a small "Powered by
+  assess.dev" when set, falling back to the generic "Coding assessment" header
+  otherwise (a legacy single-question invite has no `Assessment` to brand from, so
+  it's always unbranded). The logo is stored as a URL reference, never base64.
+  **Workspace default added:** `Interviewer.default_org_name`/`default_logo_url`
+  (migration `b7e2c1a4d9f0`, additive/nullable) set on a new **Settings → Workspace**
+  page via `PATCH /auth/me` (partial update; blank normalises to null); it
+  **pre-fills** a new assessment's branding (`NewAssessmentPage` seeds its org/logo
+  from the current interviewer, still editable per assessment) — a snapshot, never
+  applied retroactively, so changing the default leaves existing assessments
+  untouched.
 
 ---
 

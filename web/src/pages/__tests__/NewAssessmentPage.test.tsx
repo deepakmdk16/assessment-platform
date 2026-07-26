@@ -4,9 +4,14 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NewAssessmentPage } from '../NewAssessmentPage'
 import { api } from '../../api'
-import type { AssessmentOut, Page, QuestionOut } from '../../types'
+import type { AssessmentOut, Page, QuestionOut, User } from '../../types'
 
 const navigateMock = vi.fn()
+
+// The page reads the interviewer's workspace default branding via useAuth (A12);
+// mock it so the test controls the current user's defaults without a provider.
+const authState = vi.hoisted(() => ({ user: null as User | null }))
+vi.mock('../../auth/AuthContext', () => ({ useAuth: () => ({ user: authState.user }) }))
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>()
@@ -51,6 +56,7 @@ const addButtons = () => screen.getAllByRole('button', { name: /^add$/i })
 describe('NewAssessmentPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    authState.user = null
   })
 
   it('adds questions, preserves order, and creates the assessment', async () => {
@@ -80,6 +86,33 @@ describe('NewAssessmentPage', () => {
         state: { justCreated: true },
       }),
     )
+  })
+
+  it('prefills branding from the workspace default and sends it on create (A12)', async () => {
+    const user = userEvent.setup()
+    authState.user = {
+      id: '1',
+      email: 'o@test.io',
+      name: 'Owner',
+      default_org_name: 'Acme Corp',
+      default_logo_url: 'https://acme/logo.png',
+    }
+    vi.mocked(api.createAssessment).mockResolvedValue({ id: 'week-1' } as AssessmentOut)
+    await renderLoaded([q('two-sum', 'Two Sum')])
+
+    // The branding inputs start from the workspace default.
+    expect(screen.getByLabelText(/organization name/i)).toHaveValue('Acme Corp')
+    expect(screen.getByLabelText(/logo url/i)).toHaveValue('https://acme/logo.png')
+
+    await user.type(screen.getByLabelText(/^title$/i), 'Week 1 Screen')
+    await user.click(addButtons()[0])
+    await user.click(screen.getByRole('button', { name: /create assessment/i }))
+
+    await waitFor(() => expect(api.createAssessment).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.createAssessment).mock.calls[0][0]).toMatchObject({
+      org_name: 'Acme Corp',
+      logo_url: 'https://acme/logo.png',
+    })
   })
 
   it('pre-populates the selection from router state (A8), dropping stale ids', async () => {
