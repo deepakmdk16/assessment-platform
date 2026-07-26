@@ -165,9 +165,12 @@ async def draft_set(
     """Ask the agent to draft a SET of `count` sibling variants from one brief;
     return its payload (`{engine, warnings, variants:[...]}`). Same statelessness
     and transport-retry semantics as `draft_question` — the only place that talks
-    to the agent's draft-set endpoint; tests mock it here to run offline. A set is
-    `count` full drafts, so the agent's own budget is larger; the transport retry
-    still only re-tries failures a retry can fix.
+    to the agent's draft-set endpoint; tests mock it here to run offline.
+
+    The agent drafts the `count` variants **sequentially**, so the wall-clock is
+    ~`count`× a single draft. The read timeout is therefore scaled by `count`
+    (AGENT_DRAFT_TIMEOUT_S is the per-draft budget); reusing the single-draft
+    timeout made a 3-variant set on a slow local model exceed it and 502.
     """
     body = {
         "brief": brief,
@@ -176,11 +179,12 @@ async def draft_set(
         "difficulty": difficulty,
         "target_complexity": target_complexity,
     }
+    timeout = AGENT_DRAFT_TIMEOUT_S * max(1, count)
     last: Exception
     for attempt in range(1, max(1, _DRAFT_TRANSPORT_ATTEMPTS) + 1):
         try:
             resp = await _signed_post(
-                f"{base_url}/questions/draft-set", body, timeout=AGENT_DRAFT_TIMEOUT_S
+                f"{base_url}/questions/draft-set", body, timeout=timeout
             )
             resp.raise_for_status()
             result: dict = resp.json()

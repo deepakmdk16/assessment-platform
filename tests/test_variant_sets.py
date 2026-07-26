@@ -6,6 +6,7 @@ draft-set call is monkeypatched, so no network / no real LLM."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from conftest import register_interviewer
@@ -110,6 +111,35 @@ def test_draft_variant_set_rate_limited(anon_client: TestClient, monkeypatch) ->
     tok = register_interviewer(anon_client, "vset-rl@x.io")
     assert anon_client.post("/variant-sets/draft", json=_draft_body(), headers=_auth(tok)).status_code == 200
     assert anon_client.post("/variant-sets/draft", json=_draft_body(), headers=_auth(tok)).status_code == 429
+
+
+def test_draft_set_scales_read_timeout_by_count() -> None:
+    """The agent drafts the K variants sequentially, so the platform's read timeout
+    must be K x the single-draft budget — reusing the single-draft timeout made a
+    multi-variant set on a slow model 502 (regression guard)."""
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {"engine": "t", "warnings": [], "variants": []}
+
+    async def _fake_signed_post(url: str, body: dict, *, timeout: float) -> _Resp:
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return _Resp()
+
+    orig = agent_client._signed_post
+    agent_client._signed_post = _fake_signed_post  # type: ignore[assignment]
+    try:
+        asyncio.run(agent_client.draft_set("brief", "python", 3))
+    finally:
+        agent_client._signed_post = orig  # type: ignore[assignment]
+
+    assert str(captured["url"]).endswith("/questions/draft-set")
+    assert captured["timeout"] == agent_client.AGENT_DRAFT_TIMEOUT_S * 3
 
 
 # --- persist / list / detail ------------------------------------------------
