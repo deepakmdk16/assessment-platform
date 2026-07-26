@@ -760,6 +760,18 @@ textarea {
   background: var(--color-bad-soft);
 }
 
+/* Variant-set marker (VS2): a slot/pool that hands each candidate a variant. */
+.chip-accent {
+  color: var(--color-accent-ink);
+  background: var(--color-accent-soft);
+}
+
+/* An inline marker chip trailing a table-cell title (e.g. a variant-set slot). */
+.t-title .chip {
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+
 /* --------------------------------------------------- two-column detail */
 .detail-grid {
   display: grid;
@@ -1965,6 +1977,30 @@ button.tab:hover {
   background: var(--color-surface-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
+}
+
+/* A variant-set slot/pool (VS2) — cobalt left rail distinguishes it from a fixed
+   question at a glance. */
+.q-pick.set {
+  border-left: 3px solid var(--color-accent);
+}
+
+/* The slot's title area wraps so a variant set's marker chip + "each candidate
+   gets a random variant" subtext sit on their own line under the title. */
+.q-pick-t {
+  flex-wrap: wrap;
+}
+
+.q-pick-t .cellsub {
+  flex-basis: 100%;
+  margin-top: 0.1rem;
+  font-size: 0.78rem;
+  color: var(--color-faint);
+}
+
+/* Stacked source groups (question library + variant sets) in the builder. */
+.src-group + .src-group {
+  margin-top: 1.3rem;
 }
 
 .q-ord {

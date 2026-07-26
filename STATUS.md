@@ -25,8 +25,8 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   (opt-in `?include_variants=true`), so a set shows as one thing, not N look-alikes.
   Backend-only — both the dashboard and the picker call the same `listQuestions`,
   so no frontend change. Was the stopgap for VS2.
-- **VS2 · Assessment-slot integration for variant sets — backend DONE 2026-07-26;
-  builder UI remains.** A slot of an assessment can now be a variant-set pool
+- **VS2 · Assessment-slot integration for variant sets — DONE 2026-07-26.** A
+  slot of an assessment can now be a variant-set pool
   instead of a fixed question, and each candidate is handed a different variant
   (round-robin), so "one slot → each candidate gets a different variant" works
   inside a multi-question sitting. **Data model:** `AssessmentQuestion.variant_set_id`
@@ -44,10 +44,17 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   the variant label. **API:** create/update take ordered `slots` (question XOR
   variant set); the legacy flat `question_ids` still maps to all-fixed slots so
   pre-VS2 clients need no change; the A9 lock compares the full slot signature.
-  Backend + migration + 11 offline tests green (`tests/test_slice_vs2.py`).
-  **Still to do:** the **builder UI** — a "variant set" slot type in
-  `NewAssessmentPage` and set-slot display on `AssessmentDetailPage` (mockup-first
-  per CONVENTIONS). **L (backend done; UI remaining).**
+  **Builder UI:** `NewAssessmentPage` now builds an ordered list of *slots* — the
+  question library and a new "Your variant sets" source group both feed it, a
+  set-slot renders with a cobalt rail + "Variant set" chip + "each candidate gets
+  a random variant · N variants". `AssessmentDetailPage` shows the set-slot in the
+  questions table and, in the attempts grid, names each candidate's assigned
+  variant in the chip tooltip (column stays keyed by the set so it aligns).
+  Backend + migration + 11 offline pytest + web vitest (builder mixed-slot create,
+  detail set-slot + per-candidate variant) all green; mockup was signed off before
+  the `.tsx`. **Feature complete end-to-end.** Only follow-up deliberately left:
+  *regenerate a drifting variant* instead of the current advisory parity warning
+  (tracked agent-side).
 - **A7 · Invite paths separated, not merged — DONE 2026-07-26.** Both paths were
   duplicative/confusing once assessments existed. Decision (product): **keep both,
   relabel to two distinct tools** rather than deprecate either. The per-question

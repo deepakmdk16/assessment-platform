@@ -194,11 +194,22 @@ export interface VariantSetInviteIn {
   overrides?: Record<string, string>
 }
 
-/** A question inside an assessment, with its order and denormalized title. */
+/** A slot inside an assessment, with its order and denormalized title. A fixed
+ *  slot carries `question_id`; a variant-set slot (VS2) carries `variant_set_id`
+ *  + `variant_count` instead — each candidate is handed a different variant. */
 export interface AssessmentQuestionRef {
-  question_id: string
+  question_id: string | null
+  variant_set_id: string | null
+  variant_count: number | null
   position: number
   title: string
+}
+
+/** One slot when creating/updating an assessment: EITHER a fixed question OR a
+ *  variant set (VS2), exactly one set. */
+export interface AssessmentSlotIn {
+  question_id?: string
+  variant_set_id?: string
 }
 
 /** `GET/POST /assessments` — a named, ordered set of questions with a total timer. */
@@ -220,14 +231,20 @@ export interface AssessmentIn {
   id?: string
   title: string
   duration_minutes?: number | null
-  question_ids: string[]
+  // Ordered slots (VS2): each a fixed question or a variant set. The legacy flat
+  // `question_ids` is still accepted server-side but the builder now sends slots.
+  slots: AssessmentSlotIn[]
   org_name?: string | null
   logo_url?: string | null
 }
 
-/** One question's result within a candidate's sitting (A3/A11). */
+/** One question's result within a candidate's sitting (A3/A11). For a variant-set
+ *  slot (VS2), `question_id` is the variant this candidate was assigned and
+ *  `variant_label` names it; `title` is the set title so the column stays aligned. */
 export interface AssessmentAttemptQuestion {
-  question_id: string
+  question_id: string | null
+  variant_set_id: string | null
+  variant_label: string | null
   title: string
   submitted: boolean
   submission_id: string | null
