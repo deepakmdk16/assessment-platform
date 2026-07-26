@@ -136,6 +136,7 @@ describe('AssessmentDetailPage — attempts (A3/A11)', () => {
         variant_label: null,
         title: 'Two Sum',
         submitted: true,
+        late: false,
         submission_id: 'sub-1',
         verdict: 'PASS',
         score_pct: 92,
@@ -189,6 +190,7 @@ describe('AssessmentDetailPage — attempts (A3/A11)', () => {
             variant_label: 'B',
             title: 'Pairs',
             submitted: true,
+            late: false,
             submission_id: 'sub-1',
             verdict: 'PASS',
             score_pct: 80,
@@ -202,5 +204,22 @@ describe('AssessmentDetailPage — attempts (A3/A11)', () => {
     expect(await screen.findByText(/variant set · 3 variants/i)).toBeInTheDocument()
     // The attempt chip names the variant THIS candidate was handed.
     expect(screen.getByTitle(/pairs \(variant b\): pass/i)).toBeInTheDocument()
+  })
+
+  it('flags a submission that arrived after the timed window closed', async () => {
+    vi.mocked(api.listAssessmentAttempts).mockResolvedValue([
+      {
+        ...attempt,
+        questions: [{ ...attempt.questions[0], late: true }],
+      },
+    ])
+    renderPage()
+
+    await screen.findByText('Jane Doe')
+    // The chip tooltip tells the interviewer the work came in late (and it keeps
+    // its PASS verdict — a late submission is still recorded and graded).
+    const chip = screen.getByTitle(/two sum · submitted late: pass/i)
+    expect(chip).toHaveTextContent('1')
+    expect(chip).toHaveClass('late')
   })
 })

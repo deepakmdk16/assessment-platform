@@ -772,6 +772,18 @@ textarea {
   vertical-align: middle;
 }
 
+/* A submission that arrived after the timed window closed (VS2 follow-up): an
+   amber ring flags it in the attempts grid without hiding its verdict colour. */
+.chip.late {
+  box-shadow: 0 0 0 1.5px var(--color-warn);
+}
+
+/* Standalone "Late" pill on the submission detail / list surfaces. */
+.chip-late {
+  color: var(--color-warn);
+  background: var(--color-warn-soft);
+}
+
 /* --------------------------------------------------- two-column detail */
 .detail-grid {
   display: grid;

@@ -207,6 +207,7 @@ class AssessmentAttemptQuestionOut(BaseModel):
     variant_label: str | None = None
     title: str
     submitted: bool
+    late: bool = False  # this candidate's submission arrived after the window closed
     submission_id: str | None = None
     verdict: str | None = None
     score_pct: float | None = None
@@ -352,6 +353,9 @@ class SubmissionOut(BaseModel):
     status: str
     agent_job_id: str | None
     created_at: datetime
+    # True when this submission arrived after the timed window closed (recorded
+    # and graded, but flagged so the interviewer can weigh it).
+    late: bool = False
     result: ResultOut | None = None
 
 
@@ -370,6 +374,7 @@ class SubmissionSummaryOut(BaseModel):
     created_at: datetime
     verdict: str | None = None
     score_pct: float | None = None
+    late: bool = False  # arrived after the timed window closed (recorded + flagged)
     # Set when this submission came in through an assessment invite (A3): lets the
     # list tell an assessment sitting apart from a standalone single-question
     # attempt without a second fetch per row.

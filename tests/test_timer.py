@@ -113,9 +113,16 @@ def test_submit_within_grace_is_accepted(anon_client: TestClient, monkeypatch) -
         json={"candidate_name": "C", "candidate_email": "c@x.io", "language": "python", "code": "print(7)"},
     )
     assert resp.status_code == 201
+    # Inside grace = on-time, not flagged late.
+    sub = anon_client.get(f"/submissions/{resp.json()['submission_id']}", headers=_auth(tok))
+    assert sub.json()["late"] is False
 
 
-def test_submit_past_deadline_and_grace_410(anon_client: TestClient, monkeypatch) -> None:
+def test_submit_past_deadline_is_recorded_and_flagged_late(
+    anon_client: TestClient, monkeypatch
+) -> None:
+    """A submit past the window is no longer discarded (was a 410): the candidate's
+    work is recorded and graded, but flagged `late` so the interviewer can weigh it."""
     tok = register_interviewer(anon_client, "t-late@x.io")
     anon_client.post("/questions", json=_question("q_late", 30), headers=_auth(tok))
     inv = _invite(anon_client, tok, "q_late", "c@x.io")
@@ -128,5 +135,6 @@ def test_submit_past_deadline_and_grace_410(anon_client: TestClient, monkeypatch
         f"/invite/{inv['token']}/submit",
         json={"candidate_name": "C", "candidate_email": "c@x.io", "language": "python", "code": "print(7)"},
     )
-    assert resp.status_code == 410
-    assert "time" in resp.json()["detail"].lower()
+    assert resp.status_code == 201
+    sub = anon_client.get(f"/submissions/{resp.json()['submission_id']}", headers=_auth(tok))
+    assert sub.json()["late"] is True

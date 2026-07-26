@@ -151,13 +151,14 @@ export function AssessmentDetailPage() {
                               // For a variant-set slot, name the variant this
                               // candidate was handed so the interviewer can see who
                               // got which variant.
-                              const label = q.variant_label
+                              const base = q.variant_label
                                 ? `${q.title} (variant ${q.variant_label})`
                                 : q.title
+                              const label = q.late ? `${base} · submitted late` : base
                               return q.submission_id ? (
                                 <span
                                   key={i}
-                                  className={`${badgeClass(q.verdict)} clickable`}
+                                  className={`${badgeClass(q.verdict)} clickable${q.late ? ' late' : ''}`}
                                   title={`${label}: ${q.verdict ?? 'grading…'}`}
                                   role="link"
                                   tabIndex={0}

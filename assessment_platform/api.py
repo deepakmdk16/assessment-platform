@@ -207,6 +207,7 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
         status=sub.status,
         agent_job_id=sub.agent_job_id,
         created_at=sub.created_at,
+        late=sub.late,
         result=result_out,
     )
 
@@ -227,6 +228,7 @@ def _submission_summary(
         created_at=sub.created_at,
         verdict=result.verdict if result else None,
         score_pct=result.score_pct if result else None,
+        late=sub.late,
         assessment_id=assessment.id if assessment else None,
         assessment_title=assessment.title if assessment else None,
     )
@@ -1493,12 +1495,14 @@ def list_assessment_attempts(
         if s.candidate_email is not None
     ]
     results = _results_by_submission(subs, session)
-    # (candidate_email, question_id) -> the submission's result / id, if any.
+    # (candidate_email, question_id) -> the submission's result / id / late flag.
     graded: dict[tuple[str, str], AssessmentResult] = {}
     submission_id_by_pair: dict[tuple[str, str], str] = {}
+    late_by_pair: dict[tuple[str, str], bool] = {}
     for s in subs:
         assert s.candidate_email is not None  # filtered above
         submission_id_by_pair[(s.candidate_email, s.question_id)] = s.id
+        late_by_pair[(s.candidate_email, s.question_id)] = s.late
         r = results.get(s.id)
         if r is not None:
             graded[(s.candidate_email, s.question_id)] = r
@@ -1536,6 +1540,7 @@ def list_assessment_attempts(
                     variant_label=variant_label,
                     title=title,
                     submitted=submitted,
+                    late=late_by_pair.get((attempt.candidate_email, qid), False) if qid else False,
                     submission_id=submission_id_by_pair.get((attempt.candidate_email, qid))
                     if qid
                     else None,
@@ -1809,23 +1814,24 @@ def _get_or_start_attempt(
     return attempt
 
 
-def _enforce_deadline(invite: Invite, attempt: CandidateAttempt, session: Session) -> None:
-    """Reject a submit that arrives after the sitting's window has closed.
+def _submit_is_late(invite: Invite, attempt: CandidateAttempt, session: Session) -> bool:
+    """Whether a submit arriving now is past the sitting's window — recorded but
+    flagged, no longer rejected, so a candidate's actual work is never discarded
+    (the client auto-submits at the buzzer for exactly this reason).
 
-    Server-authoritative: the deadline is `attempt.started_at` (stamped at
-    /start) + the invite's total duration (the assessment's, or a legacy
-    question's), plus a grace window for the auto-submit round-trip. No-op for
-    an untimed sitting.
+    Server-authoritative: the deadline is `attempt.started_at` (stamped at /start)
+    + the invite's total duration (the assessment's, or a legacy question's), plus
+    a grace window that absorbs the auto-submit round-trip — a submit inside grace
+    counts as on-time. Always False for an untimed sitting. Note the invite's own
+    lifecycle (revoked / expired) is enforced separately in `_load_invite_or_error`
+    and still hard-blocks a submit; only the per-candidate timer is relaxed here.
     """
     duration = _invite_duration(invite, session)
     if duration is None:
-        return
+        return False
     deadline = _deadline_for(attempt.started_at, duration)
     assert deadline is not None  # duration is not None here
-    if datetime.now(timezone.utc) > deadline + timedelta(seconds=config.SUBMIT_GRACE_SECONDS):
-        raise HTTPException(
-            status_code=410, detail="time's up — the assessment window has closed."
-        )
+    return datetime.now(timezone.utc) > deadline + timedelta(seconds=config.SUBMIT_GRACE_SECONDS)
 
 
 def _candidate_question_view(
@@ -2058,9 +2064,10 @@ async def candidate_submit(
     # /submit), so a later resubmission with a differently-typed name can't
     # fork one candidate's sitting into inconsistently-labeled rows.
     attempt = _get_or_start_attempt(invite, email, session, candidate_name=body.candidate_name)
-    # Server-enforced timer: refuse a submit that missed the window (past the
-    # deadline + grace). No-op for an untimed sitting.
-    _enforce_deadline(invite, attempt, session)
+    # Timed sitting: a submit past the window is RECORDED (flagged late), not
+    # discarded — the candidate's work always counts; the flag lets the
+    # interviewer weigh it. No-op (late=False) for an untimed sitting.
+    late = _submit_is_late(invite, attempt, session)
 
     sub = Submission(
         id=uuid.uuid4().hex,
@@ -2071,6 +2078,7 @@ async def candidate_submit(
         language=body.language,
         code=body.code,
         status="pending",
+        late=late,
     )
     session.add(sub)
     try:

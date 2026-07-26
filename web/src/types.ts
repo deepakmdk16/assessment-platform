@@ -247,6 +247,9 @@ export interface AssessmentAttemptQuestion {
   variant_label: string | null
   title: string
   submitted: boolean
+  // True when this candidate's submission for the slot arrived after the timed
+  // window closed — recorded and graded, but flagged.
+  late: boolean
   submission_id: string | null
   verdict: string | null
   score_pct: number | null
@@ -364,6 +367,7 @@ export interface SubmissionSummary {
   created_at: string
   verdict?: string
   score_pct?: number
+  late?: boolean // arrived after the timed window closed (recorded + flagged)
   // Set when this submission came in through an assessment invite (A3).
   assessment_id?: string | null
   assessment_title?: string | null
@@ -448,5 +452,6 @@ export interface SubmissionDetail {
   status: string
   agent_job_id: string | null
   created_at: string
+  late: boolean // arrived after the timed window closed (recorded + flagged)
   result: SubmissionResult | null
 }

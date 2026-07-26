@@ -331,6 +331,12 @@ class Submission(SQLModel, table=True):
     language: str
     code: str
     status: str = "pending"  # "pending" | "running" | "done" | "error"
+    # True when this submission arrived after the timed sitting's window closed
+    # (past deadline + grace). A candidate's work is recorded and graded either
+    # way — the timer no longer discards it — but a late submit is flagged so the
+    # interviewer can see it came in after time and weigh it accordingly. Always
+    # False for an untimed sitting or a submit within the window.
+    late: bool = False
     agent_job_id: str | None = Field(default=None, index=True)
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()

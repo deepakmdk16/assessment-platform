@@ -91,6 +91,25 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   from the current interviewer, still editable per assessment) — a snapshot, never
   applied retroactively, so changing the default leaves existing assessments
   untouched.
+- **A13 · Timed-out submissions are recorded + flagged late — DONE 2026-07-26.**
+  Found while testing VS2: a timed sitting (Google Assessment, `duration_minutes`
+  was 2) showed no submissions even though candidates took it — every `/submit`
+  past `deadline + grace` was rejected with a **410 and discarded**, silently
+  losing the candidate's work (and contradicting the client, which already
+  auto-submits at the buzzer *"so time running out records work instead of losing
+  it"*). Now the timer no longer discards: `_submit_is_late` (replacing the raising
+  `_enforce_deadline`) returns a bool, and `candidate_submit` **stores + grades**
+  the submission either way, setting `Submission.late` (migration `f6c4d0b9e3a2`,
+  additive, default False). The invite's own lifecycle (revoked / expired via
+  `_load_invite_or_error`) still hard-blocks a submit — only the per-candidate
+  timer is relaxed. `late` is surfaced on every interviewer submission surface:
+  the attempts grid (amber-ring chip + "submitted late" tooltip, keyed per
+  candidate/slot so it works for VS2 variants too), the submission detail header,
+  and the submissions list — all as a `chip-late` amber pill. Backend + web tests
+  updated (the old "past-grace ⇒ 410" timer test now asserts 201 + `late=true`);
+  full suites green. **Note:** editing an existing assessment's duration does *not*
+  rescue already-expired attempts (deadline = each attempt's own `started_at` +
+  duration); re-invite to give a fresh clock.
 
 ---
 

@@ -211,6 +211,11 @@ export function SubmissionDetailPage() {
           <span className="muted">
             {sub.candidate} · {sub.language}
           </span>
+          {sub.late && (
+            <span className="chip chip-late" title="Submitted after the assessment window closed">
+              Late
+            </span>
+          )}
           {result ? (
             <>
               <span className={badgeClass(result.verdict)}>{result.verdict}</span>
