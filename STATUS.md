@@ -82,21 +82,6 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   follow-up once the per-assessment path exists, not a prerequisite. Store the
   logo as an asset/URL reference, not base64 in a row. Meaningful for selling
   white-labeled to enterprises. **L.**
-- **A13 · Redundant per-question timer once a question lives in an assessment
-  (low priority, found 2026-07-26).** Both `QuestionCreate` and
-  `AssessmentCreate` carry `duration_minutes` (`schemas.py:68`, `:119`), and
-  `AddQuestionPage.tsx` renders its own "Time allowed" input + "Indefinite"
-  checkbox (`:444`, `:465`) alongside `NewAssessmentPage.tsx`'s "Time allowed
-  (whole assessment)" control (`:94`). Once a question is added to an
-  assessment, the assessment's timer is what actually gates the candidate, so
-  the per-question value becomes confusing/unused there. Either hide or
-  relabel the per-question control when the question is used inside an
-  assessment, or clarify in copy that it only governs a standalone
-  single-question invite. **XS-S.**
-- **A14 · New-assessment page's empty question library is a dead end (found
-  2026-07-26).** `NewAssessmentPage.tsx` shows `"You have no questions yet."`
-  when the library is empty, but offers no way out — no link/button to
-  `/questions/new`. Add a "New question" CTA to that empty state. **XS.**
 
 ---
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { difficultyClass } from '../badges'
 import type { QuestionOut } from '../types'
@@ -157,9 +157,14 @@ export function NewAssessmentPage() {
           <div>
             <div className="picker-label">Your question library</div>
             {available.length === 0 ? (
-              <p className="empty-state">
-                {library.length === 0 ? 'You have no questions yet.' : 'All questions added.'}
-              </p>
+              library.length === 0 ? (
+                <p className="empty-state">
+                  You have no questions yet.{' '}
+                  <Link to="/questions/new">Create your first question</Link>.
+                </p>
+              ) : (
+                <p className="empty-state">All questions added.</p>
+              )
             ) : (
               available.map((q) => (
                 <div className="q-pick" key={q.id}>

@@ -131,4 +131,17 @@ describe('NewAssessmentPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/at least one question/i)
     expect(api.createAssessment).not.toHaveBeenCalled()
   })
+
+  it('offers a way to create a question when the library is empty (A14)', async () => {
+    vi.mocked(api.listQuestions).mockResolvedValue(libraryPage([]))
+    render(
+      <MemoryRouter>
+        <NewAssessmentPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText(/you have no questions yet/i)).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: /create your first question/i })
+    expect(link).toHaveAttribute('href', '/questions/new')
+  })
 })
