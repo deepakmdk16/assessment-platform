@@ -1,6 +1,10 @@
 .venv/
 __pycache__/
 *.db
+# SQLite sidecar files (rollback journal / WAL) — `*.db` doesn't match these.
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Local secrets (SMTP password, JWT_SECRET, agent tokens). Never commit these —
 # `.env.example` is the checked-in template.
