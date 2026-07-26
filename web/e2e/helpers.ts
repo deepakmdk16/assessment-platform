@@ -62,10 +62,10 @@ export async function createQuestion(page: Page): Promise<{ id: string; title: s
 export async function createInvite(page: Page, recipients: string[]): Promise<string> {
   const dialog = page.getByRole('dialog')
   if (!(await dialog.isVisible())) {
-    await page.getByRole('button', { name: 'Send invite' }).click()
+    await page.getByRole('button', { name: 'Send quick screen' }).click()
   }
   await dialog.getByLabel('Candidate emails').fill(recipients.join(', '))
-  await dialog.getByRole('button', { name: 'Send invite' }).click()
+  await dialog.getByRole('button', { name: 'Send quick screen' }).click()
   await expect(dialog).toBeHidden()
   const urlCell = page.locator('td.invite-url').first()
   await expect(urlCell).toBeVisible()

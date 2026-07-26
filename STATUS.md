@@ -24,7 +24,8 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   and links to Assessments for a multi-question sitting); the per-assessment path
   is **"Invite to this assessment"** (whole assessment, one shared timer). No data
   model change — both routes (`/questions/{id}/invites`, `/assessments/{id}/invites`)
-  are unchanged; this is UI/copy only. Frontend tests updated for the new labels.
+  are unchanged; this is UI/copy only. Frontend unit + E2E tests updated for the
+  new "Send quick screen" label (the E2E `createInvite` helper drives this path).
 - **A8 · Authoring ↔ assessment connective tissue — (a) DONE 2026-07-26.**
   `DashboardPage.tsx` now has a per-row checkbox multi-select and a "Build
   assessment (N)" button that navigates to `/assessments/new` with `state:

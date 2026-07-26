@@ -22,7 +22,7 @@ test('creating a question needs no invite — the nudge can be skipped', async (
   await expect(page.getByLabel('Candidate emails')).toBeHidden()
 
   // It's still one click away when they want it, and cancelling creates nothing.
-  await page.getByRole('button', { name: 'Send invite' }).click()
+  await page.getByRole('button', { name: 'Send quick screen' }).click()
   await expect(dialog.getByLabel('Candidate emails')).toBeVisible()
   await dialog.getByRole('button', { name: 'Cancel' }).click()
   await expect(dialog).toBeHidden()
@@ -34,7 +34,7 @@ test('an invite is not created without an email address', async ({ page }) => {
   await createQuestion(page)
 
   const dialog = page.getByRole('dialog')
-  await dialog.getByRole('button', { name: 'Send invite' }).click()
+  await dialog.getByRole('button', { name: 'Send quick screen' }).click()
 
   await expect(dialog.getByRole('alert')).toContainText('at least one candidate email')
   await expect(dialog).toBeVisible() // still open, nothing created
