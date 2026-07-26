@@ -769,6 +769,16 @@ def _membership_rows(
     ]
 
 
+def _assessment_has_invite(assessment_id: str, session: Session) -> bool:
+    """True if any invite (sent or not) references this assessment (A9). A
+    submission can't exist for an assessment without one of these, so checking
+    invites alone also covers "or submissions exist"."""
+    return (
+        session.exec(select(Invite.id).where(Invite.assessment_id == assessment_id)).first()
+        is not None
+    )
+
+
 @app.post("/assessments", response_model=AssessmentOut, status_code=201)
 def create_assessment(
     body: AssessmentCreate,
@@ -839,6 +849,19 @@ def update_assessment(
     session: Session = Depends(get_session),
 ) -> AssessmentOut:
     a = _owned_assessment(assessment_id, current, session)
+    # A9: once an invite has gone out (or, transitively, a submission exists),
+    # two candidates in the "same" assessment must sit the same questions in
+    # the same order — lock the SET, not the whole record. Title/duration/
+    # branding stay freely editable; only a real membership/order change 409s.
+    current_ids = [aq.question_id for aq in a.questions]
+    if body.question_ids != current_ids and _assessment_has_invite(assessment_id, session):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this assessment's question set can't change: it has already been sent "
+                "as an invite. Create a new assessment instead."
+            ),
+        )
     a.title = body.title
     a.duration_minutes = body.duration_minutes
     a.org_name = body.org_name

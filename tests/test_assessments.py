@@ -102,6 +102,52 @@ def test_assessment_crud_roundtrip(client) -> None:
     assert client.get("/assessments/screen1").status_code == 404
 
 
+def test_update_locks_question_set_once_invited(client) -> None:
+    """A9: the question set can't change once an invite has gone out, but
+    title/duration/branding stay freely editable, and re-submitting the SAME
+    set (no real change) is not blocked."""
+    _make_questions(client, "q1", "q2", "q3")
+    client.post(
+        "/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1", "q2"]}
+    )
+
+    # Before any invite: reordering/changing the set is fine.
+    assert client.put(
+        "/assessments/a1", json={"title": "A", "question_ids": ["q2", "q1"]}
+    ).status_code == 200
+
+    client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]})
+
+    # Now locked: adding/removing/reordering questions 409s.
+    resp = client.put(
+        "/assessments/a1", json={"title": "A", "question_ids": ["q1", "q2", "q3"]}
+    )
+    assert resp.status_code == 409
+    assert "question set can't change" in resp.json()["detail"]
+
+    # Re-sending the SAME (already-current) set is not a real change — allowed.
+    same_order = client.get("/assessments/a1").json()
+    current_ids = [q["question_id"] for q in same_order["questions"]]
+    assert client.put(
+        "/assessments/a1",
+        json={"title": "A", "question_ids": current_ids, "duration_minutes": 45},
+    ).status_code == 200
+
+    # Title/duration/branding remain editable even though questions are locked.
+    resp = client.put(
+        "/assessments/a1",
+        json={
+            "title": "A v2", "question_ids": current_ids, "duration_minutes": 30,
+            "org_name": "Acme", "logo_url": "https://cdn.example.com/a.png",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["title"] == "A v2"
+    assert body["duration_minutes"] == 30
+    assert body["org_name"] == "Acme"
+
+
 def test_create_rejects_unknown_question(client) -> None:
     _make_questions(client, "q1")
     resp = client.post(

@@ -37,10 +37,6 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   from inside the builder. Keep question creation simple and owned by the questions
   page; the builder assembles, it shouldn't grow a second authoring flow unless
   there's real demand. **M.**
-- **A9 · Assessment editing has no guardrails.** `PUT /assessments/{id}` can reorder
-  or swap questions after invites are sent / submissions exist, so two candidates in
-  the "same" assessment could get different question sets. Lock the question set once
-  an invite or submission references the assessment (or version it). **M.**
 - **A11 · No assessment-level score / verdict.** An assessment stores N independent
   per-question results; there's no composite (weighted score, "passed 2/3", overall
   verdict) for the sitting. Interviewers need an at-a-glance assessment outcome.
