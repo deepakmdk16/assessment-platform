@@ -62,9 +62,15 @@ QUESTION = {
     "example_input": "2\n3 4\n",
     "example_output": "7",
     "test_cases": [
+        # >= 4 correctness cases to clear the F4 case floor (MIN_CORRECTNESS_CASES,
+        # enforced on POST /questions since 2026-07-23) — 2 used to 422 here.
         {"name": "t1", "stdin": "2\n3 4\n", "expected": "7",
          "category": "correctness", "weight": 1.0},
         {"name": "t2", "stdin": "3\n1 2 3\n", "expected": "6",
+         "category": "correctness", "weight": 1.0},
+        {"name": "t3", "stdin": "1\n5\n", "expected": "5",
+         "category": "correctness", "weight": 1.0},
+        {"name": "t4", "stdin": "4\n1 2 3 4\n", "expected": "10",
          "category": "correctness", "weight": 1.0},
         {"name": "perf", "stdin": _PERF_STDIN, "expected": str(_PERF_N),
          "category": "performance", "weight": 3.0},
