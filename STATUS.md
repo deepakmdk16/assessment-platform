@@ -30,13 +30,16 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   favour of assessment invites (a single question becomes a one-question
   assessment), or clearly separate "quick single-question screen" from "assessment".
   Today both paths exist (`/questions/{id}/invites` and `/assessments/{id}/invites`). **M.**
-- **A8 · Authoring ↔ assessment connective tissue.** The builder already adds
-  *existing* library questions; what's missing: (a) an "add to assessment" affordance
-  from the questions page / a "build assessment from these" multi-select, and
-  (b) — **lowest priority, explicitly deferred** — creating a *brand-new* question
-  from inside the builder. Keep question creation simple and owned by the questions
-  page; the builder assembles, it shouldn't grow a second authoring flow unless
-  there's real demand. **M.**
+- **A8 · Authoring ↔ assessment connective tissue — (a) DONE 2026-07-26.**
+  `DashboardPage.tsx` now has a per-row checkbox multi-select and a "Build
+  assessment (N)" button that navigates to `/assessments/new` with `state:
+  {preselected}`; `NewAssessmentPage.tsx` pre-populates its selection from that
+  state, silently dropping any id not actually in the library (stale/archived/
+  deleted) rather than leaving it invisibly included in the create payload.
+  **(b) — lowest priority, explicitly deferred, unchanged:** creating a
+  *brand-new* question from inside the builder. Keep question creation simple
+  and owned by the questions page; the builder assembles, it shouldn't grow a
+  second authoring flow unless there's real demand.
 - **A11 · No assessment-level score / verdict.** An assessment stores N independent
   per-question results; there's no composite (weighted score, "passed 2/3", overall
   verdict) for the sitting. Interviewers need an at-a-glance assessment outcome.

@@ -18,6 +18,9 @@ export function DashboardPage() {
   // Bumped after an archive/unarchive so the current page + total refetch and
   // stay consistent (a row may have just left or joined the filtered set).
   const [reloadKey, setReloadKey] = useState(0)
+  // Multi-select for "build an assessment from these" (A8) — plain component
+  // state, so it naturally resets on navigation.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     let cancelled = false
@@ -39,6 +42,19 @@ export function DashboardPage() {
   function toggleShowArchived(value: boolean) {
     setShowArchived(value)
     setOffset(0) // the filtered set changed size; start from the first page
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((s) => {
+      const next = new Set(s)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function buildAssessment() {
+    navigate('/assessments/new', { state: { preselected: [...selectedIds] } })
   }
 
   // Archive/unarchive is a row action, so stop the click from also opening the
@@ -91,6 +107,11 @@ export function DashboardPage() {
             />
             Show archived
           </label>
+          {selectedIds.size > 0 && (
+            <button type="button" className="btn sec sm" onClick={buildAssessment}>
+              Build assessment ({selectedIds.size})
+            </button>
+          )}
         </div>
       )}
 
@@ -108,6 +129,7 @@ export function DashboardPage() {
             <table className="tbl">
               <thead>
                 <tr>
+                  <th></th>
                   <th>Problem</th>
                   <th>Test cases</th>
                   <th>Difficulty</th>
@@ -123,6 +145,14 @@ export function DashboardPage() {
                     className={`clickable-row${q.status === 'archived' ? ' row-archived' : ''}`}
                     onClick={() => navigate(`/questions/${q.id}`)}
                   >
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${q.title}`}
+                        checked={selectedIds.has(q.id)}
+                        onChange={() => toggleSelect(q.id)}
+                      />
+                    </td>
                     <td>
                       <div className="t-title">{q.title}</div>
                     </td>

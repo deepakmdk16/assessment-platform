@@ -1,17 +1,23 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { difficultyClass } from '../badges'
 import type { QuestionOut } from '../types'
 
 export function NewAssessmentPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [title, setTitle] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(60)
   const [indefinite, setIndefinite] = useState(false)
   const [orgName, setOrgName] = useState('')
   const [logoUrl, setLogoUrl] = useState('')
-  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  // Pre-populated from the questions page's "Build assessment" multi-select
+  // (A8). Any id not actually in the library (stale/archived/deleted) simply
+  // never appears in `selected` below — no extra filtering needed.
+  const [selectedIds, setSelectedIds] = useState<string[]>(
+    () => (location.state as { preselected?: string[] } | null)?.preselected ?? [],
+  )
   const [library, setLibrary] = useState<QuestionOut[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -21,7 +27,13 @@ export function NewAssessmentPage() {
     api
       .listQuestions(false, 0, 200)
       .then((page) => {
-        if (!cancelled) setLibrary(page.items)
+        if (cancelled) return
+        setLibrary(page.items)
+        // Drop any preselected id that isn't actually in the library (stale,
+        // archived, or deleted) — otherwise it'd be silently included on
+        // create despite never appearing in the "in this assessment" list.
+        const validIds = new Set(page.items.map((q) => q.id))
+        setSelectedIds((ids) => ids.filter((id) => validIds.has(id)))
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load questions')
