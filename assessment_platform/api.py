@@ -755,14 +755,20 @@ def create_variant_set(
     )
     session.add(vs)
 
+    # Siblings of one brief share the agent's drafted id (e.g. every variant of a
+    # max-sum-non-adjacent brief is drafted as 'max_sum_non_adjacent'), so honoring
+    # the incoming id would collide the moment there's a 2nd variant. A variant is a
+    # brand-new stored question — always mint a fresh unique id. `taken` also guards
+    # against two variants colliding within this same (not-yet-committed) batch.
     variants: list[Question] = []
+    taken: set[str] = set()
     for i, v in enumerate(body.variants):
         _enforce_case_floor(v.test_cases)
-        qid = (v.id or "").strip() or _generate_id(
-            v.title, lambda c: session.get(Question, c) is not None
+        qid = _generate_id(
+            v.title or "variant",
+            lambda c: c in taken or session.get(Question, c) is not None,
         )
-        if session.get(Question, qid) is not None:
-            raise HTTPException(status_code=409, detail=f"question {qid!r} already exists.")
+        taken.add(qid)
         q = Question(
             id=qid,
             owner_id=owner,

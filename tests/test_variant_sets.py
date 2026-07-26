@@ -162,6 +162,19 @@ def test_create_and_get_variant_set(client: TestClient) -> None:
     assert q["id"] == vid
 
 
+def test_create_variant_set_dedupes_shared_drafted_id(client: TestClient) -> None:
+    # Siblings of one brief arrive with the SAME agent-drafted id (e.g. both
+    # 'max_sum_non_adjacent'); the save must mint fresh ids, not 409 on the 2nd.
+    body = _set_create_body(
+        variants=[_variant_create("max_sum_non_adjacent", "A"),
+                  _variant_create("max_sum_non_adjacent", "B")]
+    )
+    r = client.post("/variant-sets", json=body)
+    assert r.status_code == 201
+    ids = [v["id"] for v in r.json()["variants"]]
+    assert len(set(ids)) == 2  # two distinct questions, no collision
+
+
 def test_list_variant_sets_shows_count(client: TestClient) -> None:
     client.post("/variant-sets", json=_set_create_body())
     page = client.get("/variant-sets").json()
