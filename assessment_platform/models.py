@@ -190,6 +190,15 @@ class CandidateAttempt(SQLModel, table=True):
     never moved, so the deadline (started_at + question.duration_minutes) survives
     a reload or a device switch and can't be reset by re-opening the link. Only
     the timer needs this; the attempt of record is still the `Submission`.
+
+    `candidate_name` (A10) is anchored the same way: stamped once here at first
+    `/start`, then used for every `Submission.candidate` across the sitting,
+    instead of trusting the display name resent on each individual `/submit` —
+    a name typo re-entered after a reload used to fork one candidate's sitting
+    into inconsistently-labeled rows. Nullable so a pre-existing attempt row
+    (created before this column existed) degrades gracefully rather than
+    breaking; `candidate_submit` falls back to the current request's name only
+    in that case.
     """
 
     __table_args__ = (
@@ -199,6 +208,7 @@ class CandidateAttempt(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     invite_id: int = Field(foreign_key="invite.id", index=True)
     candidate_email: str = Field(index=True)
+    candidate_name: str | None = None
     started_at: datetime = Field(default_factory=_utcnow)
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()

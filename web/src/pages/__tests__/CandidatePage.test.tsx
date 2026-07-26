@@ -108,7 +108,7 @@ describe('CandidatePage', () => {
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     await waitFor(() => {
-      expect(api.startInvite).toHaveBeenCalledWith('tok123', 'jane@example.com')
+      expect(api.startInvite).toHaveBeenCalledWith('tok123', 'jane@example.com', 'Jane Doe')
     })
 
     // Editor split view

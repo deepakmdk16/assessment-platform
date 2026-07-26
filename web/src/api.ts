@@ -210,10 +210,10 @@ export const api = {
 
   getInvite: (token: string) => request<InviteStatusResponse>(`/invite/${token}`),
 
-  startInvite: (token: string, candidate_email: string) =>
+  startInvite: (token: string, candidate_email: string, candidate_name?: string) =>
     request<InviteStartResponse>(`/invite/${token}/start`, {
       method: 'POST',
-      body: { candidate_email },
+      body: { candidate_email, candidate_name },
     }),
 
   runCandidate: (

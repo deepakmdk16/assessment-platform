@@ -198,6 +198,70 @@ def test_candidate_multi_question_flow(client, monkeypatch) -> None:
     assert client.post(f"/invite/{tok}/submit", json=_sub(tok, "cand@x.io", None)).status_code == 400
 
 
+def test_candidate_name_anchored_at_start_not_reforked_per_submit(client, monkeypatch) -> None:
+    """A10: the name given at /start wins for every submission in the sitting,
+    even if a later /submit (e.g. after a reload re-typed it) sends a different
+    one — the whole sitting stays one consistently-labeled candidate."""
+    _make_questions(client, "q1", "q2")
+    client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1", "q2"]})
+    tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
+
+    client.post(
+        f"/invite/{tok}/start", json={"candidate_email": "cand@x.io", "candidate_name": "Jane Doe"}
+    )
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
+    assert client.post(
+        f"/invite/{tok}/submit",
+        json={
+            "candidate_name": "jane d",  # differs from the /start name
+            "candidate_email": "cand@x.io", "language": "python", "code": "print(1)",
+            "question_id": "q1",
+        },
+    ).status_code == 201
+    assert client.post(
+        f"/invite/{tok}/submit",
+        json={
+            "candidate_name": "Janee Doee",  # a different typo again
+            "candidate_email": "cand@x.io", "language": "python", "code": "print(2)",
+            "question_id": "q2",
+        },
+    ).status_code == 201
+
+    names = {s["question_id"]: s["candidate"] for s in client.get("/submissions").json()["items"]}
+    assert names == {"q1": "Jane Doe", "q2": "Jane Doe"}
+
+
+def test_candidate_name_anchored_at_first_submit_when_start_had_none(client, monkeypatch) -> None:
+    """A10 fallback: an old client that never sends candidate_name to /start
+    still gets one consistent name, anchored from the first /submit that
+    actually created the attempt."""
+    _make_questions(client, "q1", "q2")
+    client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1", "q2"]})
+    tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
+
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io"})  # no name
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
+    assert client.post(
+        f"/invite/{tok}/submit",
+        json={
+            "candidate_name": "Jane Doe",
+            "candidate_email": "cand@x.io", "language": "python", "code": "print(1)",
+            "question_id": "q1",
+        },
+    ).status_code == 201
+    assert client.post(
+        f"/invite/{tok}/submit",
+        json={
+            "candidate_name": "Someone Else",  # must not override the anchored name
+            "candidate_email": "cand@x.io", "language": "python", "code": "print(2)",
+            "question_id": "q2",
+        },
+    ).status_code == 201
+
+    names = {s["question_id"]: s["candidate"] for s in client.get("/submissions").json()["items"]}
+    assert names == {"q1": "Jane Doe", "q2": "Jane Doe"}
+
+
 def test_submissions_list_surfaces_assessment_link(client, monkeypatch) -> None:
     """A3: a submission via an assessment invite is tagged with the assessment's
     id/title in the summary list; a standalone direct submission is not."""

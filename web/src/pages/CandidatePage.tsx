@@ -128,7 +128,7 @@ export function CandidatePage() {
     setGateError(null)
     setStarting(true)
     try {
-      const data = await api.startInvite(token, candidateEmail)
+      const data = await api.startInvite(token, candidateEmail, candidateName)
       setInvite(data)
       setDeadline(data.deadline ?? null)
       // Restore an autosaved draft for this invite, if any; only keep a saved

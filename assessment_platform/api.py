@@ -1148,11 +1148,18 @@ def _deadline_for(started_at: datetime, duration_minutes: int | None) -> datetim
     return as_utc(started_at) + timedelta(minutes=duration_minutes)
 
 
-def _get_or_start_attempt(invite: Invite, email: str, session: Session) -> CandidateAttempt:
+def _get_or_start_attempt(
+    invite: Invite, email: str, session: Session, *, candidate_name: str | None = None
+) -> CandidateAttempt:
     """Return this candidate's attempt for the invite, creating it (stamping
-    started_at = now) on first call. The started_at is never moved once set, so
-    re-opening the link can't reset a timed assessment's clock. The unique
-    constraint makes the get-or-create race-safe: a loser re-reads the winner's row.
+    started_at = now, and candidate_name if given — A10) on first call.
+    started_at is never moved once set, so re-opening the link can't reset a
+    timed assessment's clock. candidate_name is filled in **once** if the
+    existing row doesn't have one yet (e.g. /start ran before any client sent a
+    name) — this is a one-time backfill of a blank, not overwriting an
+    already-set name, so a later resubmission still can't rename the sitting.
+    The unique constraint makes the get-or-create race-safe: a loser re-reads
+    the winner's row.
     """
     existing = session.exec(
         select(CandidateAttempt).where(
@@ -1161,8 +1168,16 @@ def _get_or_start_attempt(invite: Invite, email: str, session: Session) -> Candi
         )
     ).first()
     if existing is not None:
+        if existing.candidate_name is None and candidate_name is not None:
+            existing.candidate_name = candidate_name
+            existing.updated_at = datetime.now(timezone.utc)
+            session.add(existing)
+            session.commit()
+            session.refresh(existing)
         return existing
-    attempt = CandidateAttempt(invite_id=_require_id(invite.id), candidate_email=email)
+    attempt = CandidateAttempt(
+        invite_id=_require_id(invite.id), candidate_email=email, candidate_name=candidate_name
+    )
     session.add(attempt)
     try:
         session.commit()
@@ -1181,19 +1196,17 @@ def _get_or_start_attempt(invite: Invite, email: str, session: Session) -> Candi
     return attempt
 
 
-def _enforce_deadline(invite: Invite, email: str, session: Session) -> None:
+def _enforce_deadline(invite: Invite, attempt: CandidateAttempt, session: Session) -> None:
     """Reject a submit that arrives after the sitting's window has closed.
 
-    Server-authoritative: the deadline is started_at (stamped at /start) + the
-    invite's total duration (the assessment's, or a legacy question's), plus a
-    grace window for the auto-submit round-trip. An untimed sitting, or a submit
-    with no attempt on record (the candidate never opened it via /start), is left
-    to pass — the latter is anchored now so at least the clock exists.
+    Server-authoritative: the deadline is `attempt.started_at` (stamped at
+    /start) + the invite's total duration (the assessment's, or a legacy
+    question's), plus a grace window for the auto-submit round-trip. No-op for
+    an untimed sitting.
     """
     duration = _invite_duration(invite, session)
     if duration is None:
         return
-    attempt = _get_or_start_attempt(invite, email, session)
     deadline = _deadline_for(attempt.started_at, duration)
     assert deadline is not None  # duration is not None here
     if datetime.now(timezone.utc) > deadline + timedelta(seconds=config.SUBMIT_GRACE_SECONDS):
@@ -1294,8 +1307,9 @@ def start_invite(
     if invite.assessment_id is None and invite.question_id is not None:
         _check_not_already_submitted(invite, email, invite.question_id, session)
     # Stamp (or re-read) the clock start for this candidate, so the returned
-    # deadline is stable across reloads and device switches.
-    attempt = _get_or_start_attempt(invite, email, session)
+    # deadline is stable across reloads and device switches. candidate_name is
+    # anchored the same way (A10) — ignored on re-entry once already set.
+    attempt = _get_or_start_attempt(invite, email, session, candidate_name=body.candidate_name)
     return _candidate_question_view(invite, session, attempt)
 
 
@@ -1422,15 +1436,20 @@ async def candidate_submit(
     # for an assessment). One attempt per (invite, candidate, question).
     question = _resolve_question(invite, body.question_id, session)
     _check_not_already_submitted(invite, email, question.id, session)
+    # Anchor identity once per (invite, email) — A10: the attempt's stored name
+    # always wins once set (from the first /start or, lacking that, this first
+    # /submit), so a later resubmission with a differently-typed name can't
+    # fork one candidate's sitting into inconsistently-labeled rows.
+    attempt = _get_or_start_attempt(invite, email, session, candidate_name=body.candidate_name)
     # Server-enforced timer: refuse a submit that missed the window (past the
     # deadline + grace). No-op for an untimed sitting.
-    _enforce_deadline(invite, email, session)
+    _enforce_deadline(invite, attempt, session)
 
     sub = Submission(
         id=uuid.uuid4().hex,
         question_id=question.id,
         invite_id=invite.id,
-        candidate=body.candidate_name,
+        candidate=attempt.candidate_name or body.candidate_name,
         candidate_email=email,
         language=body.language,
         code=body.code,

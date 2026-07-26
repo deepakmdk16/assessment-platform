@@ -342,6 +342,11 @@ class InviteStatusOut(BaseModel):
 
 class CandidateStartIn(BaseModel):
     candidate_email: EmailStr
+    # Anchored on the CandidateAttempt at first /start (A10) and reused for
+    # every submission in the sitting. Optional so an old client that only
+    # ever sent it at /submit keeps working; a fresh attempt just starts
+    # nameless until the first submit's body backfills it.
+    candidate_name: str | None = None
 
 
 class InvitePublicOut(BaseModel):

@@ -41,10 +41,6 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   or swap questions after invites are sent / submissions exist, so two candidates in
   the "same" assessment could get different question sets. Lock the question set once
   an invite or submission references the assessment (or version it). **M.**
-- **A10 · Candidate identity is re-entered per question.** Each `/submit` carries
-  `candidate_name`/`candidate_email`; a typo on question 2 forks a different attempt.
-  For an assessment sitting, fix identity once at `/start` and thread it, so all
-  questions belong to one attempt. **M.**
 - **A11 · No assessment-level score / verdict.** An assessment stores N independent
   per-question results; there's no composite (weighted score, "passed 2/3", overall
   verdict) for the sitting. Interviewers need an at-a-glance assessment outcome.
