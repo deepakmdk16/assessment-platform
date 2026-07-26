@@ -55,6 +55,8 @@ from .models import (
 from .question_rules import case_floor_violations
 from .ratelimit import client_ip, limiter
 from .schemas import (
+    AssessmentAttemptOut,
+    AssessmentAttemptQuestionOut,
     AssessmentCreate,
     AssessmentOut,
     AssessmentQuestionOut,
@@ -198,7 +200,9 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
 
 
 def _submission_summary(
-    sub: Submission, result: AssessmentResult | None
+    sub: Submission,
+    result: AssessmentResult | None,
+    assessment: Assessment | None = None,
 ) -> SubmissionSummaryOut:
     return SubmissionSummaryOut(
         id=sub.id,
@@ -211,7 +215,41 @@ def _submission_summary(
         created_at=sub.created_at,
         verdict=result.verdict if result else None,
         score_pct=result.score_pct if result else None,
+        assessment_id=assessment.id if assessment else None,
+        assessment_title=assessment.title if assessment else None,
     )
+
+
+def _assessments_by_submission(
+    subs: Sequence[Submission], session: Session
+) -> dict[str, Assessment]:
+    """Assessment (if any) each submission's invite belongs to, keyed by
+    submission_id — two batched queries (invites, then assessments), no N+1.
+    A submission with no invite, or a legacy single-question invite, is simply
+    absent from the result (A3)."""
+    invite_ids = [s.invite_id for s in subs if s.invite_id is not None]
+    if not invite_ids:
+        return {}
+    invites = session.exec(
+        select(Invite).where(col(Invite.id).in_(invite_ids), col(Invite.assessment_id).is_not(None))
+    ).all()
+    assessment_ids = [inv.assessment_id for inv in invites if inv.assessment_id is not None]
+    if not assessment_ids:
+        return {}
+    assessments = {
+        a.id: a
+        for a in session.exec(select(Assessment).where(col(Assessment.id).in_(assessment_ids))).all()
+    }
+    invite_to_assessment: dict[int, Assessment] = {}
+    for inv in invites:
+        if inv.assessment_id is not None and inv.assessment_id in assessments:
+            invite_to_assessment[_require_id(inv.id)] = assessments[inv.assessment_id]
+
+    result: dict[str, Assessment] = {}
+    for s in subs:
+        if s.invite_id is not None and s.invite_id in invite_to_assessment:
+            result[s.id] = invite_to_assessment[s.invite_id]
+    return result
 
 
 def _results_by_submission(
@@ -700,6 +738,8 @@ def _assessment_out(a: Assessment) -> AssessmentOut:
         id=a.id,
         title=a.title,
         duration_minutes=a.duration_minutes,
+        org_name=a.org_name,
+        logo_url=a.logo_url,
         status=a.status,
         created_at=a.created_at,
         updated_at=a.updated_at,
@@ -731,6 +771,16 @@ def _membership_rows(
     ]
 
 
+def _assessment_has_invite(assessment_id: str, session: Session) -> bool:
+    """True if any invite (sent or not) references this assessment (A9). A
+    submission can't exist for an assessment without one of these, so checking
+    invites alone also covers "or submissions exist"."""
+    return (
+        session.exec(select(Invite.id).where(Invite.assessment_id == assessment_id)).first()
+        is not None
+    )
+
+
 @app.post("/assessments", response_model=AssessmentOut, status_code=201)
 def create_assessment(
     body: AssessmentCreate,
@@ -751,6 +801,8 @@ def create_assessment(
         owner_id=_require_id(current.id),
         title=body.title,
         duration_minutes=body.duration_minutes,
+        org_name=body.org_name,
+        logo_url=body.logo_url,
         questions=_membership_rows(body.question_ids, current, session),
     )
     session.add(a)
@@ -799,8 +851,23 @@ def update_assessment(
     session: Session = Depends(get_session),
 ) -> AssessmentOut:
     a = _owned_assessment(assessment_id, current, session)
+    # A9: once an invite has gone out (or, transitively, a submission exists),
+    # two candidates in the "same" assessment must sit the same questions in
+    # the same order — lock the SET, not the whole record. Title/duration/
+    # branding stay freely editable; only a real membership/order change 409s.
+    current_ids = [aq.question_id for aq in a.questions]
+    if body.question_ids != current_ids and _assessment_has_invite(assessment_id, session):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this assessment's question set can't change: it has already been sent "
+                "as an invite. Create a new assessment instead."
+            ),
+        )
     a.title = body.title
     a.duration_minutes = body.duration_minutes
+    a.org_name = body.org_name
+    a.logo_url = body.logo_url
     a.updated_at = datetime.now(timezone.utc)
     # Full replace of the membership set (PUT). Clear via the relationship and
     # flush FIRST (delete-orphan removes the old rows), so a question kept across
@@ -973,6 +1040,90 @@ def list_assessment_invites(
     return [_invite_out(inv) for inv in invites]
 
 
+@app.get("/assessments/{assessment_id}/attempts", response_model=list[AssessmentAttemptOut])
+def list_assessment_attempts(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> list[AssessmentAttemptOut]:
+    """One row per candidate who has started this assessment (A3): every
+    question's result plus a composite (A11) — pass count is the headline,
+    average score across graded questions is the secondary detail. An invited
+    recipient who never opened the link has no row here (nothing to attempt
+    yet); that's still visible via the invite list.
+    """
+    a = _owned_assessment(assessment_id, current, session)
+    ordered_questions = [
+        (aq.question_id, aq.question.title if aq.question else aq.question_id)
+        for aq in a.questions
+    ]
+    invite_ids = session.exec(
+        select(Invite.id).where(Invite.assessment_id == assessment_id)
+    ).all()
+    if not invite_ids:
+        return []
+    attempts = session.exec(
+        select(CandidateAttempt)
+        .where(col(CandidateAttempt.invite_id).in_(invite_ids))
+        .order_by(col(CandidateAttempt.started_at))
+    ).all()
+    # candidate_email is nullable on Submission only for the interviewer's
+    # direct (non-invite) path; every row here came through an invite, whose
+    # /submit route always sets it — the `is not None` narrows for mypy.
+    subs = [
+        s
+        for s in session.exec(
+            select(Submission).where(col(Submission.invite_id).in_(invite_ids))
+        ).all()
+        if s.candidate_email is not None
+    ]
+    results = _results_by_submission(subs, session)
+    # (candidate_email, question_id) -> the submission's result / id, if any.
+    graded: dict[tuple[str, str], AssessmentResult] = {}
+    submission_id_by_pair: dict[tuple[str, str], str] = {}
+    for s in subs:
+        assert s.candidate_email is not None  # filtered above
+        submission_id_by_pair[(s.candidate_email, s.question_id)] = s.id
+        r = results.get(s.id)
+        if r is not None:
+            graded[(s.candidate_email, s.question_id)] = r
+
+    out = []
+    for attempt in attempts:
+        q_rows = []
+        graded_scores: list[float] = []
+        passed = 0
+        for qid, title in ordered_questions:
+            r = graded.get((attempt.candidate_email, qid))
+            if r is not None:
+                graded_scores.append(r.score_pct)
+                if r.verdict == "PASS":
+                    passed += 1
+            q_rows.append(
+                AssessmentAttemptQuestionOut(
+                    question_id=qid,
+                    title=title,
+                    submitted=(attempt.candidate_email, qid) in submission_id_by_pair,
+                    submission_id=submission_id_by_pair.get((attempt.candidate_email, qid)),
+                    verdict=r.verdict if r else None,
+                    score_pct=r.score_pct if r else None,
+                )
+            )
+        out.append(
+            AssessmentAttemptOut(
+                candidate_name=attempt.candidate_name or attempt.candidate_email,
+                candidate_email=attempt.candidate_email,
+                questions=q_rows,
+                passed_count=passed,
+                total_count=len(ordered_questions),
+                avg_score_pct=(
+                    sum(graded_scores) / len(graded_scores) if graded_scores else None
+                ),
+            )
+        )
+    return out
+
+
 @app.post("/questions/{question_id}/invites/{token}/revoke", response_model=InviteOut)
 def revoke_invite(
     question_id: str,
@@ -1106,11 +1257,18 @@ def _deadline_for(started_at: datetime, duration_minutes: int | None) -> datetim
     return as_utc(started_at) + timedelta(minutes=duration_minutes)
 
 
-def _get_or_start_attempt(invite: Invite, email: str, session: Session) -> CandidateAttempt:
+def _get_or_start_attempt(
+    invite: Invite, email: str, session: Session, *, candidate_name: str | None = None
+) -> CandidateAttempt:
     """Return this candidate's attempt for the invite, creating it (stamping
-    started_at = now) on first call. The started_at is never moved once set, so
-    re-opening the link can't reset a timed assessment's clock. The unique
-    constraint makes the get-or-create race-safe: a loser re-reads the winner's row.
+    started_at = now, and candidate_name if given — A10) on first call.
+    started_at is never moved once set, so re-opening the link can't reset a
+    timed assessment's clock. candidate_name is filled in **once** if the
+    existing row doesn't have one yet (e.g. /start ran before any client sent a
+    name) — this is a one-time backfill of a blank, not overwriting an
+    already-set name, so a later resubmission still can't rename the sitting.
+    The unique constraint makes the get-or-create race-safe: a loser re-reads
+    the winner's row.
     """
     existing = session.exec(
         select(CandidateAttempt).where(
@@ -1119,8 +1277,16 @@ def _get_or_start_attempt(invite: Invite, email: str, session: Session) -> Candi
         )
     ).first()
     if existing is not None:
+        if existing.candidate_name is None and candidate_name is not None:
+            existing.candidate_name = candidate_name
+            existing.updated_at = datetime.now(timezone.utc)
+            session.add(existing)
+            session.commit()
+            session.refresh(existing)
         return existing
-    attempt = CandidateAttempt(invite_id=_require_id(invite.id), candidate_email=email)
+    attempt = CandidateAttempt(
+        invite_id=_require_id(invite.id), candidate_email=email, candidate_name=candidate_name
+    )
     session.add(attempt)
     try:
         session.commit()
@@ -1139,19 +1305,17 @@ def _get_or_start_attempt(invite: Invite, email: str, session: Session) -> Candi
     return attempt
 
 
-def _enforce_deadline(invite: Invite, email: str, session: Session) -> None:
+def _enforce_deadline(invite: Invite, attempt: CandidateAttempt, session: Session) -> None:
     """Reject a submit that arrives after the sitting's window has closed.
 
-    Server-authoritative: the deadline is started_at (stamped at /start) + the
-    invite's total duration (the assessment's, or a legacy question's), plus a
-    grace window for the auto-submit round-trip. An untimed sitting, or a submit
-    with no attempt on record (the candidate never opened it via /start), is left
-    to pass — the latter is anchored now so at least the clock exists.
+    Server-authoritative: the deadline is `attempt.started_at` (stamped at
+    /start) + the invite's total duration (the assessment's, or a legacy
+    question's), plus a grace window for the auto-submit round-trip. No-op for
+    an untimed sitting.
     """
     duration = _invite_duration(invite, session)
     if duration is None:
         return
-    attempt = _get_or_start_attempt(invite, email, session)
     deadline = _deadline_for(attempt.started_at, duration)
     assert deadline is not None  # duration is not None here
     if datetime.now(timezone.utc) > deadline + timedelta(seconds=config.SUBMIT_GRACE_SECONDS):
@@ -1205,6 +1369,12 @@ def _candidate_question_view(
         questions=public,
         languages=config.SUPPORTED_LANGUAGES,
         deadline=deadline,
+        # Per-assessment branding (A12) — None for a legacy single-question
+        # invite or an unbranded assessment; the candidate UI falls back to a
+        # generic header in either case.
+        assessment_title=invite.assessment.title if invite.assessment else None,
+        org_name=invite.assessment.org_name if invite.assessment else None,
+        logo_url=invite.assessment.logo_url if invite.assessment else None,
     )
 
 
@@ -1246,8 +1416,9 @@ def start_invite(
     if invite.assessment_id is None and invite.question_id is not None:
         _check_not_already_submitted(invite, email, invite.question_id, session)
     # Stamp (or re-read) the clock start for this candidate, so the returned
-    # deadline is stable across reloads and device switches.
-    attempt = _get_or_start_attempt(invite, email, session)
+    # deadline is stable across reloads and device switches. candidate_name is
+    # anchored the same way (A10) — ignored on re-entry once already set.
+    attempt = _get_or_start_attempt(invite, email, session, candidate_name=body.candidate_name)
     return _candidate_question_view(invite, session, attempt)
 
 
@@ -1374,15 +1545,20 @@ async def candidate_submit(
     # for an assessment). One attempt per (invite, candidate, question).
     question = _resolve_question(invite, body.question_id, session)
     _check_not_already_submitted(invite, email, question.id, session)
+    # Anchor identity once per (invite, email) — A10: the attempt's stored name
+    # always wins once set (from the first /start or, lacking that, this first
+    # /submit), so a later resubmission with a differently-typed name can't
+    # fork one candidate's sitting into inconsistently-labeled rows.
+    attempt = _get_or_start_attempt(invite, email, session, candidate_name=body.candidate_name)
     # Server-enforced timer: refuse a submit that missed the window (past the
     # deadline + grace). No-op for an untimed sitting.
-    _enforce_deadline(invite, email, session)
+    _enforce_deadline(invite, attempt, session)
 
     sub = Submission(
         id=uuid.uuid4().hex,
         question_id=question.id,
         invite_id=invite.id,
-        candidate=body.candidate_name,
+        candidate=attempt.candidate_name or body.candidate_name,
         candidate_email=email,
         language=body.language,
         code=body.code,
@@ -1552,7 +1728,10 @@ def list_submissions(
         .limit(limit)
     ).all()
     results = _results_by_submission(subs, session)
-    items = [_submission_summary(sub, results.get(sub.id)) for sub in subs]
+    assessments = _assessments_by_submission(subs, session)
+    items = [
+        _submission_summary(sub, results.get(sub.id), assessments.get(sub.id)) for sub in subs
+    ]
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 

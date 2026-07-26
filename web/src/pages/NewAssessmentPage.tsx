@@ -1,15 +1,23 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { difficultyClass } from '../badges'
 import type { QuestionOut } from '../types'
 
 export function NewAssessmentPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [title, setTitle] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(60)
   const [indefinite, setIndefinite] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [orgName, setOrgName] = useState('')
+  const [logoUrl, setLogoUrl] = useState('')
+  // Pre-populated from the questions page's "Build assessment" multi-select
+  // (A8). Any id not actually in the library (stale/archived/deleted) simply
+  // never appears in `selected` below — no extra filtering needed.
+  const [selectedIds, setSelectedIds] = useState<string[]>(
+    () => (location.state as { preselected?: string[] } | null)?.preselected ?? [],
+  )
   const [library, setLibrary] = useState<QuestionOut[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -19,7 +27,13 @@ export function NewAssessmentPage() {
     api
       .listQuestions(false, 0, 200)
       .then((page) => {
-        if (!cancelled) setLibrary(page.items)
+        if (cancelled) return
+        setLibrary(page.items)
+        // Drop any preselected id that isn't actually in the library (stale,
+        // archived, or deleted) — otherwise it'd be silently included on
+        // create despite never appearing in the "in this assessment" list.
+        const validIds = new Set(page.items.map((q) => q.id))
+        setSelectedIds((ids) => ids.filter((id) => validIds.has(id)))
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Failed to load questions')
@@ -59,6 +73,8 @@ export function NewAssessmentPage() {
         title,
         duration_minutes: indefinite ? null : durationMinutes,
         question_ids: selectedIds,
+        org_name: orgName.trim() || null,
+        logo_url: logoUrl.trim() || null,
       })
       navigate(`/assessments/${created.id}`, { state: { justCreated: true } })
     } catch (err) {
@@ -117,6 +133,47 @@ export function NewAssessmentPage() {
       </div>
 
       <div className="card pad">
+        <div className="card-title">Branding (optional)</div>
+        <p className="draft-hint">
+          Shown on the candidate&rsquo;s IDE header when they open the assessment. Leave blank for
+          the generic &ldquo;Coding assessment&rdquo; header.
+        </p>
+        <div className="stack">
+          <div className="grid2">
+            <div className="field">
+              <label htmlFor="org_name">Organization name</label>
+              <input
+                id="org_name"
+                placeholder="e.g. Acme Corp"
+                value={orgName}
+                onChange={(e) => setOrgName(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="logo_url">Logo URL</label>
+              <input
+                id="logo_url"
+                placeholder="https://…"
+                value={logoUrl}
+                onChange={(e) => setLogoUrl(e.target.value)}
+              />
+            </div>
+          </div>
+          {(orgName.trim() || logoUrl.trim()) && (
+            <div className="ide-title-preview">
+              {logoUrl.trim() && (
+                <img src={logoUrl.trim()} alt="" className="ide-brand-logo" />
+              )}
+              <span>
+                {orgName.trim() && `${orgName.trim()} — `}
+                {title.trim() || 'Assessment title'}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="card pad">
         <div className="card-title">Questions</div>
         <p className="draft-hint">
           Add questions from your library; their order here is the order the candidate sees.
@@ -157,9 +214,14 @@ export function NewAssessmentPage() {
           <div>
             <div className="picker-label">Your question library</div>
             {available.length === 0 ? (
-              <p className="empty-state">
-                {library.length === 0 ? 'You have no questions yet.' : 'All questions added.'}
-              </p>
+              library.length === 0 ? (
+                <p className="empty-state">
+                  You have no questions yet.{' '}
+                  <Link to="/questions/new">Create your first question</Link>.
+                </p>
+              ) : (
+                <p className="empty-state">All questions added.</p>
+              )
             ) : (
               available.map((q) => (
                 <div className="q-pick" key={q.id}>

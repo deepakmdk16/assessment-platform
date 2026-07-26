@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AssessmentDetailPage } from '../AssessmentDetailPage'
 import { api } from '../../api'
-import type { AssessmentOut, Invite } from '../../types'
+import type { AssessmentAttempt, AssessmentOut, Invite } from '../../types'
 
 vi.mock('../../api', () => {
   class ApiError extends Error {
@@ -18,6 +18,7 @@ vi.mock('../../api', () => {
     api: {
       getAssessment: vi.fn(),
       listAssessmentInvites: vi.fn(),
+      listAssessmentAttempts: vi.fn(),
       createAssessmentInvite: vi.fn(),
     },
     ApiError,
@@ -27,6 +28,8 @@ vi.mock('../../api', () => {
 const assessment: AssessmentOut = {
   id: 'week-1',
   title: 'Backend Screen',
+  org_name: null,
+  logo_url: null,
   duration_minutes: 90,
   status: 'active',
   created_at: '2026-07-14T00:00:00Z',
@@ -53,6 +56,7 @@ function renderPage() {
     <MemoryRouter initialEntries={['/assessments/week-1']}>
       <Routes>
         <Route path="/assessments/:id" element={<AssessmentDetailPage />} />
+        <Route path="/submissions/:id" element={<div>Submission detail page</div>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -63,6 +67,7 @@ describe('AssessmentDetailPage — invite delivery (A4)', () => {
     vi.clearAllMocks()
     vi.mocked(api.getAssessment).mockResolvedValue(assessment)
     vi.mocked(api.listAssessmentInvites).mockResolvedValue([])
+    vi.mocked(api.listAssessmentAttempts).mockResolvedValue([])
   })
 
   it('confirms delivery only for recipients the email actually reached', async () => {
@@ -104,5 +109,60 @@ describe('AssessmentDetailPage — invite delivery (A4)', () => {
     expect(alert).toHaveTextContent('SMTP connection refused')
     // No false "sent" confirmation alongside the failure.
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+  })
+})
+
+describe('AssessmentDetailPage — attempts (A3/A11)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.getAssessment).mockResolvedValue(assessment)
+    vi.mocked(api.listAssessmentInvites).mockResolvedValue([])
+  })
+
+  const attempt: AssessmentAttempt = {
+    candidate_name: 'Jane Doe',
+    candidate_email: 'jane@example.com',
+    passed_count: 1,
+    total_count: 1,
+    avg_score_pct: 92,
+    questions: [
+      {
+        question_id: 'two-sum',
+        title: 'Two Sum',
+        submitted: true,
+        submission_id: 'sub-1',
+        verdict: 'PASS',
+        score_pct: 92,
+      },
+    ],
+  }
+
+  it('shows one row per candidate with the pass count and average score', async () => {
+    vi.mocked(api.listAssessmentAttempts).mockResolvedValue([attempt])
+    renderPage()
+
+    await screen.findByText('Jane Doe')
+    expect(screen.getByText('jane@example.com')).toBeInTheDocument()
+    expect(screen.getByText('1 / 1')).toBeInTheDocument()
+    expect(screen.getByText('92%')).toBeInTheDocument()
+  })
+
+  it('clicking a graded question chip opens its full submission', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.listAssessmentAttempts).mockResolvedValue([attempt])
+    renderPage()
+
+    await screen.findByText('Jane Doe')
+    await user.click(screen.getByTitle(/two sum: pass/i))
+
+    expect(await screen.findByText('Submission detail page')).toBeInTheDocument()
+  })
+
+  it('renders no Attempts section when nobody has started yet', async () => {
+    vi.mocked(api.listAssessmentAttempts).mockResolvedValue([])
+    renderPage()
+
+    await screen.findByRole('heading', { name: /backend screen/i })
+    expect(screen.queryByRole('heading', { name: /attempts/i })).not.toBeInTheDocument()
   })
 })

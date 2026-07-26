@@ -465,8 +465,9 @@ export function AddQuestionPage() {
                   Indefinite (no timer)
                 </label>
                 <p className="cellsub">
-                  The candidate&rsquo;s attempt auto-submits when this runs out. Defaults from
-                  difficulty; change it any time.
+                  The candidate&rsquo;s attempt auto-submits when this runs out &mdash; only for a
+                  standalone single-question invite. Inside an assessment, the assessment&rsquo;s own
+                  timer applies instead. Defaults from difficulty; change it any time.
                 </p>
               </div>
             </div>

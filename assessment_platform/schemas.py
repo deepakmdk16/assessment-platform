@@ -119,6 +119,10 @@ class AssessmentCreate(BaseModel):
     duration_minutes: int | None = Field(default=None, gt=0)  # None = untimed total
     # Ordered question ids; order here becomes the candidate's question order.
     question_ids: list[str] = Field(min_length=1)
+    # Per-assessment branding (A12): shown on the candidate IDE header. Both
+    # optional; logo_url is a URL reference, never base64.
+    org_name: str | None = None
+    logo_url: str | None = None
 
 
 class AssessmentUpdate(BaseModel):
@@ -127,6 +131,8 @@ class AssessmentUpdate(BaseModel):
     title: str
     duration_minutes: int | None = Field(default=None, gt=0)
     question_ids: list[str] = Field(min_length=1)
+    org_name: str | None = None
+    logo_url: str | None = None
 
 
 class AssessmentQuestionOut(BaseModel):
@@ -139,10 +145,37 @@ class AssessmentOut(BaseModel):
     id: str
     title: str
     duration_minutes: int | None
+    org_name: str | None
+    logo_url: str | None
     status: str
     created_at: datetime
     updated_at: datetime
     questions: list[AssessmentQuestionOut]
+
+
+class AssessmentAttemptQuestionOut(BaseModel):
+    """One question's result within a candidate's sitting (A3/A11)."""
+
+    question_id: str
+    title: str
+    submitted: bool
+    submission_id: str | None = None
+    verdict: str | None = None
+    score_pct: float | None = None
+
+
+class AssessmentAttemptOut(BaseModel):
+    """One candidate's whole sitting of an assessment: every question's result
+    plus a composite (A11) — pass count is the headline (always well-defined,
+    even with an ungraded question), average score across GRADED questions is
+    the secondary detail (None until at least one is graded)."""
+
+    candidate_name: str
+    candidate_email: str
+    questions: list[AssessmentAttemptQuestionOut]
+    passed_count: int
+    total_count: int
+    avg_score_pct: float | None = None
 
 
 class QuestionDraftIn(BaseModel):
@@ -208,6 +241,11 @@ class SubmissionSummaryOut(BaseModel):
     created_at: datetime
     verdict: str | None = None
     score_pct: float | None = None
+    # Set when this submission came in through an assessment invite (A3): lets the
+    # list tell an assessment sitting apart from a standalone single-question
+    # attempt without a second fetch per row.
+    assessment_id: str | None = None
+    assessment_title: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -329,6 +367,11 @@ class InviteStatusOut(BaseModel):
 
 class CandidateStartIn(BaseModel):
     candidate_email: EmailStr
+    # Anchored on the CandidateAttempt at first /start (A10) and reused for
+    # every submission in the sitting. Optional so an old client that only
+    # ever sent it at /submit keeps working; a fresh attempt just starts
+    # nameless until the first submit's body backfills it.
+    candidate_name: str | None = None
 
 
 class InvitePublicOut(BaseModel):
@@ -342,6 +385,12 @@ class InvitePublicOut(BaseModel):
     # invite). None when untimed. The candidate UI counts down to this off the
     # server clock, not the browser's.
     deadline: datetime | None = None
+    # Per-assessment branding (A12): set only for an assessment invite whose
+    # Assessment carries them; None for a legacy single-question invite or an
+    # unbranded assessment (candidate UI falls back to a generic header).
+    assessment_title: str | None = None
+    org_name: str | None = None
+    logo_url: str | None = None
 
 
 class CandidateSubmitIn(BaseModel):

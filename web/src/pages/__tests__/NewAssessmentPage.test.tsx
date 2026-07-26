@@ -72,12 +72,56 @@ describe('NewAssessmentPage', () => {
       title: 'Week 1 Screen',
       duration_minutes: 60,
       question_ids: ['two-sum', 'islands'],
+      org_name: null,
+      logo_url: null,
     })
     await waitFor(() =>
       expect(navigateMock).toHaveBeenCalledWith('/assessments/week-1', {
         state: { justCreated: true },
       }),
     )
+  })
+
+  it('pre-populates the selection from router state (A8), dropping stale ids', async () => {
+    vi.mocked(api.listQuestions).mockResolvedValue(
+      libraryPage([q('two-sum', 'Two Sum'), q('islands', 'Count Islands')]),
+    )
+    render(
+      <MemoryRouter
+        initialEntries={[
+          { pathname: '/assessments/new', state: { preselected: ['islands', 'deleted-one'] } },
+        ]}
+      >
+        <NewAssessmentPage />
+      </MemoryRouter>,
+    )
+
+    // "islands" was preselected and is in the library — shows in "In this
+    // assessment"; "deleted-one" doesn't exist in the library, so it's
+    // silently dropped rather than lingering invisible in the payload.
+    expect(await screen.findByText(/in this assessment \(1\)/i)).toBeInTheDocument()
+    expect(screen.getByText('Count Islands')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^add$/i })).toBeInTheDocument() // Two Sum still pickable
+  })
+
+  it('sends branding fields when set, and null when left blank (A12)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.createAssessment).mockResolvedValue({ id: 'week-1' } as AssessmentOut)
+    await renderLoaded([q('two-sum', 'Two Sum')])
+
+    await user.type(screen.getByLabelText(/^title$/i), 'Week 1 Screen')
+    await user.type(screen.getByLabelText(/organization name/i), 'Acme Corp')
+    await user.type(screen.getByLabelText(/logo url/i), 'https://cdn.example.com/acme.png')
+    expect(screen.getByText(/Acme Corp — Week 1 Screen/)).toBeInTheDocument()
+
+    await user.click(addButtons()[0])
+    await user.click(screen.getByRole('button', { name: /create assessment/i }))
+
+    await waitFor(() => expect(api.createAssessment).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.createAssessment).mock.calls[0][0]).toMatchObject({
+      org_name: 'Acme Corp',
+      logo_url: 'https://cdn.example.com/acme.png',
+    })
   })
 
   it('reorders and removes selected questions before create', async () => {
@@ -130,5 +174,18 @@ describe('NewAssessmentPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/at least one question/i)
     expect(api.createAssessment).not.toHaveBeenCalled()
+  })
+
+  it('offers a way to create a question when the library is empty (A14)', async () => {
+    vi.mocked(api.listQuestions).mockResolvedValue(libraryPage([]))
+    render(
+      <MemoryRouter>
+        <NewAssessmentPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText(/you have no questions yet/i)).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: /create your first question/i })
+    expect(link).toHaveAttribute('href', '/questions/new')
   })
 })

@@ -10,6 +10,7 @@ import type {
   RunResponse,
   RunTestsResponse,
 } from '../types'
+import { CandidateNotice } from './CandidateNotice'
 import { ConsoleResult } from './ConsoleResult'
 import { formatRemaining, timerClass } from './candidateTimer'
 
@@ -25,6 +26,11 @@ interface Props {
   questions: CandidateQuestionPublic[]
   languages: Language[]
   deadline: string | null
+  /** Per-assessment branding (A12); all null/undefined for an unbranded
+   *  assessment — the header falls back to the generic "Coding assessment". */
+  assessmentTitle?: string | null
+  orgName?: string | null
+  logoUrl?: string | null
   /** Bubble a 410/404 (expired/revoked) up so the page shows the shared notice. */
   onExpired: () => void
 }
@@ -42,6 +48,9 @@ export function AssessmentFlow({
   questions,
   languages,
   deadline,
+  assessmentTitle,
+  orgName,
+  logoUrl,
   onExpired,
 }: Props) {
   const { resolved } = useTheme()
@@ -66,12 +75,23 @@ export function AssessmentFlow({
   const [remainingMs, setRemainingMs] = useState<number | null>(null)
   const [timeUp, setTimeUp] = useState(false)
   const autoSubmitFired = useRef(false)
+  // Set once the timeout auto-submit pass has run to completion (whether every
+  // individual submit succeeded or not) — gates the terminal screen so it isn't
+  // shown mid-pass, and so a candidate who left a question blank isn't stuck
+  // waiting on a submittedCount that can never reach questions.length.
+  const [autoSubmitSettled, setAutoSubmitSettled] = useState(false)
+  const [autoSubmitFailedIds, setAutoSubmitFailedIds] = useState<string[]>([])
 
   const cq = questions[current]
   const answer = answers[cq.id]
   const isDone = submitted[cq.id]
   const locked = isDone || timeUp
   const submittedCount = questions.filter((q) => submitted[q.id]).length
+  // Terminal screen (A5): reached from BOTH triggers — every question
+  // submitted manually before time's up, or the timeout auto-submit pass has
+  // settled (regardless of individual success, so a blank-left question can't
+  // hold the candidate on the IDE forever).
+  const complete = submittedCount === questions.length || (timeUp && autoSubmitSettled)
 
   // Switch questions and reset the scratch console (its output belonged to the
   // previous question); code/language are kept per question in `answers`. Done in
@@ -100,7 +120,9 @@ export function AssessmentFlow({
   }, [deadline])
 
   // At zero, auto-submit every unanswered-but-written question once, so time
-  // running out records work instead of losing it.
+  // running out records work instead of losing it. A failure is recorded (not
+  // swallowed, A5) so the terminal screen can tell the candidate which of their
+  // answers didn't make it, rather than reporting a silent, misleading success.
   useEffect(() => {
     if (!timeUp || autoSubmitFired.current) return
     autoSubmitFired.current = true
@@ -117,10 +139,12 @@ export function AssessmentFlow({
             })
             setSubmitted((s) => ({ ...s, [q.id]: true }))
           } catch {
-            // best-effort at the deadline — a late/failed one is dropped silently
+            // best-effort at the deadline — recorded, not silently dropped
+            setAutoSubmitFailedIds((ids) => [...ids, q.id])
           }
         }
       }
+      setAutoSubmitSettled(true)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeUp])
@@ -194,11 +218,28 @@ export function AssessmentFlow({
 
   const hasExample = Boolean(cq.example_input || cq.example_output)
 
+  if (complete) {
+    const n = questions.length
+    const plural = n === 1 ? '' : 's'
+    let body = `Thanks, ${candidateName}! Your assessment has ended — ${submittedCount} of ${n} question${plural} were submitted for grading.`
+    if (autoSubmitFailedIds.length > 0) {
+      body += ` ${autoSubmitFailedIds.length} couldn’t be recorded when time ran out — please tell your interviewer if you think this is a mistake.`
+    }
+    return <CandidateNotice title="Assessment complete ✓" body={body} />
+  }
+
+  const brandedTitle = orgName ? `${orgName} — ${assessmentTitle ?? 'Coding assessment'}` : null
+
   return (
     <div className="ide">
       <header className="ide-top">
-        <span className="ide-mark" aria-hidden="true" />
-        <span className="ide-title">Coding assessment</span>
+        {logoUrl ? (
+          <img src={logoUrl} alt="" className="ide-brand-logo" />
+        ) : (
+          <span className="ide-mark" aria-hidden="true" />
+        )}
+        <span className="ide-title">{brandedTitle ?? assessmentTitle ?? 'Coding assessment'}</span>
+        {(orgName || logoUrl) && <span className="ide-powered-by">Powered by assess.dev</span>}
         <div className="ide-top-right">
           <span className="progress">
             {submittedCount} / {questions.length} submitted

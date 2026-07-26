@@ -123,6 +123,9 @@ export interface AssessmentOut {
   id: string
   title: string
   duration_minutes: number | null
+  // Per-assessment branding (A12): shown on the candidate IDE header.
+  org_name: string | null
+  logo_url: string | null
   status: string
   created_at: string
   updated_at: string
@@ -135,6 +138,30 @@ export interface AssessmentIn {
   title: string
   duration_minutes?: number | null
   question_ids: string[]
+  org_name?: string | null
+  logo_url?: string | null
+}
+
+/** One question's result within a candidate's sitting (A3/A11). */
+export interface AssessmentAttemptQuestion {
+  question_id: string
+  title: string
+  submitted: boolean
+  submission_id: string | null
+  verdict: string | null
+  score_pct: number | null
+}
+
+/** `GET /assessments/{id}/attempts` — one candidate's whole sitting: every
+ *  question's result plus a composite (A11). avg_score_pct is null until at
+ *  least one question is graded. */
+export interface AssessmentAttempt {
+  candidate_name: string
+  candidate_email: string
+  questions: AssessmentAttemptQuestion[]
+  passed_count: number
+  total_count: number
+  avg_score_pct: number | null
 }
 
 export interface InviteQuestionPublic {
@@ -171,6 +198,12 @@ export interface InviteStartResponse {
   /** Server-authoritative submit deadline (ISO). null when untimed. The countdown
    *  runs to this, and the server enforces it on submit. */
   deadline?: string | null
+  /** Per-assessment branding (A12): set only for an assessment invite whose
+   *  Assessment carries them; null for a legacy single-question invite or an
+   *  unbranded assessment. */
+  assessment_title?: string | null
+  org_name?: string | null
+  logo_url?: string | null
 }
 
 export interface SubmitResponse {
@@ -231,6 +264,9 @@ export interface SubmissionSummary {
   created_at: string
   verdict?: string
   score_pct?: number
+  // Set when this submission came in through an assessment invite (A3).
+  assessment_id?: string | null
+  assessment_title?: string | null
 }
 
 /** How one test case came out. Mirrors the agent's runner outcome. */

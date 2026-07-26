@@ -108,7 +108,7 @@ describe('CandidatePage', () => {
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     await waitFor(() => {
-      expect(api.startInvite).toHaveBeenCalledWith('tok123', 'jane@example.com')
+      expect(api.startInvite).toHaveBeenCalledWith('tok123', 'jane@example.com', 'Jane Doe')
     })
 
     // Editor split view
@@ -160,6 +160,101 @@ describe('CandidatePage', () => {
     // Free navigation: clicking the second tab shows its prompt.
     await user.click(screen.getByRole('tab', { name: /Merge Intervals/i }))
     expect(screen.getByText(/Merge overlapping intervals/i)).toBeInTheDocument()
+  })
+
+  it('renders per-assessment branding on the IDE header when present (A12)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue({
+      ...multiStartResponse,
+      assessment_title: 'Backend Screen',
+      org_name: 'Acme Corp',
+      logo_url: 'https://cdn.example.com/acme.png',
+    })
+
+    const { container } = renderCandidatePage()
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    expect(await screen.findByText('Acme Corp — Backend Screen')).toBeInTheDocument()
+    expect(screen.getByText(/powered by assess\.dev/i)).toBeInTheDocument()
+    // The logo is decorative (empty alt) since the adjacent text already
+    // carries the org name, so query it directly rather than by role="img".
+    expect(container.querySelector('img.ide-brand-logo')).toHaveAttribute(
+      'src',
+      'https://cdn.example.com/acme.png',
+    )
+  })
+
+  it('falls back to the generic header when an assessment has no branding', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(multiStartResponse)
+
+    renderCandidatePage()
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    await screen.findByRole('tab', { name: /Two Sum/i })
+    expect(screen.getByText('Coding assessment')).toBeInTheDocument()
+    expect(screen.queryByText(/powered by assess\.dev/i)).not.toBeInTheDocument()
+  })
+
+  it('shows a completion screen once every question is submitted manually (A5)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(multiStartResponse)
+    vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+
+    renderCandidatePage()
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    await screen.findByRole('tab', { name: /Two Sum/i })
+    await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
+    await user.click(screen.getByRole('button', { name: /submit this question/i }))
+    await waitFor(() => expect(api.submitCandidate).toHaveBeenCalledTimes(1))
+
+    // Still on the IDE with one question left — no completion screen yet.
+    expect(screen.queryByRole('heading', { name: /assessment complete/i })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /Merge Intervals/i }))
+    await user.type(screen.getByLabelText(/code editor/i), 'print(2)')
+    await user.click(screen.getByRole('button', { name: /submit this question/i }))
+    await waitFor(() => expect(api.submitCandidate).toHaveBeenCalledTimes(2))
+
+    expect(await screen.findByRole('heading', { name: /assessment complete/i })).toBeInTheDocument()
+    expect(screen.getByText(/2 of 2 questions were submitted for grading/i)).toBeInTheDocument()
+    // The IDE is gone entirely, not just disabled.
+    expect(screen.queryByLabelText(/code editor/i)).not.toBeInTheDocument()
+  })
+
+  it('shows a completion screen when time runs out, even with an unanswered question (A5)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue({
+      ...multiStartResponse,
+      deadline: new Date(Date.now() - 1000).toISOString(), // already expired
+    })
+
+    renderCandidatePage()
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    // Neither question was ever answered, so nothing to auto-submit — the
+    // terminal screen must still appear once the timeout pass settles, not
+    // leave the candidate stuck on a locked IDE forever.
+    expect(await screen.findByRole('heading', { name: /assessment complete/i })).toBeInTheDocument()
+    expect(screen.getByText(/0 of 2 questions were submitted for grading/i)).toBeInTheDocument()
+    expect(api.submitCandidate).not.toHaveBeenCalled()
   })
 
   it('does not reveal the question until the gate is passed', async () => {

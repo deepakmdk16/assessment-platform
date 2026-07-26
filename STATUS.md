@@ -11,59 +11,40 @@ Effort key: **XS** (minutes) · **S** (self-contained) · **M** (multi-file) · 
 
 ---
 
-## A. Assessment-era gaps — found in manual testing 2026-07-24 (highest priority)
+## A. Assessment-era gaps — found in manual testing 2026-07-24, updated 2026-07-26 (highest priority)
 
 The T4 multi-question assessment epic shipped; driving it end-to-end surfaced these.
 Several are "the single-question flow had it, the assessment flow doesn't yet."
 
-- **A3 · Submissions list can't tell an assessment sitting from a standalone
-  attempt.** Every row shows only `question_id`; assessment-group and individual
-  submissions look identical (`SubmissionSummaryOut`, `schemas.py:193`). The link
-  exists (submission → `invite.assessment_id` → assessment title) but isn't
-  surfaced. Needs: an assessment column/grouping in the summary schema + list route
-  + `SubmissionsPage`, **and** ideally an **assessment-level attempt view** (one
-  candidate's whole sitting — all N questions + an aggregate — instead of N
-  scattered rows). **M.**
-- **A5 · No completion screen after time's up in the multi-question flow.** The
-  single-question `CandidatePage` shows "Thanks, {name}! Your solution has been
-  submitted and is being graded." (`CandidatePage.tsx:268`). `AssessmentFlow` has
-  **no terminal state** — at zero it auto-submits with errors swallowed
-  (`AssessmentFlow.tsx:104-126`) and leaves the locked IDE on "Time's up · 0/N
-  submitted." Because A1's rejection makes the auto-submits fail, candidates land
-  on a dead "0/N" screen with no acknowledgement. Needs an "assessment complete"
-  screen + non-silent handling of auto-submit failures (retry/report). **M.**
 - **A7 · Invites should be assessment-level, not (also) question-level.** Now that
   assessments exist, offering "send invite" on a single question is duplicative and
   confusing. Decide the model: either deprecate per-question invites in the UI in
   favour of assessment invites (a single question becomes a one-question
   assessment), or clearly separate "quick single-question screen" from "assessment".
   Today both paths exist (`/questions/{id}/invites` and `/assessments/{id}/invites`). **M.**
-- **A8 · Authoring ↔ assessment connective tissue.** The builder already adds
-  *existing* library questions; what's missing: (a) an "add to assessment" affordance
-  from the questions page / a "build assessment from these" multi-select, and
-  (b) — **lowest priority, explicitly deferred** — creating a *brand-new* question
-  from inside the builder. Keep question creation simple and owned by the questions
-  page; the builder assembles, it shouldn't grow a second authoring flow unless
-  there's real demand. **M.**
-- **A9 · Assessment editing has no guardrails.** `PUT /assessments/{id}` can reorder
-  or swap questions after invites are sent / submissions exist, so two candidates in
-  the "same" assessment could get different question sets. Lock the question set once
-  an invite or submission references the assessment (or version it). **M.**
-- **A10 · Candidate identity is re-entered per question.** Each `/submit` carries
-  `candidate_name`/`candidate_email`; a typo on question 2 forks a different attempt.
-  For an assessment sitting, fix identity once at `/start` and thread it, so all
-  questions belong to one attempt. **M.**
-- **A11 · No assessment-level score / verdict.** An assessment stores N independent
-  per-question results; there's no composite (weighted score, "passed 2/3", overall
-  verdict) for the sitting. Interviewers need an at-a-glance assessment outcome.
-  Pairs with A3's attempt view. **M.**
-- **A12 · Enterprise branding / uploadable logo.** The candidate IDE header hardcodes
-  "Coding assessment" (`AssessmentFlow.tsx:201`) and doesn't even show the
-  assessment's own title. Add **workspace-level branding** (logo + display name, e.g.
-  "Amazon") stored on the interviewer/workspace, rendered as `{logo} {Org} —
-  {assessment title}` with a small "Powered by assess.dev"; optional per-assessment
-  override later. Store the logo as an asset/URL reference, not base64 in a row.
-  Meaningful for selling white-labeled to enterprises. **L.**
+- **A8 · Authoring ↔ assessment connective tissue — (a) DONE 2026-07-26.**
+  `DashboardPage.tsx` now has a per-row checkbox multi-select and a "Build
+  assessment (N)" button that navigates to `/assessments/new` with `state:
+  {preselected}`; `NewAssessmentPage.tsx` pre-populates its selection from that
+  state, silently dropping any id not actually in the library (stale/archived/
+  deleted) rather than leaving it invisibly included in the create payload.
+  **(b) — lowest priority, explicitly deferred, unchanged:** creating a
+  *brand-new* question from inside the builder. Keep question creation simple
+  and owned by the questions page; the builder assembles, it shouldn't grow a
+  second authoring flow unless there's real demand.
+- **A12 · Enterprise branding — per-assessment upload DONE 2026-07-26; workspace
+  default still open.** `Assessment.org_name`/`logo_url` (migration
+  `0ae2d36aff72`, additive/nullable) are set on `NewAssessmentPage` (with a live
+  preview) and shown read-only on `AssessmentDetailPage`; `InvitePublicOut`
+  carries `assessment_title`/`org_name`/`logo_url` to the candidate, and
+  `AssessmentFlow`'s IDE header renders `{logo} {org} — {title}` plus a small
+  "Powered by assess.dev" when set, falling back to the generic "Coding
+  assessment" header otherwise (a legacy single-question invite has no
+  `Assessment` to brand from, so it's always unbranded). The logo is stored as a
+  URL reference, never base64. **Still open:** a workspace-level default (set
+  once per interviewer, used when an assessment has no override) — a natural
+  follow-up now that the per-assessment path exists, not a prerequisite. **S**
+  for the remaining piece.
 
 ---
 

@@ -102,6 +102,52 @@ def test_assessment_crud_roundtrip(client) -> None:
     assert client.get("/assessments/screen1").status_code == 404
 
 
+def test_update_locks_question_set_once_invited(client) -> None:
+    """A9: the question set can't change once an invite has gone out, but
+    title/duration/branding stay freely editable, and re-submitting the SAME
+    set (no real change) is not blocked."""
+    _make_questions(client, "q1", "q2", "q3")
+    client.post(
+        "/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1", "q2"]}
+    )
+
+    # Before any invite: reordering/changing the set is fine.
+    assert client.put(
+        "/assessments/a1", json={"title": "A", "question_ids": ["q2", "q1"]}
+    ).status_code == 200
+
+    client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]})
+
+    # Now locked: adding/removing/reordering questions 409s.
+    resp = client.put(
+        "/assessments/a1", json={"title": "A", "question_ids": ["q1", "q2", "q3"]}
+    )
+    assert resp.status_code == 409
+    assert "question set can't change" in resp.json()["detail"]
+
+    # Re-sending the SAME (already-current) set is not a real change — allowed.
+    same_order = client.get("/assessments/a1").json()
+    current_ids = [q["question_id"] for q in same_order["questions"]]
+    assert client.put(
+        "/assessments/a1",
+        json={"title": "A", "question_ids": current_ids, "duration_minutes": 45},
+    ).status_code == 200
+
+    # Title/duration/branding remain editable even though questions are locked.
+    resp = client.put(
+        "/assessments/a1",
+        json={
+            "title": "A v2", "question_ids": current_ids, "duration_minutes": 30,
+            "org_name": "Acme", "logo_url": "https://cdn.example.com/a.png",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["title"] == "A v2"
+    assert body["duration_minutes"] == 30
+    assert body["org_name"] == "Acme"
+
+
 def test_create_rejects_unknown_question(client) -> None:
     _make_questions(client, "q1")
     resp = client.post(
@@ -196,6 +242,215 @@ def test_candidate_multi_question_flow(client, monkeypatch) -> None:
 
     # A multi-question invite requires naming the question.
     assert client.post(f"/invite/{tok}/submit", json=_sub(tok, "cand@x.io", None)).status_code == 400
+
+
+def test_candidate_name_anchored_at_start_not_reforked_per_submit(client, monkeypatch) -> None:
+    """A10: the name given at /start wins for every submission in the sitting,
+    even if a later /submit (e.g. after a reload re-typed it) sends a different
+    one — the whole sitting stays one consistently-labeled candidate."""
+    _make_questions(client, "q1", "q2")
+    client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1", "q2"]})
+    tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
+
+    client.post(
+        f"/invite/{tok}/start", json={"candidate_email": "cand@x.io", "candidate_name": "Jane Doe"}
+    )
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
+    assert client.post(
+        f"/invite/{tok}/submit",
+        json={
+            "candidate_name": "jane d",  # differs from the /start name
+            "candidate_email": "cand@x.io", "language": "python", "code": "print(1)",
+            "question_id": "q1",
+        },
+    ).status_code == 201
+    assert client.post(
+        f"/invite/{tok}/submit",
+        json={
+            "candidate_name": "Janee Doee",  # a different typo again
+            "candidate_email": "cand@x.io", "language": "python", "code": "print(2)",
+            "question_id": "q2",
+        },
+    ).status_code == 201
+
+    names = {s["question_id"]: s["candidate"] for s in client.get("/submissions").json()["items"]}
+    assert names == {"q1": "Jane Doe", "q2": "Jane Doe"}
+
+
+def test_candidate_name_anchored_at_first_submit_when_start_had_none(client, monkeypatch) -> None:
+    """A10 fallback: an old client that never sends candidate_name to /start
+    still gets one consistent name, anchored from the first /submit that
+    actually created the attempt."""
+    _make_questions(client, "q1", "q2")
+    client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1", "q2"]})
+    tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
+
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io"})  # no name
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
+    assert client.post(
+        f"/invite/{tok}/submit",
+        json={
+            "candidate_name": "Jane Doe",
+            "candidate_email": "cand@x.io", "language": "python", "code": "print(1)",
+            "question_id": "q1",
+        },
+    ).status_code == 201
+    assert client.post(
+        f"/invite/{tok}/submit",
+        json={
+            "candidate_name": "Someone Else",  # must not override the anchored name
+            "candidate_email": "cand@x.io", "language": "python", "code": "print(2)",
+            "question_id": "q2",
+        },
+    ).status_code == 201
+
+    names = {s["question_id"]: s["candidate"] for s in client.get("/submissions").json()["items"]}
+    assert names == {"q1": "Jane Doe", "q2": "Jane Doe"}
+
+
+def _callback(job_id: str, verdict: str, score: float) -> dict[str, Any]:
+    return {"job_id": job_id, "verdict": verdict, "score_pct": score, "reason": "r"}
+
+
+def test_assessment_attempts_composite(client, monkeypatch) -> None:
+    """A3/A11: one row per candidate who started, with every question's result
+    plus a composite — pass count always well-defined, avg score over graded
+    questions only (None until at least one is graded)."""
+    _make_questions(client, "q1", "q2")
+    client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1", "q2"]})
+    tok = client.post(
+        "/assessments/a1/invites", json={"recipients": ["cand1@x.io", "cand2@x.io"]}
+    ).json()["token"]
+
+    def submit(email: str, name: str, qid: str, job_id: str) -> None:
+        monkeypatch.setattr(agent_client, "trigger_assessment", async_return(job_id))
+        resp = client.post(
+            f"/invite/{tok}/submit",
+            json={
+                "candidate_name": name, "candidate_email": email,
+                "language": "python", "code": "x", "question_id": qid,
+            },
+        )
+        assert resp.status_code == 201
+
+    # cand1 starts and submits both questions; cand2 starts but only submits q1.
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand1@x.io", "candidate_name": "Cand One"})
+    submit("cand1@x.io", "Cand One", "q1", "job-1a")
+    submit("cand1@x.io", "Cand One", "q2", "job-1b")
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand2@x.io", "candidate_name": "Cand Two"})
+    submit("cand2@x.io", "Cand Two", "q1", "job-2a")
+
+    client.post("/assessments/callback", json=_callback("job-1a", "PASS", 100.0))
+    client.post("/assessments/callback", json=_callback("job-1b", "FAIL", 40.0))
+    client.post("/assessments/callback", json=_callback("job-2a", "PASS", 80.0))
+
+    rows = {r["candidate_email"]: r for r in client.get("/assessments/a1/attempts").json()}
+    assert set(rows) == {"cand1@x.io", "cand2@x.io"}
+
+    c1 = rows["cand1@x.io"]
+    assert c1["candidate_name"] == "Cand One"
+    assert (c1["passed_count"], c1["total_count"]) == (1, 2)
+    assert c1["avg_score_pct"] == 70.0  # (100 + 40) / 2
+    assert {q["question_id"]: q["verdict"] for q in c1["questions"]} == {"q1": "PASS", "q2": "FAIL"}
+
+    c2 = rows["cand2@x.io"]
+    assert (c2["passed_count"], c2["total_count"]) == (1, 2)
+    assert c2["avg_score_pct"] == 80.0  # only q1 is graded
+    q_by_id = {q["question_id"]: q for q in c2["questions"]}
+    assert q_by_id["q1"]["submitted"] is True
+    assert q_by_id["q1"]["submission_id"] is not None  # links to the full submission
+    assert q_by_id["q2"]["submitted"] is False
+    assert q_by_id["q2"]["submission_id"] is None
+    assert q_by_id["q2"]["verdict"] is None
+
+
+def test_assessment_attempts_owner_scoped_and_empty(client) -> None:
+    _make_questions(client, "q1")
+    client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1"]})
+
+    # No invites yet: empty, not an error.
+    assert client.get("/assessments/a1/attempts").json() == []
+
+    # Another interviewer can't see this assessment's attempts at all.
+    tok_b = register_interviewer(client, "other@x.io")
+    assert client.get("/assessments/a1/attempts", headers=_auth(tok_b)).status_code == 403
+
+
+def test_submissions_list_surfaces_assessment_link(client, monkeypatch) -> None:
+    """A3: a submission via an assessment invite is tagged with the assessment's
+    id/title in the summary list; a standalone direct submission is not."""
+    _make_questions(client, "q1", "q2")
+    client.post(
+        "/assessments", json={"id": "a1", "title": "Backend Screen", "question_ids": ["q1", "q2"]}
+    )
+    tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
+
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
+    assert client.post(f"/invite/{tok}/submit", json=_sub(tok, "cand@x.io", "q1")).status_code == 201
+    # A direct, non-invite submission against the same owner's question.
+    assert client.post(
+        "/submissions",
+        json={"question_id": "q2", "candidate": "Direct", "language": "python", "code": "print(1)"},
+    ).status_code == 201
+
+    by_candidate = {s["candidate"]: s for s in client.get("/submissions").json()["items"]}
+    assert by_candidate["C"]["assessment_id"] == "a1"
+    assert by_candidate["C"]["assessment_title"] == "Backend Screen"
+    assert by_candidate["Direct"]["assessment_id"] is None
+    assert by_candidate["Direct"]["assessment_title"] is None
+
+
+def test_assessment_branding_roundtrip(client) -> None:
+    """A12: org_name/logo_url are stored and echoed back, and PUT can change them."""
+    _make_questions(client, "q1")
+    created = client.post(
+        "/assessments",
+        json={
+            "id": "a1", "title": "A", "question_ids": ["q1"],
+            "org_name": "Acme Corp", "logo_url": "https://cdn.example.com/acme.png",
+        },
+    ).json()
+    assert created["org_name"] == "Acme Corp"
+    assert created["logo_url"] == "https://cdn.example.com/acme.png"
+
+    updated = client.put(
+        "/assessments/a1",
+        json={
+            "title": "A", "question_ids": ["q1"],
+            "org_name": "New Name", "logo_url": None,
+        },
+    ).json()
+    assert updated["org_name"] == "New Name"
+    assert updated["logo_url"] is None
+
+
+def test_candidate_view_carries_assessment_branding(client, monkeypatch) -> None:
+    """A12: the candidate-facing /start response carries the assessment's
+    branding; a legacy single-question invite carries none."""
+    _make_questions(client, "q1")
+    client.post(
+        "/assessments",
+        json={
+            "id": "a1", "title": "Backend Screen", "question_ids": ["q1"],
+            "org_name": "Acme Corp", "logo_url": "https://cdn.example.com/acme.png",
+        },
+    )
+    tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
+    data = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io"}).json()
+    assert data["assessment_title"] == "Backend Screen"
+    assert data["org_name"] == "Acme Corp"
+    assert data["logo_url"] == "https://cdn.example.com/acme.png"
+
+    # A legacy single-question invite has no Assessment to brand from.
+    legacy_tok = client.post(
+        "/questions/q1/invites", json={"recipients": ["legacy@x.io"]}
+    ).json()["token"]
+    legacy_data = client.post(
+        f"/invite/{legacy_tok}/start", json={"candidate_email": "legacy@x.io"}
+    ).json()
+    assert legacy_data["assessment_title"] is None
+    assert legacy_data["org_name"] is None
+    assert legacy_data["logo_url"] is None
 
 
 def test_delete_blocked_by_invite(client) -> None:

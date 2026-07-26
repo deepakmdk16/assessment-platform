@@ -1,4 +1,5 @@
 import type {
+  AssessmentAttempt,
   AssessmentIn,
   AssessmentOut,
   Invite,
@@ -174,6 +175,9 @@ export const api = {
   listAssessmentInvites: (assessmentId: string) =>
     request<Invite[]>(`/assessments/${assessmentId}/invites`, { auth: true }),
 
+  listAssessmentAttempts: (assessmentId: string) =>
+    request<AssessmentAttempt[]>(`/assessments/${assessmentId}/attempts`, { auth: true }),
+
   createInvite: (
     questionId: string,
     data: { recipients?: string[]; expires_at?: string | null },
@@ -210,10 +214,10 @@ export const api = {
 
   getInvite: (token: string) => request<InviteStatusResponse>(`/invite/${token}`),
 
-  startInvite: (token: string, candidate_email: string) =>
+  startInvite: (token: string, candidate_email: string, candidate_name?: string) =>
     request<InviteStartResponse>(`/invite/${token}/start`, {
       method: 'POST',
-      body: { candidate_email },
+      body: { candidate_email, candidate_name },
     }),
 
   runCandidate: (

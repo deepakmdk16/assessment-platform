@@ -102,6 +102,7 @@ export function SubmissionsPage() {
               <thead>
                 <tr>
                   <th>Candidate</th>
+                  <th>Assessment</th>
                   <th>Question</th>
                   <th>Language</th>
                   <th>Status</th>
@@ -121,6 +122,13 @@ export function SubmissionsPage() {
                     <td>
                       <div className="t-title">{s.candidate}</div>
                       {s.candidate_email && <div className="cellsub">{s.candidate_email}</div>}
+                    </td>
+                    <td>
+                      {s.assessment_title ? (
+                        <span className="chip chip-neutral">{s.assessment_title}</span>
+                      ) : (
+                        <span className="muted">Standalone</span>
+                      )}
                     </td>
                     <td>{titles[s.question_id] ?? s.question_id}</td>
                     <td>{s.language}</td>

@@ -706,6 +706,17 @@ textarea {
   white-space: nowrap;
 }
 
+/* A row of per-question status chips in the assessment attempts table (A3/A11). */
+.attempt-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.attempt-progress .chip.clickable {
+  cursor: pointer;
+}
+
 .chip::before {
   content: "";
   width: 0.44rem;
@@ -1186,6 +1197,34 @@ textarea {
   border-radius: 5px;
   background: linear-gradient(135deg, var(--color-accent), #6f5bff);
   flex: none;
+}
+
+/* Per-assessment branding (A12): an uploaded logo replaces .ide-mark on the
+   candidate IDE header, and a small preview mirrors it on the create form. */
+.ide-brand-logo {
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 4px;
+  object-fit: contain;
+  flex: none;
+}
+
+.ide-powered-by {
+  font-size: 0.72rem;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.ide-title-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-weight: 650;
+  color: var(--color-heading);
 }
 
 .ide-top-right {
