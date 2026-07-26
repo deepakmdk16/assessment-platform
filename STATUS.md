@@ -16,6 +16,27 @@ Effort key: **XS** (minutes) · **S** (self-contained) · **M** (multi-file) · 
 The T4 multi-question assessment epic shipped; driving it end-to-end surfaced these.
 Several are "the single-question flow had it, the assessment flow doesn't yet."
 
+- **VS1 · Variant members leak into the question library + assessment builder
+  (OPEN — bug, found in manual testing 2026-07-26, highest priority).** Saving a
+  variant set creates N `Question` rows tagged `variant_set_id`; `list_questions`
+  does **not** filter them, so all N siblings show in the dashboard library **and**
+  the New-Assessment question picker as separate, near-identical problems — the UI
+  presents "3 variations of one problem" as 3 unrelated questions. Minimal fix:
+  exclude `variant_set_id`-tagged questions from the standalone list (default
+  filter, opt-in `include_variants`) so a set shows as one thing, not N look-alikes.
+  This is the stopgap for VS2. **S.**
+- **VS2 · Assessment-slot integration for variant sets (OPEN — feature; the real
+  fix VS1 stops-gaps).** The assessment builder has no "add a variant set" slot, so
+  you can't build "one slot → each candidate gets a different variant." The hard
+  part is *where the variant is chosen*: an `Assessment` is shared across invites
+  but assignment is per-candidate, so a slot can only store "this slot is variant-
+  set X" and the concrete variant must resolve **per candidate at invite/start
+  time** — exactly the direct-invite round-robin, but inside a multi-question
+  sitting. Needs: `AssessmentQuestion` gains a nullable `variant_set_id` (a slot is
+  a fixed question OR a set); `_invite_questions` resolves each set-slot to that
+  candidate's assigned variant; builder UI gains the slot type. Deliberately
+  deferred when the direct-invite path shipped (see the variant-sets item in §C).
+  **L.**
 - **A7 · Invite paths separated, not merged — DONE 2026-07-26.** Both paths were
   duplicative/confusing once assessments existed. Decision (product): **keep both,
   relabel to two distinct tools** rather than deprecate either. The per-question
