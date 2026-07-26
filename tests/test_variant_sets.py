@@ -184,6 +184,23 @@ def test_list_variant_sets_shows_count(client: TestClient) -> None:
     assert row["difficulty"] == "medium"
 
 
+def test_variants_hidden_from_question_library_by_default(client: TestClient) -> None:
+    # A variant set's members are questions, but they belong to the set — the
+    # standalone /questions list (dashboard + assessment picker) must show the set
+    # as one thing, not N look-alikes. VS1.
+    client.post("/questions", json=_sample_question("standalone"))
+    created = client.post("/variant-sets", json=_set_create_body()).json()
+    variant_ids = {v["id"] for v in created["variants"]}
+
+    default_ids = [q["id"] for q in client.get("/questions").json()["items"]]
+    assert "standalone" in default_ids
+    assert variant_ids.isdisjoint(default_ids)  # no variant siblings leak in
+
+    # ...but reachable when explicitly asked for.
+    all_ids = {q["id"] for q in client.get("/questions?include_variants=true").json()["items"]}
+    assert variant_ids <= all_ids
+
+
 def test_create_variant_set_enforces_case_floor(client: TestClient) -> None:
     body = _set_create_body()
     body["variants"][0]["test_cases"] = [  # drop the performance case

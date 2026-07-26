@@ -17,14 +17,14 @@ The T4 multi-question assessment epic shipped; driving it end-to-end surfaced th
 Several are "the single-question flow had it, the assessment flow doesn't yet."
 
 - **VS1 · Variant members leak into the question library + assessment builder
-  (OPEN — bug, found in manual testing 2026-07-26, highest priority).** Saving a
-  variant set creates N `Question` rows tagged `variant_set_id`; `list_questions`
-  does **not** filter them, so all N siblings show in the dashboard library **and**
-  the New-Assessment question picker as separate, near-identical problems — the UI
-  presents "3 variations of one problem" as 3 unrelated questions. Minimal fix:
-  exclude `variant_set_id`-tagged questions from the standalone list (default
-  filter, opt-in `include_variants`) so a set shows as one thing, not N look-alikes.
-  This is the stopgap for VS2. **S.**
+  — DONE 2026-07-26.** Saving a variant set creates N `Question` rows tagged
+  `variant_set_id`; `list_questions` didn't filter them, so all N siblings showed
+  in the dashboard library **and** the New-Assessment question picker as separate,
+  near-identical problems ("3 variations of one problem" as 3 unrelated questions).
+  Fix: `list_questions` now excludes `variant_set_id`-tagged questions by default
+  (opt-in `?include_variants=true`), so a set shows as one thing, not N look-alikes.
+  Backend-only — both the dashboard and the picker call the same `listQuestions`,
+  so no frontend change. Was the stopgap for VS2.
 - **VS2 · Assessment-slot integration for variant sets (OPEN — feature; the real
   fix VS1 stops-gaps).** The assessment builder has no "add a variant set" slot, so
   you can't build "one slot → each candidate gets a different variant." The hard

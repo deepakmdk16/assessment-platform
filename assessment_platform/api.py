@@ -859,16 +859,23 @@ def get_variant_set(
 @app.get("/questions", response_model=Page[QuestionOut])
 def list_questions(
     include_archived: bool = False,
+    include_variants: bool = False,
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> Page[QuestionOut]:
-    where = [Question.owner_id == current.id]
+    where: list[Any] = [Question.owner_id == current.id]
     if not include_archived:
         # Archived questions are retired: hidden from the dashboard by default but
         # still reachable (and their submissions kept) via ?include_archived=true.
         where.append(Question.status == "active")
+    if not include_variants:
+        # A variant set is N sibling questions tagged with variant_set_id. They are
+        # one thing to the interviewer (managed on the Variant sets page), so hide
+        # them from the standalone library + assessment picker by default, else a
+        # set of 3 shows as 3 unrelated look-alikes. Opt in with ?include_variants=true.
+        where.append(col(Question.variant_set_id).is_(None))
     total = session.exec(select(func.count()).select_from(Question).where(*where)).one()
     # Newest first, id as a stable tiebreaker so paging over equal timestamps
     # (common in tests / bulk imports) is deterministic.
