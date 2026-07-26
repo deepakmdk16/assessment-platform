@@ -199,6 +199,87 @@ class QuestionDraftOut(BaseModel):
     cost_usd: float | None = None
 
 
+# --- Variant sets (per-candidate unique variants) ---------------------------
+
+
+class VariantSetDraftIn(BaseModel):
+    """A brief to draft a SET of sibling variants from (the authoring inputs are
+    pinned across the set so the variants stay in one difficulty band)."""
+
+    brief: str = Field(min_length=1)
+    language: str
+    count: int = Field(ge=2, le=8, description="How many variants to draft.")
+    difficulty: str | None = None
+    target_complexity: str | None = None
+
+
+class VariantDraftOut(BaseModel):
+    """One drafted variant, reshaped to feed the create form (nothing stored)."""
+
+    label: str | None = None  # short tag within the set (A/B/C…)
+    question: QuestionCreate
+    reference_solution: str | None = None
+    reference_language: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class VariantSetDraftOut(BaseModel):
+    """A drafted variant set: the variants plus the SET-level warnings (a variant
+    shortfall and any parity drift the agent flagged). Reviewed, then saved via
+    POST /variant-sets — the platform never stores an unvalidated question."""
+
+    variants: list[VariantDraftOut] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    engine: str = ""
+    cost_usd: float | None = None
+
+
+class VariantCreate(QuestionCreate):
+    """A reviewed variant to persist: a full question plus its label in the set."""
+
+    label: str | None = None
+
+
+class VariantSetCreate(BaseModel):
+    id: str | None = None
+    title: str
+    brief: str
+    language: str
+    difficulty: str | None = None
+    target_complexity: str | None = None
+    variants: list[VariantCreate] = Field(min_length=2)
+
+
+class VariantOut(QuestionOut):
+    variant_label: str | None = None
+
+
+class VariantSetOut(BaseModel):
+    id: str
+    title: str
+    brief: str
+    language: str
+    difficulty: str | None
+    target_complexity: str | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    variants: list[VariantOut]
+
+
+class VariantSetSummaryOut(BaseModel):
+    """Lean list row — the set plus how many variants it holds, no question bodies."""
+
+    id: str
+    title: str
+    language: str
+    difficulty: str | None
+    variant_count: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class SubmissionCreate(BaseModel):
     question_id: str
     candidate: str
@@ -324,6 +405,14 @@ class InviteDeliveryOut(BaseModel):
     error: str | None = None
 
 
+class VariantSetInviteCreate(InviteCreate):
+    """Invite candidates to a variant set. One invite is minted per recipient, each
+    handed a variant round-robin; `overrides` pins specific recipients to a chosen
+    variant (email → variant question id) instead of the rotation."""
+
+    overrides: dict[str, str] = Field(default_factory=dict)
+
+
 class InviteOut(BaseModel):
     token: str
     url: str
@@ -331,6 +420,10 @@ class InviteOut(BaseModel):
     # assessment invite has assessment_id.
     question_id: str | None = None
     assessment_id: str | None = None
+    # Set when the invite drew its question from a variant set (question_id is the
+    # assigned variant); variant_label is that variant's tag, for the assignment UI.
+    variant_set_id: str | None = None
+    variant_label: str | None = None
     recipients: list[str]
     expires_at: datetime | None
     status: str

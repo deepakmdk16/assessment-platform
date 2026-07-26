@@ -78,6 +78,74 @@ export interface QuestionDraftOut {
   cost_usd: number | null
 }
 
+// --- Variant sets (per-candidate unique variants) --------------------------
+
+export interface VariantSetDraftIn {
+  brief: string
+  language: Language
+  count: number
+  difficulty?: string
+  target_complexity?: string
+}
+
+export interface VariantDraftOut {
+  label: string | null
+  question: QuestionIn
+  reference_solution: string | null
+  reference_language: string | null
+  warnings: string[]
+}
+
+export interface VariantSetDraftOut {
+  variants: VariantDraftOut[]
+  warnings: string[]
+  engine: string
+  cost_usd: number | null
+}
+
+/** A reviewed variant to persist: a full question plus its label in the set. */
+export interface VariantIn extends QuestionIn {
+  label?: string | null
+}
+
+export interface VariantSetIn {
+  id?: string
+  title: string
+  brief: string
+  language: Language
+  difficulty?: string
+  target_complexity?: string
+  variants: VariantIn[]
+}
+
+export interface VariantOut extends QuestionOut {
+  variant_label: string | null
+}
+
+export interface VariantSetOut {
+  id: string
+  title: string
+  brief: string
+  language: string
+  difficulty: string | null
+  target_complexity: string | null
+  status: string
+  created_at: string
+  updated_at: string
+  variants: VariantOut[]
+}
+
+export interface VariantSetSummary {
+  id: string
+  title: string
+  language: string
+  difficulty: string | null
+  variant_count: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
 export interface User {
   id: string
   email: string
@@ -108,10 +176,22 @@ export interface Invite {
    *  assessment invite has assessment_id. */
   question_id: string | null
   assessment_id: string | null
+  /** Set when the invite drew its question from a variant set; question_id is the
+   *  assigned variant and variant_label is that variant's tag. */
+  variant_set_id: string | null
+  variant_label: string | null
   recipients: string[]
   expires_at: string | null
   status: InviteStatus
   deliveries: InviteDelivery[]
+}
+
+/** Invite candidates to a variant set: one invite per recipient, round-robin,
+ *  with optional per-recipient overrides (email → variant question id). */
+export interface VariantSetInviteIn {
+  recipients: string[]
+  expires_at?: string | null
+  overrides?: Record<string, string>
 }
 
 /** A question inside an assessment, with its order and denormalized title. */

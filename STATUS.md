@@ -105,16 +105,31 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
 - **I2 · Plagiarism / similarity detection** across submissions (token-fingerprint /
   MOSS-style; optionally match against public solutions + AI-generated-code detection).
   None present; largely mooted by per-candidate variants (see D). **L.**
-- **Multi-question AI generation (cross-repo, enables per-candidate variants).**
-  Today the drafter is one question per call. Add orchestration that produces a **set
-  of K variants** for one brief + difficulty — do it by running the existing
-  single-question drafter K times (each still executed-oracle-validated), **not** by
-  asking one prompt for K questions (that dilutes each and worsens quality parity).
-  Pin `difficulty` + `target_complexity` across the set so they're calibrated to the
-  same band, and add a parity check (constraint sizes / `required_complexity` must
-  match across the set) to catch "one variant harder than another". This is the
-  natural feeder for per-candidate variants + assessment jumbling. Agent half (set
-  orchestration + parity guard) also noted in the agent STATUS. **M.**
+- **Multi-question variant sets (cross-repo, per-candidate unique variants) — agent
+  DONE; platform backend DONE 2026-07-26; frontend + assignment remain.** The agent
+  half shipped (orchestration + parity guard + `POST /questions/draft-set`, see
+  `../AssesmentAgent/STATUS.md`). **Platform backend landed** (branch
+  `feature/multi-question-set-ui`): a variant **is** a `Question` tagged with
+  `variant_set_id`/`variant_label` (reuses all question infra — test cases, preview,
+  grading, invites), grouped by a new `VariantSet` table (migration
+  `c3f1a7b2e5d8`, additive/nullable). `agent_client.draft_set` calls the agent;
+  `POST /variant-sets/draft` (rate-limited, stateless) returns the drafted variants
+  + set-level parity/shortfall warnings; `POST /variant-sets` persists a reviewed
+  set (each variant clears the same case-count floor); `GET /variant-sets[/{id}]`
+  list + detail, owner-scoped. **Frontend DONE** — dedicated **"Variant sets"**
+  section (rail entry + list + New draft→review→save + detail), built on the app's
+  real tokens/components. **Assignment DONE 2026-07-26** — `Invite.variant_set_id`
+  (migration `d4a2b8c6f1e0`); `POST /variant-sets/{id}/invites` mints **one invite
+  per recipient**, handing out variants **round-robin** (the rotation continues
+  across calls so the set stays evenly used) with a per-recipient **override** to
+  pin a variant; `question_id` holds the assigned variant, so the candidate flow
+  resolves it exactly like a single-question invite (zero candidate-side changes).
+  `GET /variant-sets/{id}/invites` + a detail-page invite panel show who got which
+  variant. Fully offline-tested (platform pytest + web vitest green). **Feature
+  complete end-to-end.** Only follow-up left, deliberately deferred: **assessment-
+  slot integration** — a variant pool as a question *inside* a multi-question
+  assessment (today variants ship via their own direct invite path). Revisit if
+  there's demand. **DONE (core); assessment-slot integration deferred.**
 - **SEC1 · `REGISTRATION_CODE` unset by default → open interviewer sign-up.** Must be
   set in prod (`config.py:110`). Deploy-checklist item. **XS.**
 - **SEC4 · Rate limiter is per-process**, won't hold across workers/instances

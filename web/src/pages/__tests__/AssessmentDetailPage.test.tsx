@@ -43,6 +43,8 @@ function baseInvite(overrides: Partial<Invite>): Invite {
     url: 'http://localhost:5173/t/tok123',
     question_id: null,
     assessment_id: 'week-1',
+    variant_set_id: null,
+    variant_label: null,
     recipients: ['candidate@example.com'],
     expires_at: null,
     status: 'active',

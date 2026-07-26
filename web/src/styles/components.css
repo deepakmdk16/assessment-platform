@@ -2014,3 +2014,114 @@ button.tab:hover {
   color: var(--color-ink-hover);
   border-color: var(--color-border-strong);
 }
+
+/* ------------------------------------------------- variant sets (per-candidate
+   unique variants). A variant is a Question, so these only add the set-specific
+   framing: the review/detail variant cards, a monospace chip, and the parity
+   banner. Everything else reuses .card / .chip / .field / .btn. */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.4rem;
+}
+
+.chip.mono {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-transform: none;
+}
+
+.chip.mono::before {
+  display: none;
+}
+
+.grid3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 96px;
+  gap: 0.9rem;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1.2rem;
+}
+
+.variant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-top: 0.9rem;
+}
+
+.variant-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  padding: 0.85rem 1rem;
+}
+
+.variant-hd {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.variant-badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-muted);
+  background: var(--color-surface-3);
+  border-radius: var(--radius-sm);
+  padding: 0.05rem 0.45rem;
+  flex: none;
+}
+
+.variant-title {
+  font-weight: 600;
+  color: var(--color-heading);
+  font-size: 0.94rem;
+}
+
+.variant-warnings {
+  margin: 0.6rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+  color: var(--color-warn);
+}
+
+.parity-ok {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-good);
+  background: var(--color-good-soft);
+  margin-top: 0.8rem;
+}
+
+.parity-ok svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: none;
+}
+
+.detail-note {
+  margin-top: 1.3rem;
+  font-size: 0.84rem;
+  color: var(--color-muted);
+}
+
+@media (max-width: 640px) {
+  .grid3 {
+    grid-template-columns: 1fr 1fr;
+  }
+}

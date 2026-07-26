@@ -70,6 +70,13 @@ class Question(SQLModel, table=True):
     # hard); status retires a question without deleting it — "archived" hides it
     # from the dashboard while keeping its submissions (which are the record).
     difficulty: str | None = None
+    # Membership in a variant set (per-candidate unique variants). When set, this
+    # question is one interchangeable sibling of a `VariantSet`; `variant_label`
+    # is its short display tag within the set (A/B/C…). Both null for an ordinary
+    # standalone question. The FK does not cascade from the set side — deleting a
+    # set leaves its questions (they may have submissions, the record of truth).
+    variant_set_id: str | None = Field(default=None, foreign_key="variantset.id", index=True)
+    variant_label: str | None = None
     # The AI-drafted reference solution (and the language it's written in), kept so
     # the answer key survives past draft time — shown to the interviewer on the
     # question and submission pages. Null for hand-authored questions.
@@ -94,6 +101,34 @@ class Question(SQLModel, table=True):
     invites: list["Invite"] = Relationship(
         back_populates="question",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+
+
+class VariantSet(SQLModel, table=True):
+    """A group of interchangeable question variants drafted from one brief.
+
+    Per-candidate unique variants: hand different candidates a different-but-
+    equivalent sibling so a leaked question is worthless. The members are ordinary
+    `Question` rows tagged with `variant_set_id` (a variant *is* a question, so it
+    reuses all question infrastructure — test cases, preview, grading, invites).
+    This row keeps the shared authoring inputs (brief/difficulty/…) so the set can
+    be re-drafted or extended later. Deleting a set does NOT delete its questions
+    (they may carry submissions); it detaches them.
+    """
+
+    id: str = Field(primary_key=True)  # short slug, like Question.id
+    owner_id: int = Field(foreign_key="interviewer.id", index=True)
+    title: str
+    brief: str
+    language: str
+    difficulty: str | None = None
+    target_complexity: str | None = None
+    status: str = Field(default="active", index=True)
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
+
+    variants: list["Question"] = Relationship(
+        sa_relationship_kwargs={"order_by": "Question.variant_label"},
     )
 
 
@@ -173,6 +208,12 @@ class Invite(SQLModel, table=True):
     # exactly one of the two is set. Legacy single-question invites keep question_id.
     question_id: str | None = Field(default=None, foreign_key="question.id", index=True)
     assessment_id: str | None = Field(default=None, foreign_key="assessment.id", index=True)
+    # When the invite handed the candidate a variant from a set, this records which
+    # set it came from; `question_id` still holds the *assigned* variant, so the
+    # whole candidate flow resolves it exactly like a single-question invite. Only
+    # the interviewer-side assignment UI (which variant went to whom, round-robin)
+    # needs this provenance. Null for ordinary question/assessment invites.
+    variant_set_id: str | None = Field(default=None, foreign_key="variantset.id", index=True)
     created_by: int = Field(foreign_key="interviewer.id", index=True)
     recipients: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     # Per-recipient send outcome captured at creation, so who-was-emailed is an

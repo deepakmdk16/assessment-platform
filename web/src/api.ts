@@ -18,6 +18,12 @@ import type {
   SubmissionSummary,
   SubmitResponse,
   User,
+  VariantSetDraftIn,
+  VariantSetDraftOut,
+  VariantSetIn,
+  VariantSetInviteIn,
+  VariantSetOut,
+  VariantSetSummary,
 } from './types'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:9000'
@@ -140,6 +146,27 @@ export const api = {
 
   deleteQuestion: (id: string) =>
     request<void>(`/questions/${id}`, { method: 'DELETE', auth: true }),
+
+  // --- Variant sets (per-candidate unique variants) ------------------------
+  draftVariantSet: (data: VariantSetDraftIn) =>
+    request<VariantSetDraftOut>('/variant-sets/draft', { method: 'POST', body: data, auth: true }),
+
+  createVariantSet: (data: VariantSetIn) =>
+    request<VariantSetOut>('/variant-sets', { method: 'POST', body: data, auth: true }),
+
+  listVariantSets: (includeArchived = false, offset = 0, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (includeArchived) params.set('include_archived', 'true')
+    return request<Page<VariantSetSummary>>(`/variant-sets?${params}`, { auth: true })
+  },
+
+  getVariantSet: (id: string) => request<VariantSetOut>(`/variant-sets/${id}`, { auth: true }),
+
+  createVariantSetInvites: (setId: string, data: VariantSetInviteIn) =>
+    request<Invite[]>(`/variant-sets/${setId}/invites`, { method: 'POST', body: data, auth: true }),
+
+  listVariantSetInvites: (setId: string) =>
+    request<Invite[]>(`/variant-sets/${setId}/invites`, { auth: true }),
 
   // --- Assessments (T4) ----------------------------------------------------
   listAssessments: (includeArchived = false, offset = 0, limit = 100) => {

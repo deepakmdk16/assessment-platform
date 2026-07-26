@@ -154,6 +154,55 @@ async def draft_question(
     raise last  # unreachable; keeps the type checker happy
 
 
+async def draft_set(
+    brief: str,
+    language: str,
+    count: int,
+    difficulty: str | None = None,
+    target_complexity: str | None = None,
+    base_url: str = AGENT_BASE_URL,
+) -> dict:
+    """Ask the agent to draft a SET of `count` sibling variants from one brief;
+    return its payload (`{engine, warnings, variants:[...]}`). Same statelessness
+    and transport-retry semantics as `draft_question` — the only place that talks
+    to the agent's draft-set endpoint; tests mock it here to run offline.
+
+    The agent drafts the `count` variants **sequentially**, so the wall-clock is
+    ~`count`× a single draft. The read timeout is therefore scaled by `count`
+    (AGENT_DRAFT_TIMEOUT_S is the per-draft budget); reusing the single-draft
+    timeout made a 3-variant set on a slow local model exceed it and 502.
+    """
+    body = {
+        "brief": brief,
+        "language": language,
+        "count": count,
+        "difficulty": difficulty,
+        "target_complexity": target_complexity,
+    }
+    timeout = AGENT_DRAFT_TIMEOUT_S * max(1, count)
+    last: Exception
+    for attempt in range(1, max(1, _DRAFT_TRANSPORT_ATTEMPTS) + 1):
+        try:
+            resp = await _signed_post(
+                f"{base_url}/questions/draft-set", body, timeout=timeout
+            )
+            resp.raise_for_status()
+            result: dict = resp.json()
+            return result
+        except Exception as exc:
+            last = exc
+            if attempt == _DRAFT_TRANSPORT_ATTEMPTS or not _draft_is_retryable(exc):
+                raise
+            logger.info(
+                "draft-set attempt %d/%d failed (%s); retrying",
+                attempt,
+                _DRAFT_TRANSPORT_ATTEMPTS,
+                exc,
+            )
+            await asyncio.sleep(_DRAFT_RETRY_BACKOFF_S * attempt)
+    raise last  # unreachable; keeps the type checker happy
+
+
 async def run_code(
     code: str,
     language: str,
