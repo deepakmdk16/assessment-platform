@@ -119,6 +119,10 @@ class AssessmentCreate(BaseModel):
     duration_minutes: int | None = Field(default=None, gt=0)  # None = untimed total
     # Ordered question ids; order here becomes the candidate's question order.
     question_ids: list[str] = Field(min_length=1)
+    # Per-assessment branding (A12): shown on the candidate IDE header. Both
+    # optional; logo_url is a URL reference, never base64.
+    org_name: str | None = None
+    logo_url: str | None = None
 
 
 class AssessmentUpdate(BaseModel):
@@ -127,6 +131,8 @@ class AssessmentUpdate(BaseModel):
     title: str
     duration_minutes: int | None = Field(default=None, gt=0)
     question_ids: list[str] = Field(min_length=1)
+    org_name: str | None = None
+    logo_url: str | None = None
 
 
 class AssessmentQuestionOut(BaseModel):
@@ -139,6 +145,8 @@ class AssessmentOut(BaseModel):
     id: str
     title: str
     duration_minutes: int | None
+    org_name: str | None
+    logo_url: str | None
     status: str
     created_at: datetime
     updated_at: datetime
@@ -347,6 +355,12 @@ class InvitePublicOut(BaseModel):
     # invite). None when untimed. The candidate UI counts down to this off the
     # server clock, not the browser's.
     deadline: datetime | None = None
+    # Per-assessment branding (A12): set only for an assessment invite whose
+    # Assessment carries them; None for a legacy single-question invite or an
+    # unbranded assessment (candidate UI falls back to a generic header).
+    assessment_title: str | None = None
+    org_name: str | None = None
+    logo_url: str | None = None
 
 
 class CandidateSubmitIn(BaseModel):

@@ -222,6 +222,59 @@ def test_submissions_list_surfaces_assessment_link(client, monkeypatch) -> None:
     assert by_candidate["Direct"]["assessment_title"] is None
 
 
+def test_assessment_branding_roundtrip(client) -> None:
+    """A12: org_name/logo_url are stored and echoed back, and PUT can change them."""
+    _make_questions(client, "q1")
+    created = client.post(
+        "/assessments",
+        json={
+            "id": "a1", "title": "A", "question_ids": ["q1"],
+            "org_name": "Acme Corp", "logo_url": "https://cdn.example.com/acme.png",
+        },
+    ).json()
+    assert created["org_name"] == "Acme Corp"
+    assert created["logo_url"] == "https://cdn.example.com/acme.png"
+
+    updated = client.put(
+        "/assessments/a1",
+        json={
+            "title": "A", "question_ids": ["q1"],
+            "org_name": "New Name", "logo_url": None,
+        },
+    ).json()
+    assert updated["org_name"] == "New Name"
+    assert updated["logo_url"] is None
+
+
+def test_candidate_view_carries_assessment_branding(client, monkeypatch) -> None:
+    """A12: the candidate-facing /start response carries the assessment's
+    branding; a legacy single-question invite carries none."""
+    _make_questions(client, "q1")
+    client.post(
+        "/assessments",
+        json={
+            "id": "a1", "title": "Backend Screen", "question_ids": ["q1"],
+            "org_name": "Acme Corp", "logo_url": "https://cdn.example.com/acme.png",
+        },
+    )
+    tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
+    data = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io"}).json()
+    assert data["assessment_title"] == "Backend Screen"
+    assert data["org_name"] == "Acme Corp"
+    assert data["logo_url"] == "https://cdn.example.com/acme.png"
+
+    # A legacy single-question invite has no Assessment to brand from.
+    legacy_tok = client.post(
+        "/questions/q1/invites", json={"recipients": ["legacy@x.io"]}
+    ).json()["token"]
+    legacy_data = client.post(
+        f"/invite/{legacy_tok}/start", json={"candidate_email": "legacy@x.io"}
+    ).json()
+    assert legacy_data["assessment_title"] is None
+    assert legacy_data["org_name"] is None
+    assert legacy_data["logo_url"] is None
+
+
 def test_delete_blocked_by_invite(client) -> None:
     _make_questions(client, "q1")
     client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1"]})

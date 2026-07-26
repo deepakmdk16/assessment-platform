@@ -49,17 +49,19 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   per-question results; there's no composite (weighted score, "passed 2/3", overall
   verdict) for the sitting. Interviewers need an at-a-glance assessment outcome.
   Pairs with A3's attempt view. **M.**
-- **A12 · Enterprise branding / uploadable logo — per-assessment first (re-scoped
-  2026-07-26).** The candidate IDE header hardcodes "Coding assessment"
-  (`AssessmentFlow.tsx:201`) and doesn't even show the assessment's own title.
-  Build the **per-assessment** logo + display name upload first — set on
-  `NewAssessmentPage`/`AssessmentDetailPage`, stored on the `Assessment` row,
-  rendered as `{logo} {Org} — {assessment title}` with a small "Powered by
-  assess.dev" on the candidate IDE header. A workspace-level default (set once
-  per interviewer, used when an assessment has no override) is a natural
-  follow-up once the per-assessment path exists, not a prerequisite. Store the
-  logo as an asset/URL reference, not base64 in a row. Meaningful for selling
-  white-labeled to enterprises. **L.**
+- **A12 · Enterprise branding — per-assessment upload DONE 2026-07-26; workspace
+  default still open.** `Assessment.org_name`/`logo_url` (migration
+  `0ae2d36aff72`, additive/nullable) are set on `NewAssessmentPage` (with a live
+  preview) and shown read-only on `AssessmentDetailPage`; `InvitePublicOut`
+  carries `assessment_title`/`org_name`/`logo_url` to the candidate, and
+  `AssessmentFlow`'s IDE header renders `{logo} {org} — {title}` plus a small
+  "Powered by assess.dev" when set, falling back to the generic "Coding
+  assessment" header otherwise (a legacy single-question invite has no
+  `Assessment` to brand from, so it's always unbranded). The logo is stored as a
+  URL reference, never base64. **Still open:** a workspace-level default (set
+  once per interviewer, used when an assessment has no override) — a natural
+  follow-up now that the per-assessment path exists, not a prerequisite. **S**
+  for the remaining piece.
 
 ---
 

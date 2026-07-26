@@ -27,6 +27,8 @@ vi.mock('../../api', () => {
 const assessment: AssessmentOut = {
   id: 'week-1',
   title: 'Backend Screen',
+  org_name: null,
+  logo_url: null,
   duration_minutes: 90,
   status: 'active',
   created_at: '2026-07-14T00:00:00Z',

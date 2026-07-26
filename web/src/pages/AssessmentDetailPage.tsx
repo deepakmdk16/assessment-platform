@@ -77,8 +77,12 @@ export function AssessmentDetailPage() {
             {assessment.duration_minutes != null
               ? `${assessment.duration_minutes} min total`
               : 'Untimed'}
+            {assessment.org_name && <> · Branded for {assessment.org_name}</>}
           </div>
         </div>
+        {assessment.logo_url && (
+          <img src={assessment.logo_url} alt="" className="ide-brand-logo" />
+        )}
       </div>
 
       {error && <p className="form-error">{error}</p>}

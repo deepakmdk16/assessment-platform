@@ -736,6 +736,8 @@ def _assessment_out(a: Assessment) -> AssessmentOut:
         id=a.id,
         title=a.title,
         duration_minutes=a.duration_minutes,
+        org_name=a.org_name,
+        logo_url=a.logo_url,
         status=a.status,
         created_at=a.created_at,
         updated_at=a.updated_at,
@@ -787,6 +789,8 @@ def create_assessment(
         owner_id=_require_id(current.id),
         title=body.title,
         duration_minutes=body.duration_minutes,
+        org_name=body.org_name,
+        logo_url=body.logo_url,
         questions=_membership_rows(body.question_ids, current, session),
     )
     session.add(a)
@@ -837,6 +841,8 @@ def update_assessment(
     a = _owned_assessment(assessment_id, current, session)
     a.title = body.title
     a.duration_minutes = body.duration_minutes
+    a.org_name = body.org_name
+    a.logo_url = body.logo_url
     a.updated_at = datetime.now(timezone.utc)
     # Full replace of the membership set (PUT). Clear via the relationship and
     # flush FIRST (delete-orphan removes the old rows), so a question kept across
@@ -1241,6 +1247,12 @@ def _candidate_question_view(
         questions=public,
         languages=config.SUPPORTED_LANGUAGES,
         deadline=deadline,
+        # Per-assessment branding (A12) — None for a legacy single-question
+        # invite or an unbranded assessment; the candidate UI falls back to a
+        # generic header in either case.
+        assessment_title=invite.assessment.title if invite.assessment else None,
+        org_name=invite.assessment.org_name if invite.assessment else None,
+        logo_url=invite.assessment.logo_url if invite.assessment else None,
     )
 
 

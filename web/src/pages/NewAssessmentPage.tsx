@@ -9,6 +9,8 @@ export function NewAssessmentPage() {
   const [title, setTitle] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(60)
   const [indefinite, setIndefinite] = useState(false)
+  const [orgName, setOrgName] = useState('')
+  const [logoUrl, setLogoUrl] = useState('')
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [library, setLibrary] = useState<QuestionOut[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -59,6 +61,8 @@ export function NewAssessmentPage() {
         title,
         duration_minutes: indefinite ? null : durationMinutes,
         question_ids: selectedIds,
+        org_name: orgName.trim() || null,
+        logo_url: logoUrl.trim() || null,
       })
       navigate(`/assessments/${created.id}`, { state: { justCreated: true } })
     } catch (err) {
@@ -113,6 +117,47 @@ export function NewAssessmentPage() {
             </label>
             <p className="cellsub">One shared budget the candidate spends across every question.</p>
           </div>
+        </div>
+      </div>
+
+      <div className="card pad">
+        <div className="card-title">Branding (optional)</div>
+        <p className="draft-hint">
+          Shown on the candidate&rsquo;s IDE header when they open the assessment. Leave blank for
+          the generic &ldquo;Coding assessment&rdquo; header.
+        </p>
+        <div className="stack">
+          <div className="grid2">
+            <div className="field">
+              <label htmlFor="org_name">Organization name</label>
+              <input
+                id="org_name"
+                placeholder="e.g. Acme Corp"
+                value={orgName}
+                onChange={(e) => setOrgName(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="logo_url">Logo URL</label>
+              <input
+                id="logo_url"
+                placeholder="https://…"
+                value={logoUrl}
+                onChange={(e) => setLogoUrl(e.target.value)}
+              />
+            </div>
+          </div>
+          {(orgName.trim() || logoUrl.trim()) && (
+            <div className="ide-title-preview">
+              {logoUrl.trim() && (
+                <img src={logoUrl.trim()} alt="" className="ide-brand-logo" />
+              )}
+              <span>
+                {orgName.trim() && `${orgName.trim()} — `}
+                {title.trim() || 'Assessment title'}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

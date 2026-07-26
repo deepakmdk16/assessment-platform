@@ -162,6 +162,48 @@ describe('CandidatePage', () => {
     expect(screen.getByText(/Merge overlapping intervals/i)).toBeInTheDocument()
   })
 
+  it('renders per-assessment branding on the IDE header when present (A12)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue({
+      ...multiStartResponse,
+      assessment_title: 'Backend Screen',
+      org_name: 'Acme Corp',
+      logo_url: 'https://cdn.example.com/acme.png',
+    })
+
+    const { container } = renderCandidatePage()
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    expect(await screen.findByText('Acme Corp — Backend Screen')).toBeInTheDocument()
+    expect(screen.getByText(/powered by assess\.dev/i)).toBeInTheDocument()
+    // The logo is decorative (empty alt) since the adjacent text already
+    // carries the org name, so query it directly rather than by role="img".
+    expect(container.querySelector('img.ide-brand-logo')).toHaveAttribute(
+      'src',
+      'https://cdn.example.com/acme.png',
+    )
+  })
+
+  it('falls back to the generic header when an assessment has no branding', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(multiStartResponse)
+
+    renderCandidatePage()
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    await screen.findByRole('tab', { name: /Two Sum/i })
+    expect(screen.getByText('Coding assessment')).toBeInTheDocument()
+    expect(screen.queryByText(/powered by assess\.dev/i)).not.toBeInTheDocument()
+  })
+
   it('shows a completion screen once every question is submitted manually (A5)', async () => {
     const user = userEvent.setup()
     vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })

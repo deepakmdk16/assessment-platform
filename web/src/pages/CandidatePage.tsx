@@ -334,6 +334,9 @@ export function CandidatePage() {
         questions={invite.questions}
         languages={invite.languages}
         deadline={deadline}
+        assessmentTitle={invite.assessment_title}
+        orgName={invite.org_name}
+        logoUrl={invite.logo_url}
         onExpired={() => setStage('expired')}
       />
     )

@@ -26,6 +26,11 @@ interface Props {
   questions: CandidateQuestionPublic[]
   languages: Language[]
   deadline: string | null
+  /** Per-assessment branding (A12); all null/undefined for an unbranded
+   *  assessment — the header falls back to the generic "Coding assessment". */
+  assessmentTitle?: string | null
+  orgName?: string | null
+  logoUrl?: string | null
   /** Bubble a 410/404 (expired/revoked) up so the page shows the shared notice. */
   onExpired: () => void
 }
@@ -43,6 +48,9 @@ export function AssessmentFlow({
   questions,
   languages,
   deadline,
+  assessmentTitle,
+  orgName,
+  logoUrl,
   onExpired,
 }: Props) {
   const { resolved } = useTheme()
@@ -220,11 +228,18 @@ export function AssessmentFlow({
     return <CandidateNotice title="Assessment complete ✓" body={body} />
   }
 
+  const brandedTitle = orgName ? `${orgName} — ${assessmentTitle ?? 'Coding assessment'}` : null
+
   return (
     <div className="ide">
       <header className="ide-top">
-        <span className="ide-mark" aria-hidden="true" />
-        <span className="ide-title">Coding assessment</span>
+        {logoUrl ? (
+          <img src={logoUrl} alt="" className="ide-brand-logo" />
+        ) : (
+          <span className="ide-mark" aria-hidden="true" />
+        )}
+        <span className="ide-title">{brandedTitle ?? assessmentTitle ?? 'Coding assessment'}</span>
+        {(orgName || logoUrl) && <span className="ide-powered-by">Powered by assess.dev</span>}
         <div className="ide-top-right">
           <span className="progress">
             {submittedCount} / {questions.length} submitted

@@ -117,6 +117,12 @@ class Assessment(SQLModel, table=True):
     owner_id: int = Field(foreign_key="interviewer.id", index=True)
     title: str
     duration_minutes: int | None = None  # None = untimed; per-assessment total
+    # Per-assessment branding (A12): shown on the candidate IDE header as
+    # "{logo} {org_name} — {title}". Both optional; None = unbranded, falls back
+    # to the generic "Coding assessment" header. logo_url is an asset/URL
+    # reference (e.g. an externally-hosted image), never base64 in the row.
+    org_name: str | None = None
+    logo_url: str | None = None
     status: str = Field(default="active", index=True)
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()

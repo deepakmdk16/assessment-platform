@@ -123,6 +123,9 @@ export interface AssessmentOut {
   id: string
   title: string
   duration_minutes: number | null
+  // Per-assessment branding (A12): shown on the candidate IDE header.
+  org_name: string | null
+  logo_url: string | null
   status: string
   created_at: string
   updated_at: string
@@ -135,6 +138,8 @@ export interface AssessmentIn {
   title: string
   duration_minutes?: number | null
   question_ids: string[]
+  org_name?: string | null
+  logo_url?: string | null
 }
 
 export interface InviteQuestionPublic {
@@ -171,6 +176,12 @@ export interface InviteStartResponse {
   /** Server-authoritative submit deadline (ISO). null when untimed. The countdown
    *  runs to this, and the server enforces it on submit. */
   deadline?: string | null
+  /** Per-assessment branding (A12): set only for an assessment invite whose
+   *  Assessment carries them; null for a legacy single-question invite or an
+   *  unbranded assessment. */
+  assessment_title?: string | null
+  org_name?: string | null
+  logo_url?: string | null
 }
 
 export interface SubmitResponse {

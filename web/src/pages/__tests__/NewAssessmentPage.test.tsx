@@ -72,12 +72,34 @@ describe('NewAssessmentPage', () => {
       title: 'Week 1 Screen',
       duration_minutes: 60,
       question_ids: ['two-sum', 'islands'],
+      org_name: null,
+      logo_url: null,
     })
     await waitFor(() =>
       expect(navigateMock).toHaveBeenCalledWith('/assessments/week-1', {
         state: { justCreated: true },
       }),
     )
+  })
+
+  it('sends branding fields when set, and null when left blank (A12)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.createAssessment).mockResolvedValue({ id: 'week-1' } as AssessmentOut)
+    await renderLoaded([q('two-sum', 'Two Sum')])
+
+    await user.type(screen.getByLabelText(/^title$/i), 'Week 1 Screen')
+    await user.type(screen.getByLabelText(/organization name/i), 'Acme Corp')
+    await user.type(screen.getByLabelText(/logo url/i), 'https://cdn.example.com/acme.png')
+    expect(screen.getByText(/Acme Corp — Week 1 Screen/)).toBeInTheDocument()
+
+    await user.click(addButtons()[0])
+    await user.click(screen.getByRole('button', { name: /create assessment/i }))
+
+    await waitFor(() => expect(api.createAssessment).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.createAssessment).mock.calls[0][0]).toMatchObject({
+      org_name: 'Acme Corp',
+      logo_url: 'https://cdn.example.com/acme.png',
+    })
   })
 
   it('reorders and removes selected questions before create', async () => {
