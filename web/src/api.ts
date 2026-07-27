@@ -1,4 +1,5 @@
 import type {
+  AssessmentAnalytics,
   AssessmentAttempt,
   AssessmentIn,
   AssessmentOut,
@@ -6,7 +7,9 @@ import type {
   InviteStartResponse,
   InviteStatusResponse,
   LoginResponse,
+  OverviewAnalytics,
   Page,
+  QuestionAnalytics,
   QuestionDraftIn,
   QuestionDraftOut,
   QuestionIn,
@@ -207,6 +210,22 @@ export const api = {
 
   listAssessmentAttempts: (assessmentId: string) =>
     request<AssessmentAttempt[]>(`/assessments/${assessmentId}/attempts`, { auth: true }),
+
+  // --- Analytics (AR1) -----------------------------------------------------
+  // `days` windows the submission-derived stats; omit for the all-time view.
+  analyticsOverview: (days?: number) => {
+    const q = days ? `?days=${days}` : ''
+    return request<OverviewAnalytics>(`/analytics/overview${q}`, { auth: true })
+  },
+
+  analyticsQuestions: (days?: number, offset = 0, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (days) params.set('days', String(days))
+    return request<Page<QuestionAnalytics>>(`/analytics/questions?${params}`, { auth: true })
+  },
+
+  analyticsAssessment: (assessmentId: string) =>
+    request<AssessmentAnalytics>(`/analytics/assessments/${assessmentId}`, { auth: true }),
 
   createInvite: (
     questionId: string,

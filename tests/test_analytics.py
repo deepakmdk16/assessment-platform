@@ -148,10 +148,38 @@ def test_overview(client, monkeypatch) -> None:
 
 def test_overview_empty_workspace(client) -> None:
     o = client.get("/analytics/overview").json()
-    assert o == {
-        "questions": 0, "submissions": 0, "graded": 0, "candidates": 0,
-        "passed": 0, "pass_rate": None, "avg_score_pct": None, "trend": [],
-    }
+    assert (o["questions"], o["submissions"], o["graded"], o["candidates"]) == (0, 0, 0, 0)
+    assert o["pass_rate"] is None and o["avg_score_pct"] is None
+    assert o["trend"] == []
+    # the histogram always has its five buckets, all empty
+    assert [b["count"] for b in o["score_distribution"]] == [0, 0, 0, 0, 0]
+
+
+def test_days_window_excludes_old_submissions(client, monkeypatch) -> None:
+    """`?days=N` windows the submission-derived stats; older rows drop out while
+    the all-time view still counts them."""
+    from sqlmodel import Session, select
+
+    from assessment_platform import db as db_module
+    from assessment_platform.models import Submission
+
+    _seed_assessment(client, monkeypatch)
+    # Backdate the (single) q2 submission to well outside a 30-day window.
+    with Session(db_module.engine) as s:
+        sub = s.exec(select(Submission).where(Submission.question_id == "q2")).one()
+        sub.created_at = datetime.now(timezone.utc) - timedelta(days=60)
+        s.add(sub)
+        s.commit()
+
+    windowed = client.get("/analytics/overview?days=30").json()
+    assert windowed["submissions"] == 2  # only the two q1 submissions remain
+    assert windowed["graded"] == 2
+    assert client.get("/analytics/overview").json()["submissions"] == 3  # all-time unchanged
+
+    page = client.get("/analytics/questions?days=30").json()
+    by_id = {q["question_id"]: q for q in page["items"]}
+    assert by_id["q2"]["submissions"] == 0  # its only submission is outside the window
+    assert by_id["q1"]["submissions"] == 2
 
 
 def test_per_question(client, monkeypatch) -> None:
@@ -184,6 +212,8 @@ def test_per_assessment(client, monkeypatch) -> None:
     assert a["pass_rate"] == 2 / 3  # 2 passed of 3 graded question-attempts
 
     cands = {c["candidate_email"]: c for c in a["candidates"]}
+    assert cands["cand1@x.io"]["submitted_count"] == 2  # both slots
+    assert cands["cand2@x.io"]["submitted_count"] == 1  # only q1
     assert cands["cand2@x.io"]["rank"] == 1  # 80 > 70
     assert cands["cand2@x.io"]["percentile"] == 1.0
     assert cands["cand1@x.io"]["rank"] == 2

@@ -143,19 +143,26 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   debounced to `localStorage` (`CandidatePage.tsx:37,95`) — lost on cleared storage,
   incognito, or a device switch. Optional server-side draft persistence keyed by
   invite token so work survives a browser/device change. **M.**
-- **AR1 · Aggregate analytics — backend DONE 2026-07-26; dashboard UI in
-  progress.** The dashboard was a bare question list with no stats/metrics route.
-  **Backend landed** (branch `feature/ar1-analytics`): a DB-free, unit-tested
+- **AR1 · Aggregate analytics — DONE 2026-07-27.** The dashboard was a bare
+  question list with no stats/metrics route. **Backend:** a DB-free, unit-tested
   `analytics.py` (pass-rate, median/percentile, daily trend, time-to-solve,
   competition ranking) behind three owner-scoped endpoints —
-  `GET /analytics/overview` (workspace totals + submission trend),
-  `GET /analytics/questions` (`Page`; per-question pass-rate, avg/median score,
-  late count, avg/median time-to-solve; excludes archived + variant members),
-  and `GET /analytics/assessments/{id}` (cross-candidate: per-candidate
-  rank/percentile + whole-sitting time-to-solve, completion, score
+  `GET /analytics/overview` (workspace totals + submission trend + score
+  distribution), `GET /analytics/questions` (`Page`; per-question pass-rate,
+  avg/median score, late count, avg/median time-to-solve; excludes archived +
+  variant members), and `GET /analytics/assessments/{id}` (cross-candidate:
+  per-candidate rank/percentile + whole-sitting time-to-solve, completion, score
   distribution; reuses the attempts assembly extracted into
-  `_assessment_attempt_rows`). Offline pytest green. **Still to do:** the
-  dashboard UI (mockup-first) to surface these. **L.**
+  `_assessment_attempt_rows`). All three take an optional `?days=N` window (the
+  submission-derived stats only; the question/library counts stay current). No
+  migration — every field is computed or response-only. **Frontend (folded onto
+  the dashboard, no new route):** an `AnalyticsPanel` above the question list —
+  time-range toggle, KPI tiles, submission-trend + score-distribution charts
+  (inline SVG, so no inline styles / raw colour), and a cross-candidate view per
+  chosen assessment; the existing question table gained pass-rate/avg/median-time
+  columns. Charts key off semantic tokens (good/warn/bad/accent). Full gate green
+  (backend pytest, web vitest incl. new panel + format-helper tests, lint, types,
+  build); mockup signed off before the `.tsx`. **Feature complete.**
 - **I1 · Integrity / proctoring suite (staged; scope agreed 2026-07-24).** Nothing
   present today. Build the first three; **webcam/video is DEFERRED.**
   - **Browser telemetry (do first, cheap):** tab/window blur + focus-loss timeline,

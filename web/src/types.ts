@@ -267,6 +267,79 @@ export interface AssessmentAttempt {
   avg_score_pct: number | null
 }
 
+// --- Analytics (AR1) -------------------------------------------------------
+// Rates are fractions in [0, 1] (null = undefined, e.g. nothing graded yet);
+// scores are 0..100. Times are seconds.
+
+export interface TrendPoint {
+  date: string // YYYY-MM-DD
+  submissions: number
+  graded: number
+  passed: number
+  pass_rate: number | null
+}
+
+/** `GET /analytics/overview` — workspace rollup + daily submission trend. */
+export interface OverviewAnalytics {
+  questions: number
+  submissions: number
+  graded: number
+  candidates: number
+  passed: number
+  pass_rate: number | null
+  avg_score_pct: number | null
+  trend: TrendPoint[]
+  score_distribution: ScoreBucket[]
+}
+
+/** `GET /analytics/questions` — per-question stats (merged into the library
+ *  table by question_id). */
+export interface QuestionAnalytics {
+  question_id: string
+  title: string
+  difficulty: string | null
+  submissions: number
+  graded: number
+  passed: number
+  pass_rate: number | null
+  avg_score_pct: number | null
+  median_score_pct: number | null
+  late: number
+  avg_time_to_solve_s: number | null
+  median_time_to_solve_s: number | null
+}
+
+export interface ScoreBucket {
+  low: number
+  high: number
+  count: number
+}
+
+export interface AssessmentCandidateAnalytics {
+  candidate_name: string
+  candidate_email: string
+  passed_count: number
+  submitted_count: number
+  total_count: number
+  avg_score_pct: number | null
+  rank: number | null
+  percentile: number | null
+  time_to_solve_s: number | null
+}
+
+/** `GET /analytics/assessments/{id}` — cross-candidate rollup for one assessment. */
+export interface AssessmentAnalytics {
+  assessment_id: string
+  title: string
+  slot_count: number
+  candidates_started: number
+  candidates_completed: number
+  avg_score_pct: number | null
+  pass_rate: number | null
+  score_distribution: ScoreBucket[]
+  candidates: AssessmentCandidateAnalytics[]
+}
+
 export interface InviteQuestionPublic {
   title: string
   prompt: string

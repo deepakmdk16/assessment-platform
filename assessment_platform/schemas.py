@@ -652,6 +652,14 @@ class TrendPointOut(BaseModel):
     pass_rate: float | None = None  # passed / graded that day
 
 
+class ScoreBucketOut(BaseModel):
+    """One bar of a score histogram: [low, high) (top bucket is inclusive)."""
+
+    low: float
+    high: float
+    count: int
+
+
 class OverviewAnalyticsOut(BaseModel):
     """Workspace-level rollup across all of the interviewer's questions."""
 
@@ -663,6 +671,7 @@ class OverviewAnalyticsOut(BaseModel):
     pass_rate: float | None = None  # passed / graded overall
     avg_score_pct: float | None = None
     trend: list[TrendPointOut]
+    score_distribution: list[ScoreBucketOut]
 
 
 class QuestionAnalyticsOut(BaseModel):
@@ -682,20 +691,13 @@ class QuestionAnalyticsOut(BaseModel):
     median_time_to_solve_s: float | None = None
 
 
-class ScoreBucketOut(BaseModel):
-    """One bar of a score histogram: [low, high) (top bucket is inclusive)."""
-
-    low: float
-    high: float
-    count: int
-
-
 class AssessmentCandidateAnalyticsOut(BaseModel):
     """One candidate's standing within a single assessment."""
 
     candidate_name: str
     candidate_email: str
     passed_count: int
+    submitted_count: int  # slots this candidate has submitted (for completion status)
     total_count: int
     avg_score_pct: float | None = None
     rank: int | None = None  # competition rank among graded candidates (1 = top)

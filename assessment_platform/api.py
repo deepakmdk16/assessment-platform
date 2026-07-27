@@ -1583,6 +1583,21 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
 # --------------------------------------------------------------------------- #
 
 
+def _since_cutoff(days: int | None) -> datetime | None:
+    """The lower bound for a `?days=N` analytics window (submissions created on or
+    after now-N days), or None for the all-time view when the param is absent."""
+    if days is None:
+        return None
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
+def _within(subs: Sequence[Submission], cutoff: datetime | None) -> list[Submission]:
+    """Submissions created at or after `cutoff` (all of them when it's None)."""
+    if cutoff is None:
+        return list(subs)
+    return [s for s in subs if as_utc(s.created_at) >= cutoff]
+
+
 def _attempt_starts(
     subs: Sequence[Submission], session: Session
 ) -> dict[tuple[int, str], datetime]:
@@ -1606,11 +1621,14 @@ def _attempt_starts(
 
 @app.get("/analytics/overview", response_model=OverviewAnalyticsOut)
 def analytics_overview(
+    days: int | None = Query(default=None, ge=1, le=3650),
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> OverviewAnalyticsOut:
     """Workspace rollup across all of the caller's questions: headline counts,
-    overall pass rate / average score, and a daily submission trend."""
+    overall pass rate / average score, and a daily submission trend. `days`
+    windows the submission-derived stats (counts/rate/score/trend) to the last N
+    days; the question count is the current library size, not time-scoped."""
     _reap_stale_running(session)
     question_count = session.exec(
         select(func.count())
@@ -1621,9 +1639,13 @@ def analytics_overview(
             col(Question.variant_set_id).is_(None),
         )
     ).one()
-    subs = session.exec(
-        select(Submission).join(Question).where(Question.owner_id == current.id)
-    ).all()
+    cutoff = _since_cutoff(days)
+    subs = _within(
+        session.exec(
+            select(Submission).join(Question).where(Question.owner_id == current.id)
+        ).all(),
+        cutoff,
+    )
     results = _results_by_submission(subs, session)
     graded = passed = 0
     scores: list[float] = []
@@ -1650,6 +1672,9 @@ def analytics_overview(
         pass_rate=analytics.rate(passed, graded),
         avg_score_pct=analytics.mean(scores),
         trend=[TrendPointOut(**p) for p in analytics.daily_series(events)],
+        score_distribution=[
+            ScoreBucketOut(**bucket) for bucket in analytics.score_distribution(scores)
+        ],
     )
 
 
@@ -1657,12 +1682,15 @@ def analytics_overview(
 def analytics_questions(
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    days: int | None = Query(default=None, ge=1, le=3650),
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> Page[QuestionAnalyticsOut]:
     """Per-question stats (the numbers the plain question list lacked). Scoped to
     the caller's active, standalone questions — variant-set members are excluded
-    (they're hidden from the library, VS1). Paginated like `/submissions`."""
+    (they're hidden from the library, VS1). `days` windows the stats to the last N
+    days (the question rows themselves are the whole library). Paginated like
+    `/submissions`."""
     _reap_stale_running(session)
     where = (
         Question.owner_id == current.id,
@@ -1679,7 +1707,12 @@ def analytics_questions(
     ).all()
     qids = [q.id for q in questions]
     subs = (
-        session.exec(select(Submission).where(col(Submission.question_id).in_(qids))).all()
+        _within(
+            session.exec(
+                select(Submission).where(col(Submission.question_id).in_(qids))
+            ).all(),
+            _since_cutoff(days),
+        )
         if qids
         else []
     )
@@ -1790,6 +1823,7 @@ def analytics_assessment(
                 candidate_name=r.candidate_name,
                 candidate_email=r.candidate_email,
                 passed_count=r.passed_count,
+                submitted_count=sum(1 for q in r.questions if q.submitted),
                 total_count=r.total_count,
                 avg_score_pct=r.avg_score_pct,
                 rank=rank,
