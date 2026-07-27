@@ -18,9 +18,20 @@ vi.mock('../../api', () => ({
     listQuestions: vi.fn(),
     archiveQuestion: vi.fn(),
     unarchiveQuestion: vi.fn(),
+    // AR1 — the folded-in analytics panel + per-question columns fetch these.
+    analyticsQuestions: vi.fn(),
+    analyticsOverview: vi.fn(),
+    analyticsAssessment: vi.fn(),
+    listAssessments: vi.fn(),
   },
   ApiError: class ApiError extends Error {},
 }))
+
+const overview = {
+  questions: 0, submissions: 0, graded: 0, candidates: 0, passed: 0,
+  pass_rate: null, avg_score_pct: null, trend: [],
+  score_distribution: [{ low: 0, high: 20, count: 0 }],
+}
 
 const q = (id: string, title: string): QuestionOut =>
   ({
@@ -46,6 +57,10 @@ function renderPage() {
 describe('DashboardPage — build assessment from selection (A8)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(api.analyticsQuestions).mockResolvedValue(page([]) as never)
+    vi.mocked(api.analyticsOverview).mockResolvedValue(overview as never)
+    vi.mocked(api.listAssessments).mockResolvedValue(page([]) as never)
+    vi.mocked(api.analyticsAssessment).mockResolvedValue({} as never)
   })
 
   it('selecting questions reveals a Build assessment button that navigates with the selection', async () => {

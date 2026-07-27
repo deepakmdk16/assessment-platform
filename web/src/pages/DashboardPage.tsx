@@ -1,9 +1,12 @@
 import { useEffect, useState, type MouseEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
+import { formatDuration, score } from '../analytics/format'
 import { badgeClass, difficultyClass } from '../badges'
+import { AnalyticsPanel } from '../components/AnalyticsPanel'
+import { Meter } from '../components/Meter'
 import { Pager } from '../components/Pager'
-import type { QuestionOut } from '../types'
+import type { QuestionAnalytics, QuestionOut } from '../types'
 
 const PAGE_SIZE = 100
 
@@ -21,6 +24,25 @@ export function DashboardPage() {
   // Multi-select for "build an assessment from these" (A8) — plain component
   // state, so it naturally resets on navigation.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Analytics (AR1): time window shared by the panel and the per-question
+  // columns, plus the per-question stats keyed by id (windowed by `days`).
+  const [days, setDays] = useState<number | undefined>(30)
+  const [stats, setStats] = useState<Map<string, QuestionAnalytics>>(new Map())
+
+  // Per-question stats for the table columns. Fetched wide (one page) and looked
+  // up by id, so archived rows — absent from analytics — simply show no stats.
+  useEffect(() => {
+    let cancelled = false
+    api
+      .analyticsQuestions(days, 0, 200)
+      .then((page) => {
+        if (!cancelled) setStats(new Map(page.items.map((s) => [s.question_id, s])))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [days, reloadKey])
 
   useEffect(() => {
     let cancelled = false
@@ -92,6 +114,8 @@ export function DashboardPage() {
         </Link>
       </div>
 
+      <AnalyticsPanel days={days} onDaysChange={setDays} />
+
       {error && <p className="form-error">{error}</p>}
       {!error && questions === null && <p className="page-loading">Loading…</p>}
 
@@ -131,8 +155,11 @@ export function DashboardPage() {
                 <tr>
                   <th></th>
                   <th>Problem</th>
-                  <th>Test cases</th>
                   <th>Difficulty</th>
+                  <th>Pass rate</th>
+                  <th className="th-num">Avg</th>
+                  <th className="th-num">Median time</th>
+                  <th className="num">Test cases</th>
                   <th>Status</th>
                   <th>Created</th>
                   <th></th>
@@ -156,7 +183,6 @@ export function DashboardPage() {
                     <td>
                       <div className="t-title">{q.title}</div>
                     </td>
-                    <td className="num">{q.test_cases.length}</td>
                     <td>
                       {q.difficulty ? (
                         <span className={difficultyClass(q.difficulty)}>{q.difficulty}</span>
@@ -164,6 +190,20 @@ export function DashboardPage() {
                         <span className="muted">—</span>
                       )}
                     </td>
+                    <td>
+                      {stats.has(q.id) ? (
+                        <Meter rate={stats.get(q.id)!.pass_rate} />
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td className="num">
+                      {stats.has(q.id) ? score(stats.get(q.id)!.avg_score_pct, 0) : '—'}
+                    </td>
+                    <td className="num mono">
+                      {stats.has(q.id) ? formatDuration(stats.get(q.id)!.median_time_to_solve_s) : '—'}
+                    </td>
+                    <td className="num">{q.test_cases.length}</td>
                     <td>
                       <span className={badgeClass(q.status)}>{q.status}</span>
                     </td>

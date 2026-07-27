@@ -31,7 +31,7 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from . import agent_client, config, email_client, signing
+from . import agent_client, analytics, config, email_client, signing
 from .auth import (
     create_access_token,
     get_current_interviewer,
@@ -57,8 +57,10 @@ from .models import (
 from .question_rules import case_floor_violations
 from .ratelimit import client_ip, limiter
 from .schemas import (
+    AssessmentAnalyticsOut,
     AssessmentAttemptOut,
     AssessmentAttemptQuestionOut,
+    AssessmentCandidateAnalyticsOut,
     AssessmentCreate,
     AssessmentOut,
     AssessmentQuestionOut,
@@ -83,7 +85,9 @@ from .schemas import (
     InvitePublicOut,
     InviteStatusOut,
     LoginIn,
+    OverviewAnalyticsOut,
     Page,
+    QuestionAnalyticsOut,
     QuestionCreate,
     QuestionDraftIn,
     QuestionDraftOut,
@@ -91,12 +95,14 @@ from .schemas import (
     QuestionUpdate,
     RegisterIn,
     ResultOut,
+    ScoreBucketOut,
     SubmissionCreate,
     SubmissionOut,
     SubmissionSummaryOut,
     TestCaseIn,
     TestCaseOut,
     TokenOut,
+    TrendPointOut,
     VariantDraftOut,
     VariantOut,
     VariantSetCreate,
@@ -1452,9 +1458,17 @@ def list_assessment_attempts(
     yet); that's still visible via the invite list.
     """
     a = _owned_assessment(assessment_id, current, session)
+    return _assessment_attempt_rows(a, session)
+
+
+def _assessment_attempt_rows(a: Assessment, session: Session) -> list[AssessmentAttemptOut]:
+    """The per-candidate, per-slot result assembly shared by the attempts view
+    and the analytics endpoint. A variant-set slot resolves to each candidate's
+    own assigned variant, so a submission matches via the variant handed to THAT
+    candidate, not the slot's set id."""
     slots = list(a.questions)  # ordered by position
     invite_ids = session.exec(
-        select(Invite.id).where(Invite.assessment_id == assessment_id)
+        select(Invite.id).where(Invite.assessment_id == a.id)
     ).all()
     if not invite_ids:
         return []
@@ -1561,6 +1575,278 @@ def list_assessment_attempts(
             )
         )
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Analytics (AR1) — aggregate stats over the caller's own questions/results.   #
+# Read-only rollups; the maths lives in `analytics.py` (DB-free, unit-tested). #
+# --------------------------------------------------------------------------- #
+
+
+def _since_cutoff(days: int | None) -> datetime | None:
+    """The lower bound for a `?days=N` analytics window (submissions created on or
+    after now-N days), or None for the all-time view when the param is absent."""
+    if days is None:
+        return None
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
+def _within(subs: Sequence[Submission], cutoff: datetime | None) -> list[Submission]:
+    """Submissions created at or after `cutoff` (all of them when it's None)."""
+    if cutoff is None:
+        return list(subs)
+    return [s for s in subs if as_utc(s.created_at) >= cutoff]
+
+
+def _attempt_starts(
+    subs: Sequence[Submission], session: Session
+) -> dict[tuple[int, str], datetime]:
+    """`(invite_id, candidate_email) -> CandidateAttempt.started_at` for the
+    submissions that came through an invite, in one query — the clock start used
+    to derive time-to-solve. Direct (non-invite) submissions have no attempt row
+    and are simply absent."""
+    keys = {
+        (s.invite_id, s.candidate_email)
+        for s in subs
+        if s.invite_id is not None and s.candidate_email is not None
+    }
+    if not keys:
+        return {}
+    invite_ids = {k[0] for k in keys}
+    attempts = session.exec(
+        select(CandidateAttempt).where(col(CandidateAttempt.invite_id).in_(invite_ids))
+    ).all()
+    return {(at.invite_id, at.candidate_email): as_utc(at.started_at) for at in attempts}
+
+
+@app.get("/analytics/overview", response_model=OverviewAnalyticsOut)
+def analytics_overview(
+    days: int | None = Query(default=None, ge=1, le=3650),
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> OverviewAnalyticsOut:
+    """Workspace rollup across all of the caller's questions: headline counts,
+    overall pass rate / average score, and a daily submission trend. `days`
+    windows the submission-derived stats (counts/rate/score/trend) to the last N
+    days; the question count is the current library size, not time-scoped."""
+    _reap_stale_running(session)
+    question_count = session.exec(
+        select(func.count())
+        .select_from(Question)
+        .where(
+            Question.owner_id == current.id,
+            Question.status == "active",
+            col(Question.variant_set_id).is_(None),
+        )
+    ).one()
+    cutoff = _since_cutoff(days)
+    subs = _within(
+        session.exec(
+            select(Submission).join(Question).where(Question.owner_id == current.id)
+        ).all(),
+        cutoff,
+    )
+    results = _results_by_submission(subs, session)
+    graded = passed = 0
+    scores: list[float] = []
+    candidates: set[str] = set()
+    events: list[tuple[datetime, bool, bool]] = []
+    for s in subs:
+        if s.candidate_email:
+            candidates.add(s.candidate_email)
+        r = results.get(s.id)
+        is_graded = r is not None
+        is_passed = bool(r and r.verdict == "PASS")
+        if is_graded:
+            graded += 1
+            scores.append(r.score_pct)  # type: ignore[union-attr]
+            if is_passed:
+                passed += 1
+        events.append((as_utc(s.created_at), is_graded, is_passed))
+    return OverviewAnalyticsOut(
+        questions=question_count,
+        submissions=len(subs),
+        graded=graded,
+        candidates=len(candidates),
+        passed=passed,
+        pass_rate=analytics.rate(passed, graded),
+        avg_score_pct=analytics.mean(scores),
+        trend=[TrendPointOut(**p) for p in analytics.daily_series(events)],
+        score_distribution=[
+            ScoreBucketOut(**bucket) for bucket in analytics.score_distribution(scores)
+        ],
+    )
+
+
+@app.get("/analytics/questions", response_model=Page[QuestionAnalyticsOut])
+def analytics_questions(
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    days: int | None = Query(default=None, ge=1, le=3650),
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> Page[QuestionAnalyticsOut]:
+    """Per-question stats (the numbers the plain question list lacked). Scoped to
+    the caller's active, standalone questions — variant-set members are excluded
+    (they're hidden from the library, VS1). `days` windows the stats to the last N
+    days (the question rows themselves are the whole library). Paginated like
+    `/submissions`."""
+    _reap_stale_running(session)
+    where = (
+        Question.owner_id == current.id,
+        Question.status == "active",
+        col(Question.variant_set_id).is_(None),
+    )
+    total = session.exec(select(func.count()).select_from(Question).where(*where)).one()
+    questions = session.exec(
+        select(Question)
+        .where(*where)
+        .order_by(col(Question.created_at).desc(), col(Question.id))
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    qids = [q.id for q in questions]
+    subs = (
+        _within(
+            session.exec(
+                select(Submission).where(col(Submission.question_id).in_(qids))
+            ).all(),
+            _since_cutoff(days),
+        )
+        if qids
+        else []
+    )
+    results = _results_by_submission(subs, session)
+    starts = _attempt_starts(subs, session)
+
+    # question_id -> accumulators
+    agg: dict[str, dict[str, Any]] = {
+        qid: {"subs": 0, "graded": 0, "passed": 0, "late": 0, "scores": [], "tts": []}
+        for qid in qids
+    }
+    for s in subs:
+        b = agg[s.question_id]
+        b["subs"] += 1
+        if s.late:
+            b["late"] += 1
+        r = results.get(s.id)
+        if r is not None:
+            b["graded"] += 1
+            b["scores"].append(r.score_pct)
+            if r.verdict == "PASS":
+                b["passed"] += 1
+        start = (
+            starts.get((s.invite_id, s.candidate_email))
+            if s.invite_id is not None and s.candidate_email is not None
+            else None
+        )
+        tts = analytics.time_to_solve_seconds(start, as_utc(s.created_at))
+        if tts is not None:
+            b["tts"].append(tts)
+
+    items = []
+    for q in questions:
+        b = agg[q.id]
+        items.append(
+            QuestionAnalyticsOut(
+                question_id=q.id,
+                title=q.title,
+                difficulty=q.difficulty,
+                submissions=b["subs"],
+                graded=b["graded"],
+                passed=b["passed"],
+                pass_rate=analytics.rate(b["passed"], b["graded"]),
+                avg_score_pct=analytics.mean(b["scores"]),
+                median_score_pct=analytics.median_value(b["scores"]),
+                late=b["late"],
+                avg_time_to_solve_s=analytics.mean(b["tts"]),
+                median_time_to_solve_s=analytics.median_value(b["tts"]),
+            )
+        )
+    return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@app.get("/analytics/assessments/{assessment_id}", response_model=AssessmentAnalyticsOut)
+def analytics_assessment(
+    assessment_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> AssessmentAnalyticsOut:
+    """Cross-candidate rollup for one assessment: each candidate's standing
+    (rank/percentile over graded candidates, whole-sitting time-to-solve) plus
+    completion and a score distribution. Reuses the attempts assembly so the
+    per-candidate scores stay consistent with the results view."""
+    a = _owned_assessment(assessment_id, current, session)
+    rows = _assessment_attempt_rows(a, session)
+
+    invite_ids = session.exec(
+        select(Invite.id).where(Invite.assessment_id == a.id)
+    ).all()
+    # Whole-sitting time-to-solve: earliest attempt start -> latest submission,
+    # per candidate email across this assessment's invites.
+    started_by_email: dict[str, datetime] = {}
+    if invite_ids:
+        for at in session.exec(
+            select(CandidateAttempt).where(col(CandidateAttempt.invite_id).in_(invite_ids))
+        ).all():
+            cur = started_by_email.get(at.candidate_email)
+            start = as_utc(at.started_at)
+            if cur is None or start < cur:
+                started_by_email[at.candidate_email] = start
+    last_submit_by_email: dict[str, datetime] = {}
+    if invite_ids:
+        for s in session.exec(
+            select(Submission).where(col(Submission.invite_id).in_(invite_ids))
+        ).all():
+            if s.candidate_email is None:
+                continue
+            end = as_utc(s.created_at)
+            cur = last_submit_by_email.get(s.candidate_email)
+            if cur is None or end > cur:
+                last_submit_by_email[s.candidate_email] = end
+
+    population = [r.avg_score_pct for r in rows if r.avg_score_pct is not None]
+    slot_count = len(a.questions)
+    completed = sum(
+        1 for r in rows if r.questions and all(q.submitted for q in r.questions)
+    )
+    graded_qa = sum(1 for r in rows for q in r.questions if q.verdict is not None)
+    passed_qa = sum(r.passed_count for r in rows)
+
+    candidates = []
+    for r in rows:
+        rank = percentile = None
+        if r.avg_score_pct is not None:
+            rank, percentile = analytics.rank_and_percentile(r.avg_score_pct, population)
+        candidates.append(
+            AssessmentCandidateAnalyticsOut(
+                candidate_name=r.candidate_name,
+                candidate_email=r.candidate_email,
+                passed_count=r.passed_count,
+                submitted_count=sum(1 for q in r.questions if q.submitted),
+                total_count=r.total_count,
+                avg_score_pct=r.avg_score_pct,
+                rank=rank,
+                percentile=percentile,
+                time_to_solve_s=analytics.time_to_solve_seconds(
+                    started_by_email.get(r.candidate_email),
+                    last_submit_by_email.get(r.candidate_email),
+                ),
+            )
+        )
+    return AssessmentAnalyticsOut(
+        assessment_id=a.id,
+        title=a.title,
+        slot_count=slot_count,
+        candidates_started=len(rows),
+        candidates_completed=completed,
+        avg_score_pct=analytics.mean(population),
+        pass_rate=analytics.rate(passed_qa, graded_qa),
+        score_distribution=[
+            ScoreBucketOut(**bucket) for bucket in analytics.score_distribution(population)
+        ],
+        candidates=candidates,
+    )
 
 
 @app.post("/questions/{question_id}/invites/{token}/revoke", response_model=InviteOut)
