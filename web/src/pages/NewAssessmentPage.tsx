@@ -19,6 +19,9 @@ export function NewAssessmentPage() {
   // editable per assessment, and only this assessment's value is stored.
   const [orgName, setOrgName] = useState(user?.default_org_name ?? '')
   const [logoUrl, setLogoUrl] = useState(user?.default_logo_url ?? '')
+  // Integrity monitoring (I1) — on unless the interviewer deliberately relaxes
+  // this sitting.
+  const [proctored, setProctored] = useState(true)
   // Pre-populated from the questions page's "Build assessment" multi-select
   // (A8) — question slots. Any id not actually in the library (stale/archived/
   // deleted) is dropped below once the library loads.
@@ -96,6 +99,7 @@ export function NewAssessmentPage() {
         ),
         org_name: orgName.trim() || null,
         logo_url: logoUrl.trim() || null,
+        proctored,
       })
       navigate(`/assessments/${created.id}`, { state: { justCreated: true } })
     } catch (err) {
@@ -149,6 +153,23 @@ export function NewAssessmentPage() {
               Indefinite (no timer)
             </label>
             <p className="cellsub">One shared budget the candidate spends across every question.</p>
+          </div>
+          <div className="field">
+            <label htmlFor="proctored">Monitoring</label>
+            <label className="check">
+              <input
+                id="proctored"
+                type="checkbox"
+                checked={proctored}
+                onChange={(e) => setProctored(e.target.checked)}
+              />
+              Monitor this assessment
+            </label>
+            <p className="cellsub">
+              Runs the sitting in fullscreen, blocks pastes from outside the page, and records tab
+              switches for you to review. Candidates are told before they start. Turn it off for a
+              deliberately relaxed sitting.
+            </p>
           </div>
         </div>
       </div>

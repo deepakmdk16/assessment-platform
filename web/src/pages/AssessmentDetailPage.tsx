@@ -81,6 +81,9 @@ export function AssessmentDetailPage() {
               ? `${assessment.duration_minutes} min total`
               : 'Untimed'}
             {assessment.org_name && <> · Branded for {assessment.org_name}</>}
+            {/* I1: an unmonitored sitting is the exception, so only that is
+                called out — a monitored one is the default and stays quiet. */}
+            {!assessment.proctored && <> · Not monitored</>}
           </div>
         </div>
         {assessment.logo_url && (

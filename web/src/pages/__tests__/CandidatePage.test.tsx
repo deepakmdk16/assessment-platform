@@ -18,6 +18,7 @@ vi.mock('../../api', () => {
   return {
     api: {
       getInvite: vi.fn(),
+      postIntegrityEvents: vi.fn(() => Promise.resolve()),
       startInvite: vi.fn(),
       submitCandidate: vi.fn(),
       runCandidate: vi.fn(),
@@ -127,6 +128,25 @@ describe('CandidatePage', () => {
     })
 
     expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
+  })
+
+  it('discloses monitoring on the gate before the candidate identifies themselves', async () => {
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active', proctored: true })
+    renderCandidatePage()
+
+    expect(await screen.findByText(/this sitting is monitored/i)).toBeInTheDocument()
+    expect(screen.getByText(/pasting code from outside this page is blocked/i)).toBeInTheDocument()
+    // Nothing has been recorded yet — the notice comes first.
+    expect(api.postIntegrityEvents).not.toHaveBeenCalled()
+  })
+
+  it('says nothing about monitoring when the sitting is unmonitored', async () => {
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active', proctored: false })
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    expect(screen.queryByText(/this sitting is monitored/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^start assessment$/i })).toBeInTheDocument()
   })
 
   it('multi-question assessment: shows the switcher, submits per question, and navigates', async () => {

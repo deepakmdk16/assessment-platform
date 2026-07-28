@@ -2481,3 +2481,164 @@ button.tab:hover {
     border-bottom: 1px solid var(--color-border);
   }
 }
+
+/* ------------------------------------------------------- integrity (I1)
+   Candidate-side disclosure + enforcement, and the interviewer's timeline.
+   Severity is carried by the chip colour and the event rail, never by an icon
+   set, so the same vocabulary reads in both themes. */
+.integrity-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius);
+  background: var(--color-accent-soft);
+}
+
+.integrity-notice-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-accent-ink);
+}
+
+.integrity-notice ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.integrity-notice li {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--color-text);
+}
+
+.integrity-notice li::before {
+  content: "—";
+  color: var(--color-accent-ink);
+}
+
+/* The fullscreen prompt covers the whole viewport and takes its clicks — the
+   SITTING is paused, not just the editor, so the problem text and the language
+   picker are out of reach too. Fixed rather than absolute: `.panel` establishes
+   no positioning context and clips its overflow, which would strand or crop an
+   absolutely-positioned scrim. */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.editor-hint.blocked {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0 0 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-bad);
+  border-radius: var(--radius-sm);
+  background: var(--color-bad-soft);
+  color: var(--color-text);
+  font-size: 0.8rem;
+}
+
+.editor-hint.blocked strong {
+  color: var(--color-bad);
+}
+
+.integrity {
+  padding: 1rem 1.1rem;
+  overflow-y: auto;
+}
+
+.integrity-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-bottom: 0.7rem;
+  margin-bottom: 0.7rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.integrity-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ev {
+  display: grid;
+  grid-template-columns: 3.6rem 3px minmax(0, 1fr);
+  gap: 0.7rem;
+  align-items: stretch;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.ev:last-child {
+  border-bottom: 0;
+}
+
+.ev-at {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  color: var(--color-faint);
+}
+
+.ev-rail {
+  border-radius: var(--radius-pill);
+  background: var(--color-border-strong);
+}
+
+.ev.sev-warn .ev-rail {
+  background: var(--color-warn);
+}
+
+.ev.sev-bad .ev-rail {
+  background: var(--color-bad);
+}
+
+.ev-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.ev-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--color-heading);
+}
+
+.ev-detail {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+}
+
+.integrity .empty-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.6rem 1rem;
+}

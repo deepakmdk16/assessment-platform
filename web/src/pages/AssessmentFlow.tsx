@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
+import { IntegrityOverlay } from '../components/IntegrityGate'
 import { ThemeCycleButton } from '../components/ThemeToggle'
 import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
+import type { IntegrityState } from '../integrity'
 import type {
   CandidateQuestionPublic,
   Language,
@@ -31,6 +33,11 @@ interface Props {
   assessmentTitle?: string | null
   orgName?: string | null
   logoUrl?: string | null
+  /** Integrity monitoring (I1). The hook is owned by CandidatePage — one queue
+   *  for the whole sitting — so this flow only reports which question is open and
+   *  renders the enforcement overlay. */
+  integrity: IntegrityState
+  onQuestionChange: (questionId: string) => void
   /** Bubble a 410/404 (expired/revoked) up so the page shows the shared notice. */
   onExpired: () => void
 }
@@ -51,6 +58,8 @@ export function AssessmentFlow({
   assessmentTitle,
   orgName,
   logoUrl,
+  integrity,
+  onQuestionChange,
   onExpired,
 }: Props) {
   const { resolved } = useTheme()
@@ -98,6 +107,7 @@ export function AssessmentFlow({
   // the handler, not an effect, so there's no setState-in-effect cascade.
   function goToQuestion(i: number) {
     setCurrent(i)
+    onQuestionChange(questions[i].id)  // so signals name the question they fired on
     setConsoleTab('testcase')
     setStdin('')
     setRunResult(null)
@@ -167,6 +177,7 @@ export function AssessmentFlow({
         question_id: qid,
       })
       setSubmitted((s) => ({ ...s, [qid]: true }))
+      integrity.flush()  // push this question's signals with its submission
     } catch (err) {
       if (err instanceof ApiError && (err.status === 410 || err.status === 404)) onExpired()
       // 409 = already recorded (e.g. a concurrent auto-submit) — treat as done.
@@ -335,6 +346,13 @@ export function AssessmentFlow({
               </span>
             )}
           </div>
+
+          <IntegrityOverlay
+            integrity={integrity}
+            remainingLabel={
+              remainingMs !== null && remainingMs > 0 ? `${formatRemaining(remainingMs)} left` : null
+            }
+          />
 
           <div className="editor-wrapper">
             <Editor

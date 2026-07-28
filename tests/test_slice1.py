@@ -237,7 +237,9 @@ def test_invite_probe_reveals_no_question(anon_client: TestClient) -> None:
 
     resp = anon_client.get(f"/invite/{inv['token']}")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "active"}
+    # `proctored` (I1) is the one non-liveness field here, and deliberately so:
+    # the gate must disclose monitoring before the candidate identifies themselves.
+    assert resp.json() == {"status": "active", "proctored": True}
 
 
 def test_candidate_view_hides_test_cases(anon_client: TestClient) -> None:
