@@ -211,4 +211,44 @@ describe('QuestionDetailPage', () => {
     // No false "sent" confirmation alongside the failure.
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
+
+  it('shows each sitting integrity count in the quick-screen results table (I1)', async () => {
+    vi.mocked(api.listSubmissions).mockResolvedValue({
+      items: [
+        {
+          submission_id: 's1',
+          candidate_name: 'Alice',
+          candidate_email: 'alice@x.io',
+          language: 'python',
+          status: 'done',
+          verdict: 'PASS',
+          score_pct: 100,
+          integrity_signals: 2,
+          integrity_blocked: 0,
+          created_at: '2026-07-28',
+        },
+        {
+          submission_id: 's2',
+          candidate_name: 'Bob',
+          candidate_email: 'bob@x.io',
+          language: 'python',
+          status: 'done',
+          verdict: 'PASS',
+          score_pct: 100,
+          integrity_signals: null,
+          integrity_blocked: 0,
+          created_at: '2026-07-28',
+        },
+      ],
+      total: 2,
+      limit: 100,
+      offset: 0,
+    })
+
+    renderPage()
+
+    const flagged = await screen.findByTitle('2 signals recorded during this sitting')
+    expect(flagged).toHaveTextContent('2')
+    expect(screen.getByText('Not monitored')).toBeInTheDocument() // null ≠ 0
+  })
 })

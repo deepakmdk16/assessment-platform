@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, ApiError, exportSubmissionsCsv } from '../api'
 import { badgeClass } from '../badges'
+import { IntegrityCell } from '../components/IntegrityPanel'
 import { Pager } from '../components/Pager'
 import type { SubmissionSummary } from '../types'
 
@@ -108,6 +109,7 @@ export function SubmissionsPage() {
                   <th>Status</th>
                   <th>Verdict</th>
                   <th>Score</th>
+                  <th>Integrity</th>
                   <th>Submitted</th>
                 </tr>
               </thead>
@@ -151,6 +153,12 @@ export function SubmissionsPage() {
                       )}
                     </td>
                     <td className="score">{s.score_pct != null ? `${s.score_pct}%` : '—'}</td>
+                    <td>
+                      <IntegrityCell
+                        signals={s.integrity_signals}
+                        blocked={s.integrity_blocked ?? 0}
+                      />
+                    </td>
                     <td>{new Date(s.created_at).toLocaleDateString()}</td>
                   </tr>
                 ))}

@@ -206,14 +206,17 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
     signals and **never submitted** is visible at all: they have an attempt row but
     no submission to hang a report off.
     **Deliberately NOT built:** a risk score / ranking (that's the integrity-report
-    part below). **Known gaps, not yet built (from `/integration-check`):** the
-    global submissions list, the per-question "Quick screen" results table, and the
-    CSV export carry `late` but no integrity signal — the CSV omission means the
-    export silently loses a signal class the UI has. Assessments are also not
-    editable from the UI at all (`PUT /assessments/{id}` has no caller), so
-    `proctored` is effectively create-only; when an edit page is added, note that
-    the endpoint is full-replace and `proctored` defaults true, so a PUT omitting
-    it would silently re-enable monitoring.
+    part below). **Gap-closure DONE 2026-07-31:** the global submissions list, the
+    per-question "Quick screen" results table, and the CSV export now carry the
+    sitting's signal count alongside `late` (`integrity_signals`/`integrity_blocked`
+    on both list rows; `integrity_signals`/`integrity_blocked_pastes` CSV columns,
+    blank — never 0 — for an unmonitored sitting), reusing the attempts-grid
+    semantics via one batched `_integrity_by_submission` helper and the existing
+    `IntegrityCell` chip. **Remaining known gap:** assessments are not editable
+    from the UI at all (`PUT /assessments/{id}` has no caller), so `proctored` is
+    effectively create-only; when an edit page is added, note that the endpoint is
+    full-replace and `proctored` defaults true, so a PUT omitting it would
+    silently re-enable monitoring.
   - **Structural anti-cheat (our moat — prefer over surveillance):** per-candidate
     unique question variants (see D) makes a leaked bank useless and reduces the need
     for heavy proctoring at all.
