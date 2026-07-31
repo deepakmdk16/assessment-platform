@@ -15,7 +15,29 @@ vi.mock('../../api', () => {
       this.status = status
     }
   }
-  return { api: { getSubmission: vi.fn(), getQuestion: vi.fn() }, ApiError }
+  return {
+    api: {
+      getSubmission: vi.fn(),
+      getQuestion: vi.fn(),
+      // I1: the panel loads alongside the report; a clean sitting by default so
+      // these cases stay about the report itself.
+      getSubmissionIntegrity: vi.fn(() =>
+        Promise.resolve({
+          monitored: true,
+          summary: {
+            total: 0,
+            focus_losses: 0,
+            away_ms: 0,
+            fullscreen_exits: 0,
+            pastes_blocked: 0,
+            devtools_opens: 0,
+          },
+          events: [],
+        }),
+      ),
+    },
+    ApiError,
+  }
 })
 
 vi.mock('@monaco-editor/react', () => ({

@@ -46,6 +46,7 @@ from .models import (
     AssessmentResult,
     CandidateAttempt,
     CandidateSlotVariant,
+    IntegrityEvent,
     Interviewer,
     Invite,
     Question,
@@ -77,6 +78,10 @@ from .schemas import (
     CandidateSubmitOut,
     CandidateTestOutcomeOut,
     DashboardSubmissionOut,
+    IntegrityEventOut,
+    IntegrityEventsIn,
+    IntegrityReportOut,
+    IntegritySummaryOut,
     InterviewerOut,
     InterviewerUpdate,
     InviteCreate,
@@ -1062,6 +1067,7 @@ def _assessment_out(a: Assessment, session: Session) -> AssessmentOut:
         duration_minutes=a.duration_minutes,
         org_name=a.org_name,
         logo_url=a.logo_url,
+        proctored=a.proctored,
         status=a.status,
         created_at=a.created_at,
         updated_at=a.updated_at,
@@ -1127,6 +1133,7 @@ def create_assessment(
         duration_minutes=body.duration_minutes,
         org_name=body.org_name,
         logo_url=body.logo_url,
+        proctored=body.proctored,
         questions=_membership_rows(body.ordered_slots(), current, session),
     )
     session.add(a)
@@ -1195,6 +1202,7 @@ def update_assessment(
     a.duration_minutes = body.duration_minutes
     a.org_name = body.org_name
     a.logo_url = body.logo_url
+    a.proctored = body.proctored
     a.updated_at = datetime.now(timezone.utc)
     # Full replace of the membership set (PUT). Clear via the relationship and
     # flush FIRST (delete-orphan removes the old rows), so a question kept across
@@ -1340,6 +1348,9 @@ def create_assessment_invite(
         created_by=_require_id(current.id),
         recipients=[_normalize_email(r) for r in body.recipients],
         expires_at=body.expires_at,
+        # Freeze the assessment's monitoring setting onto the sitting (I1); the
+        # other two invite paths have no assessment and keep the default True.
+        proctored=assessment.proctored,
     )
     session.add(invite)
     session.commit()
@@ -1509,6 +1520,22 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
         if s.candidate_email is not None
     ]
     results = _results_by_submission(subs, session)
+    # Integrity signals per candidate across this assessment's invites (I1), so
+    # the grid can flag who is worth opening — including a candidate who tripped
+    # signals and never submitted, who has no submission to read a report from.
+    signals: dict[str, int] = {}
+    blocked: dict[str, int] = {}
+    monitored_invites = {
+        i_id
+        for i_id in invite_ids
+        if (inv := session.get(Invite, i_id)) is not None and inv.proctored
+    }
+    for ev in session.exec(
+        select(IntegrityEvent).where(col(IntegrityEvent.invite_id).in_(invite_ids))
+    ).all():
+        signals[ev.candidate_email] = signals.get(ev.candidate_email, 0) + 1
+        if ev.kind == "paste_external" and ev.blocked:
+            blocked[ev.candidate_email] = blocked.get(ev.candidate_email, 0) + 1
     # (candidate_email, question_id) -> the submission's result / id / late flag.
     graded: dict[tuple[str, str], AssessmentResult] = {}
     submission_id_by_pair: dict[tuple[str, str], str] = {}
@@ -1572,6 +1599,14 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
                 avg_score_pct=(
                     sum(graded_scores) / len(graded_scores) if graded_scores else None
                 ),
+                # None (not 0) when this candidate's sitting wasn't monitored —
+                # "nothing recorded" and "nothing to record" must not look alike.
+                integrity_signals=(
+                    signals.get(attempt.candidate_email, 0)
+                    if attempt.invite_id in monitored_invites
+                    else None
+                ),
+                integrity_blocked=blocked.get(attempt.candidate_email, 0),
             )
         )
     return out
@@ -2174,6 +2209,8 @@ def _candidate_question_view(
         assessment_title=invite.assessment.title if invite.assessment else None,
         org_name=invite.assessment.org_name if invite.assessment else None,
         logo_url=invite.assessment.logo_url if invite.assessment else None,
+        # Integrity monitoring (I1), frozen on the invite when it was minted.
+        proctored=invite.proctored,
     )
 
 
@@ -2186,8 +2223,11 @@ def get_invite(token: str, session: Session = Depends(get_session)) -> InviteSta
     recipient — otherwise the email check below would be decorative, since anyone
     with the link could just read the question straight off this endpoint.
     """
-    _load_invite_or_error(token, session)
-    return InviteStatusOut(status="active")
+    invite = _load_invite_or_error(token, session)
+    # Whether this sitting is monitored (I1) — needed before /start so the gate
+    # screen can disclose it up front. Read from the invite's own frozen
+    # snapshot, so it says what this sitting will actually do.
+    return InviteStatusOut(status="active", proctored=invite.proctored)
 
 
 @app.post("/invite/{token}/start", response_model=InvitePublicOut)
@@ -2379,6 +2419,66 @@ async def candidate_submit(
 
     sub = await _trigger_agent(session, question, sub)
     return CandidateSubmitOut(submission_id=sub.id, status=sub.status)
+
+
+@app.post("/invite/{token}/events", status_code=204)
+def candidate_integrity_events(
+    token: str,
+    body: IntegrityEventsIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Record a batch of integrity signals from the candidate's browser (I1).
+
+    Same identity gates as the rest of the candidate surface (live link + invited
+    recipient), but deliberately NOT gated on "hasn't submitted yet": the last
+    batch of a sitting is flushed alongside the submit, and a signal that arrives
+    a moment late is still worth keeping. It also never creates a
+    `CandidateAttempt` — recording that someone switched tabs must not start
+    anyone's clock — so signals from a candidate who never called /start are
+    accepted with offsets measured from zero.
+
+    Returns 204: the candidate UI fires this in the background and has nothing to
+    do with a response body. Rate-limited on the submit bucket, since it is an
+    unauthenticated write.
+    """
+    limiter.check(
+        "events", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
+    invite = _load_invite_or_error(token, session)
+    email = _normalize_email(body.candidate_email)
+    _check_invited(invite, email)
+
+    # Clamp client-reported offsets to the window the server can actually vouch
+    # for — [0, time since this candidate's attempt started]. A forged offset can
+    # still land anywhere inside a real sitting, but it can't place an event
+    # before the start or hours after it. No attempt yet ⇒ nothing elapsed.
+    attempt = session.exec(
+        select(CandidateAttempt).where(
+            CandidateAttempt.invite_id == invite.id,
+            CandidateAttempt.candidate_email == email,
+        )
+    ).first()
+    elapsed_ms = 0
+    if attempt is not None:
+        started = as_utc(attempt.started_at)
+        elapsed_ms = max(0, int((datetime.now(timezone.utc) - started).total_seconds() * 1000))
+
+    for ev in body.events:
+        session.add(
+            IntegrityEvent(
+                invite_id=invite.id,
+                candidate_email=email,
+                question_id=body.question_id,
+                kind=ev.kind,
+                offset_ms=min(ev.offset_ms, elapsed_ms),
+                duration_ms=ev.duration_ms,
+                size=ev.size,
+                blocked=ev.blocked,
+            )
+        )
+    session.commit()
+    return Response(status_code=204)
 
 
 # --------------------------------------------------------------------------- #
@@ -2600,6 +2700,74 @@ def get_submission(
         select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
     ).first()
     return _submission_out(sub, result)
+
+
+@app.get("/submissions/{submission_id}/integrity", response_model=IntegrityReportOut)
+def get_submission_integrity(
+    submission_id: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> IntegrityReportOut:
+    """The integrity signals recorded during the sitting this submission came from.
+
+    Scoped to the *sitting* (invite + candidate), not to this one question: a tab
+    switch belongs to the sitting, and a multi-question assessment shows the same
+    timeline on each of its submissions with every event naming its own question.
+    An interviewer's direct `POST /submissions` (no invite, no candidate) has no
+    sitting at all and reports unmonitored with nothing in it.
+    """
+    sub = _owned_submission(submission_id, current, session)  # 404/403 guard
+    if sub.invite_id is None or sub.candidate_email is None:
+        return _integrity_report(monitored=False, events=[], session=session)
+
+    invite = session.get(Invite, sub.invite_id)
+    monitored = invite.proctored if invite is not None else True
+    rows = session.exec(
+        select(IntegrityEvent)
+        .where(
+            IntegrityEvent.invite_id == sub.invite_id,
+            IntegrityEvent.candidate_email == sub.candidate_email,
+        )
+        .order_by(col(IntegrityEvent.offset_ms), col(IntegrityEvent.id))
+    ).all()
+    return _integrity_report(monitored=monitored, events=list(rows), session=session)
+
+
+def _integrity_report(
+    *, monitored: bool, events: list[IntegrityEvent], session: Session
+) -> IntegrityReportOut:
+    """Shape stored signals into the interviewer's view: the summary counts first,
+    then the timeline. The counts are derived here rather than stored so a new
+    signal kind can't leave a stale total behind."""
+    titles: dict[str, str] = {}
+    for qid in {e.question_id for e in events if e.question_id}:
+        question = session.get(Question, qid)
+        if question is not None:
+            titles[question.id] = question.title
+    summary = IntegritySummaryOut(
+        total=len(events),
+        focus_losses=sum(1 for e in events if e.kind == "focus_loss"),
+        away_ms=sum(e.duration_ms or 0 for e in events if e.kind == "focus_loss"),
+        fullscreen_exits=sum(1 for e in events if e.kind == "fullscreen_exit"),
+        pastes_blocked=sum(1 for e in events if e.kind == "paste_external" and e.blocked),
+        devtools_opens=sum(1 for e in events if e.kind == "devtools"),
+    )
+    return IntegrityReportOut(
+        monitored=monitored,
+        summary=summary,
+        events=[
+            IntegrityEventOut(
+                kind=e.kind,
+                offset_ms=e.offset_ms,
+                duration_ms=e.duration_ms,
+                size=e.size,
+                blocked=e.blocked,
+                question_id=e.question_id,
+                question_title=titles.get(e.question_id) if e.question_id else None,
+            )
+            for e in events
+        ],
+    )
 
 
 @app.get("/submissions/{submission_id}/report")

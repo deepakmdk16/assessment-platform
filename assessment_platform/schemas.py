@@ -161,6 +161,9 @@ class AssessmentCreate(_AssessmentSlots):
     # optional; logo_url is a URL reference, never base64.
     org_name: str | None = None
     logo_url: str | None = None
+    # Integrity monitoring (I1). Defaults on; a caller that omits it gets a
+    # monitored sitting, which is what the pre-I1 clients should now do.
+    proctored: bool = True
 
 
 class AssessmentUpdate(_AssessmentSlots):
@@ -170,6 +173,7 @@ class AssessmentUpdate(_AssessmentSlots):
     duration_minutes: int | None = Field(default=None, gt=0)
     org_name: str | None = None
     logo_url: str | None = None
+    proctored: bool = True
 
 
 class AssessmentQuestionOut(BaseModel):
@@ -190,6 +194,7 @@ class AssessmentOut(BaseModel):
     duration_minutes: int | None
     org_name: str | None
     logo_url: str | None
+    proctored: bool = True
     status: str
     created_at: datetime
     updated_at: datetime
@@ -225,6 +230,14 @@ class AssessmentAttemptOut(BaseModel):
     passed_count: int
     total_count: int
     avg_score_pct: float | None = None
+    # Integrity signals recorded during this candidate's sitting (I1). Counted
+    # here, not just on the submission, so the grid answers "who is worth a look"
+    # WITHOUT opening each submission — and so a candidate who triggered signals
+    # and never submitted is visible at all (they have an attempt row but no
+    # submission to hang a report off). Null for an unmonitored sitting, which
+    # is not the same as zero.
+    integrity_signals: int | None = None
+    integrity_blocked: int = 0  # of those, pastes actually blocked (the severe kind)
 
 
 class QuestionDraftIn(BaseModel):
@@ -516,9 +529,12 @@ class InviteStatusOut(BaseModel):
     """The unauthenticated probe for `GET /invite/{token}`: says only whether the
     link is live. Deliberately carries no question data — the candidate must
     identify as an invited recipient via `POST /invite/{token}/start` first, so
-    holding the link alone never reveals the problem."""
+    holding the link alone never reveals the problem. `proctored` is the one
+    exception and is not question data: the start screen has to disclose that the
+    sitting is monitored BEFORE the candidate identifies themselves."""
 
     status: str
+    proctored: bool = True
 
 
 class CandidateStartIn(BaseModel):
@@ -547,6 +563,11 @@ class InvitePublicOut(BaseModel):
     assessment_title: str | None = None
     org_name: str | None = None
     logo_url: str | None = None
+    # Whether this sitting is monitored (I1): the candidate UI enforces fullscreen
+    # and blocks outside pastes only when true. An assessment invite reads its
+    # Assessment.proctored; a legacy single-question ("Quick screen") invite has no
+    # Assessment and is always monitored.
+    proctored: bool = True
 
 
 class CandidateSubmitIn(BaseModel):
@@ -718,3 +739,72 @@ class AssessmentAnalyticsOut(BaseModel):
     pass_rate: float | None = None  # graded question-attempts that passed
     score_distribution: list[ScoreBucketOut]
     candidates: list[AssessmentCandidateAnalyticsOut]
+
+
+# --- Integrity signals (I1 browser telemetry) -------------------------------
+
+IntegrityEventKind = Literal[
+    "focus_loss",  # the assessment tab/window lost focus (duration_ms = time away)
+    "fullscreen_exit",  # left fullscreen (duration_ms = time until they returned)
+    "fullscreen_denied",  # the browser refused fullscreen — context, not misconduct
+    "paste_external",  # pasted text that wasn't copied from this page (blocked)
+    "paste_internal",  # pasted text copied within this page (allowed; context)
+    "devtools",  # developer tools appear to have been opened
+]
+
+
+class IntegrityEventIn(BaseModel):
+    """One signal the candidate's browser reports. Every field is the client's own
+    word — see models.IntegrityEvent for why that is acceptable and what the write
+    path clamps."""
+
+    kind: IntegrityEventKind
+    offset_ms: int = Field(ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    size: int | None = Field(default=None, ge=0)
+    blocked: bool = False
+
+
+class IntegrityEventsIn(BaseModel):
+    """A batch of signals for one candidate, flushed periodically by the candidate
+    UI. Batched because these fire in bursts (a tab switch is two events) and one
+    request per event would burn the rate limit on a normal sitting."""
+
+    candidate_email: EmailStr
+    # The question open when the batch was collected; null before one is chosen.
+    question_id: str | None = None
+    events: list[IntegrityEventIn] = Field(min_length=1, max_length=50)
+
+
+class IntegrityEventOut(BaseModel):
+    kind: str
+    offset_ms: int
+    duration_ms: int | None
+    size: int | None
+    blocked: bool
+    question_id: str | None
+    # The question's title, denormalized so a multi-question sitting's timeline can
+    # say where a signal fired without a second fetch. Null when question_id is.
+    question_title: str | None = None
+
+
+class IntegritySummaryOut(BaseModel):
+    """Counts the interviewer reads first, before the timeline itself."""
+
+    total: int
+    focus_losses: int
+    away_ms: int  # total time spent off the assessment tab
+    fullscreen_exits: int
+    pastes_blocked: int
+    devtools_opens: int
+
+
+class IntegrityReportOut(BaseModel):
+    """A sitting's integrity signals, as read from one submission. Signals belong
+    to the whole sitting (invite + candidate), not to a single question, so a
+    multi-question assessment shows the same timeline on each of its submissions
+    — each event naming its own question."""
+
+    monitored: bool  # false = this sitting ran unmonitored, so "no signals" means nothing
+    summary: IntegritySummaryOut
+    events: list[IntegrityEventOut]

@@ -164,6 +164,13 @@ class Assessment(SQLModel, table=True):
     # reference (e.g. an externally-hosted image), never base64 in the row.
     org_name: str | None = None
     logo_url: str | None = None
+    # Integrity monitoring (I1) for every sitting of this assessment: fullscreen
+    # enforced, outside pastes blocked, focus/devtools signals recorded. Defaults
+    # ON so the common case is protected without a decision; an interviewer can
+    # turn it off for a deliberately relaxed sitting (accessibility needs, a
+    # take-home). A legacy single-question ("Quick screen") invite has no
+    # Assessment row to read this from and is always monitored.
+    proctored: bool = True
     status: str = Field(default="active", index=True)
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
@@ -230,6 +237,15 @@ class Invite(SQLModel, table=True):
     # entry is {recipient, sent, error}. See schemas.InviteDeliveryOut.
     deliveries: list[dict] = Field(default_factory=list, sa_column=Column(JSON))
     expires_at: datetime | None = None
+    # Whether THIS sitting is monitored (I1) — a snapshot of the assessment's
+    # `proctored` setting taken when the invite was minted, never read live.
+    # Deliberately frozen, like the A12 branding snapshot: an interviewer who
+    # flips the assessment setting later must not rewrite how a sitting that
+    # already happened reads. Reading it live meant turning monitoring off hid
+    # evidence already recorded, and turning it on made a sitting that ran
+    # unmonitored report as a clean one. A quick-screen invite has no assessment
+    # and is always monitored.
+    proctored: bool = True
     status: str = "active"
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
@@ -298,6 +314,46 @@ class CandidateSlotVariant(SQLModel, table=True):
     candidate_email: str = Field(index=True)
     assessment_question_id: int = Field(foreign_key="assessmentquestion.id", index=True)
     question_id: str = Field(foreign_key="question.id", index=True)
+    created_at: datetime = _created_at()
+
+
+class IntegrityEvent(SQLModel, table=True):
+    """One recorded integrity signal from a candidate's browser (I1 stage 1).
+
+    Keyed like `CandidateAttempt` — by `(invite_id, candidate_email)` — because a
+    signal belongs to the *sitting*, not to one submission: a tab switch happens
+    between questions as easily as during one. `question_id` records which
+    question was open when it fired (null for signals raised before/outside a
+    question), so the interviewer's timeline can say where it happened without
+    the events being owned per question.
+
+    **Client-reported and therefore untrusted.** A candidate who disables JS or
+    edits the page simply produces no events, so absence of signals is not
+    evidence of a clean sitting — this is corroboration for a human reading a
+    submission, never an input to the grade (the agent owns the verdict).
+    `offset_ms` is the client's own ms-since-start; the write path clamps it to
+    the server-observed elapsed window so a forged value can't place an event
+    outside the sitting. `created_at` is the server's own receive time and is the
+    only timestamp here that isn't the client's word.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    invite_id: int = Field(foreign_key="invite.id", index=True)
+    candidate_email: str = Field(index=True)
+    question_id: str | None = Field(default=None, foreign_key="question.id", index=True)
+    # See schemas.IntegrityEventKind for the allowed values + what each means.
+    kind: str = Field(index=True)
+    # Ms from this candidate's attempt start (clamped server-side).
+    offset_ms: int = 0
+    # How long the candidate was away / out of fullscreen, when the signal has a
+    # duration; null for instantaneous ones (a paste, devtools opening).
+    duration_ms: int | None = None
+    # Characters pasted, for the paste signals; null otherwise.
+    size: int | None = None
+    # Whether the client actually prevented the action (an outside paste) rather
+    # than only recording it. Recorded because the enforcement is best-effort:
+    # a signal that fired without blocking still matters to the reader.
+    blocked: bool = False
     created_at: datetime = _created_at()
 
 

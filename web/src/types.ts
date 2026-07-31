@@ -220,6 +220,9 @@ export interface AssessmentOut {
   // Per-assessment branding (A12): shown on the candidate IDE header.
   org_name: string | null
   logo_url: string | null
+  /** Integrity monitoring (I1): fullscreen enforced + outside pastes blocked for
+   *  every sitting of this assessment. Defaults on. */
+  proctored: boolean
   status: string
   created_at: string
   updated_at: string
@@ -236,6 +239,7 @@ export interface AssessmentIn {
   slots: AssessmentSlotIn[]
   org_name?: string | null
   logo_url?: string | null
+  proctored?: boolean
 }
 
 /** One question's result within a candidate's sitting (A3/A11). For a variant-set
@@ -265,6 +269,11 @@ export interface AssessmentAttempt {
   passed_count: number
   total_count: number
   avg_score_pct: number | null
+  /** Integrity signals recorded during this candidate's sitting (I1). null = the
+   *  sitting wasn't monitored, which is not the same as zero signals. */
+  integrity_signals?: number | null
+  /** Of those, pastes actually blocked — the severe kind. */
+  integrity_blocked?: number
 }
 
 // --- Analytics (AR1) -------------------------------------------------------
@@ -361,6 +370,9 @@ export interface CandidateQuestionPublic extends InviteQuestionPublic {
  *  identified as an invited recipient. */
 export interface InviteStatusResponse {
   status: string
+  /** Whether this sitting is monitored (I1) — known before /start so the gate
+   *  screen can disclose it before the candidate identifies themselves. */
+  proctored?: boolean
 }
 
 /** `POST /invite/{token}/start` — the question, released after the email check. */
@@ -380,6 +392,10 @@ export interface InviteStartResponse {
   assessment_title?: string | null
   org_name?: string | null
   logo_url?: string | null
+  /** Whether this sitting is monitored (I1). The candidate UI enforces fullscreen
+   *  and blocks outside pastes only when true; a legacy single-question invite is
+   *  always monitored. */
+  proctored?: boolean
 }
 
 export interface SubmitResponse {
@@ -528,4 +544,47 @@ export interface SubmissionDetail {
   created_at: string
   late: boolean // arrived after the timed window closed (recorded + flagged)
   result: SubmissionResult | null
+}
+
+// --- Integrity signals (I1 browser telemetry) ------------------------------ #
+
+export type IntegrityEventKind =
+  | 'focus_loss'
+  | 'fullscreen_exit'
+  | 'fullscreen_denied'
+  | 'paste_external'
+  | 'paste_internal'
+  | 'devtools'
+
+/** One signal as reported by the candidate's browser. */
+export interface IntegrityEventIn {
+  kind: IntegrityEventKind
+  offset_ms: number
+  duration_ms?: number | null
+  size?: number | null
+  blocked?: boolean
+}
+
+export interface IntegrityEvent extends IntegrityEventIn {
+  question_id: string | null
+  /** Which question was open when the signal fired; null for sitting-level ones. */
+  question_title: string | null
+  blocked: boolean
+}
+
+export interface IntegritySummary {
+  total: number
+  focus_losses: number
+  away_ms: number
+  fullscreen_exits: number
+  pastes_blocked: number
+  devtools_opens: number
+}
+
+/** A sitting's integrity signals, read from one of its submissions. `monitored`
+ *  false means the sitting ran unmonitored — an empty timeline says nothing. */
+export interface IntegrityReport {
+  monitored: boolean
+  summary: IntegritySummary
+  events: IntegrityEvent[]
 }

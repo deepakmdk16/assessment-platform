@@ -163,12 +163,57 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   columns. Charts key off semantic tokens (good/warn/bad/accent). Full gate green
   (backend pytest, web vitest incl. new panel + format-helper tests, lint, types,
   build); mockup signed off before the `.tsx`. **Feature complete.**
-- **I1 · Integrity / proctoring suite (staged; scope agreed 2026-07-24).** Nothing
-  present today. Build the first three; **webcam/video is DEFERRED.**
-  - **Browser telemetry (do first, cheap):** tab/window blur + focus-loss timeline,
-    fullscreen enforce + exit detection, paste events into the editor (size + whether
-    it originated outside the page — flag a 200-line paste vs organic typing),
-    devtools/right-click signals. Decide flag-vs-block per signal.
+- **I1 · Integrity / proctoring suite (staged; scope agreed 2026-07-24).**
+  **Stage 1 (browser telemetry) DONE 2026-07-28**; the other two active parts
+  remain. **Webcam/video stays DEFERRED.**
+  - **Browser telemetry — DONE 2026-07-28.** `IntegrityEvent` (migration
+    `a9d1f4c07b53`, additive) records six signal kinds per sitting, keyed like
+    `CandidateAttempt` by `(invite, candidate_email)` because a tab switch belongs
+    to the *sitting*, not one question (each event still names the question that
+    was open). The candidate UI (`web/src/integrity.ts`, one hook owned by
+    `CandidatePage` for both flows so a multi-question sitting can't double-record)
+    batches them to `POST /invite/{token}/events` — the one candidate route
+    deliberately NOT gated on "already submitted" (the last batch flushes with the
+    submit) and one that never creates an attempt (recording a tab switch must not
+    start anyone's clock). Client-reported offsets are clamped server-side to the
+    elapsed window. **flag-vs-block settled:** fullscreen is *enforced* (leaving
+    blocks the editor behind a modal until they return; a browser that refuses
+    fullscreen records `fullscreen_denied` and continues unlocked rather than
+    trapping the candidate), outside pastes are *blocked*, everything else is
+    flag-only. "Outside" = clipboard text not matching anything copied in-page this
+    sitting (whitespace-normalized), so the candidate's own scratch code still
+    pastes. Candidates are told on the start gate before identifying themselves —
+    `GET /invite/{token}` carries `proctored` for exactly that. Monitoring is
+    per-assessment (`Assessment.proctored`, defaults ON, builder checkbox); a
+    legacy single-question "Quick screen" invite has no Assessment and is always
+    monitored. Interviewer surface: an Integrity tab + header chip on
+    `SubmissionDetailPage` (summary counts, then the timeline at offsets from the
+    candidate's own start). **The whole thing is a deterrent, not proof** — it runs
+    in the candidate's browser, so no signals ≠ a clean sitting, and an unmonitored
+    sitting reports as such rather than as clean. Signals never touch the verdict.
+    16 backend pytest + 14 web vitest green; mockup signed off before the `.tsx`.
+    **The sitting's monitoring state is frozen on the invite** (`Invite.proctored`,
+    migration `b1e7f3a52c94`, backfilled from each invite's assessment) rather than
+    re-read from `Assessment.proctored`. `/integration-check` caught the live-read
+    version rewriting history in both directions: relaxing an assessment after the
+    fact hid evidence that had already been recorded, and tightening it made a
+    sitting that genuinely ran unmonitored report as a clean one — the exact
+    false-clean reading the flag exists to prevent. The panel also renders recorded
+    events whatever the flag says; suppressing real evidence is never the safer
+    default. The **attempts grid** carries a per-candidate signal count (null =
+    unmonitored, which is not zero), so an interviewer can triage a sitting without
+    opening each submission — and, more importantly, so a candidate who tripped
+    signals and **never submitted** is visible at all: they have an attempt row but
+    no submission to hang a report off.
+    **Deliberately NOT built:** a risk score / ranking (that's the integrity-report
+    part below). **Known gaps, not yet built (from `/integration-check`):** the
+    global submissions list, the per-question "Quick screen" results table, and the
+    CSV export carry `late` but no integrity signal — the CSV omission means the
+    export silently loses a signal class the UI has. Assessments are also not
+    editable from the UI at all (`PUT /assessments/{id}` has no caller), so
+    `proctored` is effectively create-only; when an edit page is added, note that
+    the endpoint is full-replace and `proctored` defaults true, so a PUT omitting
+    it would silently re-enable monitoring.
   - **Structural anti-cheat (our moat — prefer over surveillance):** per-candidate
     unique question variants (see D) makes a leaked bank useless and reduces the need
     for heavy proctoring at all.
@@ -182,8 +227,9 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
 - **I2 · Plagiarism / similarity detection** across submissions (token-fingerprint /
   MOSS-style; optionally match against public solutions + AI-generated-code detection).
   None present; largely mooted by per-candidate variants (see D). **L.**
-- **Multi-question variant sets (cross-repo, per-candidate unique variants) — agent
-  DONE; platform backend DONE 2026-07-26; frontend + assignment remain.** The agent
+- **Multi-question variant sets (cross-repo, per-candidate unique variants) —
+  DONE end to end (agent, platform backend, frontend, assignment, and the
+  assessment-slot integration).** The agent
   half shipped (orchestration + parity guard + `POST /questions/draft-set`, see
   `../AssesmentAgent/STATUS.md`). **Platform backend landed** (branch
   `feature/multi-question-set-ui`): a variant **is** a `Question` tagged with
@@ -203,10 +249,10 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   resolves it exactly like a single-question invite (zero candidate-side changes).
   `GET /variant-sets/{id}/invites` + a detail-page invite panel show who got which
   variant. Fully offline-tested (platform pytest + web vitest green). **Feature
-  complete end-to-end.** Only follow-up left, deliberately deferred: **assessment-
-  slot integration** — a variant pool as a question *inside* a multi-question
-  assessment (today variants ship via their own direct invite path). Revisit if
-  there's demand. **DONE (core); assessment-slot integration deferred.**
+  complete end-to-end.** The assessment-slot integration this entry used to defer
+  (a variant pool as a slot *inside* a multi-question assessment) shipped as **VS2
+  — see §A**, which owns the detail. The only follow-up still open is agent-side:
+  regenerating a drifting variant instead of the advisory parity warning.
 - **SEC1 · `REGISTRATION_CODE` unset by default → open interviewer sign-up.** Must be
   set in prod (`config.py:110`). Deploy-checklist item. **XS.**
 - **SEC4 · Rate limiter is per-process**, won't hold across workers/instances

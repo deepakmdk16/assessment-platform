@@ -30,6 +30,7 @@ const assessment: AssessmentOut = {
   title: 'Backend Screen',
   org_name: null,
   logo_url: null,
+  proctored: true,
   duration_minutes: 90,
   status: 'active',
   created_at: '2026-07-14T00:00:00Z',

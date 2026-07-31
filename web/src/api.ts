@@ -3,6 +3,8 @@ import type {
   AssessmentAttempt,
   AssessmentIn,
   AssessmentOut,
+  IntegrityEventIn,
+  IntegrityReport,
   Invite,
   InviteStartResponse,
   InviteStatusResponse,
@@ -262,6 +264,16 @@ export const api = {
     request<SubmissionDetail>(`/submissions/${submissionId}`, { auth: true }),
 
   getInvite: (token: string) => request<InviteStatusResponse>(`/invite/${token}`),
+
+  /** Flush a batch of integrity signals (I1). Fire-and-forget from the candidate
+   *  UI's point of view — it returns 204 and the caller ignores failures. */
+  postIntegrityEvents: (
+    token: string,
+    data: { candidate_email: string; question_id?: string | null; events: IntegrityEventIn[] },
+  ) => request<void>(`/invite/${token}/events`, { method: 'POST', body: data }),
+
+  getSubmissionIntegrity: (submissionId: string) =>
+    request<IntegrityReport>(`/submissions/${submissionId}/integrity`, { auth: true }),
 
   startInvite: (token: string, candidate_email: string, candidate_name?: string) =>
     request<InviteStartResponse>(`/invite/${token}/start`, {

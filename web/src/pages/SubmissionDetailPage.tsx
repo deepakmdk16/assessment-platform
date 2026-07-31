@@ -4,10 +4,11 @@ import Editor from '@monaco-editor/react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api, ApiError, downloadSubmissionReport } from '../api'
 import { badgeClass } from '../badges'
+import { IntegrityChip, IntegrityPanel } from '../components/IntegrityPanel'
 import { useMediaQuery } from '../hooks/useMediaQuery'
 import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
-import type { QuestionOut, ResultTestCase, SubmissionDetail } from '../types'
+import type { IntegrityReport, QuestionOut, ResultTestCase, SubmissionDetail } from '../types'
 
 /** The interviewer's report card. Unlike the candidate view this deliberately
  *  shows everything — inputs, expected vs actual, the answer key — because the
@@ -21,9 +22,12 @@ export function SubmissionDetailPage() {
   const [sub, setSub] = useState<SubmissionDetail | null>(null)
   const [question, setQuestion] = useState<QuestionOut | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<'report' | 'tests'>('report')
+  const [tab, setTab] = useState<'report' | 'tests' | 'integrity'>('report')
   const [pollTimedOut, setPollTimedOut] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  // The sitting's integrity signals (I1). Loaded once — signals stop when the
+  // candidate submits, so unlike the grade there's nothing to poll for.
+  const [integrity, setIntegrity] = useState<IntegrityReport | null>(null)
 
   async function handleDownloadReport() {
     if (!id) return
@@ -79,6 +83,20 @@ export function SubmissionDetailPage() {
     return () => {
       cancelled = true
       if (timer) clearTimeout(timer)
+    }
+  }, [id])
+
+  useEffect(() => {
+    if (!id) return
+    let cancelled = false
+    api
+      .getSubmissionIntegrity(id)
+      .then((r) => {
+        if (!cancelled) setIntegrity(r)
+      })
+      .catch(() => undefined)  // the report is supporting evidence; never block the page
+    return () => {
+      cancelled = true
     }
   }, [id])
 
@@ -179,9 +197,25 @@ export function SubmissionDetailPage() {
         >
           Test cases{cases.length > 0 && <span className="count">{cases.length}</span>}
         </button>
+        <button
+          type="button"
+          className={tab === 'integrity' ? 'tab on' : 'tab'}
+          onClick={() => setTab('integrity')}
+        >
+          Integrity
+          {integrity && integrity.summary.total > 0 && (
+            <span className="count">{integrity.summary.total}</span>
+          )}
+        </button>
       </div>
 
-      {!result ? (
+      {tab === 'integrity' ? (
+        integrity ? (
+          <IntegrityPanel report={integrity} />
+        ) : (
+          <p className="page-loading">Loading…</p>
+        )
+      ) : !result ? (
         <GradingNotice status={sub.status} timedOut={pollTimedOut} />
       ) : tab === 'report' ? (
         <ReportTab
@@ -211,6 +245,7 @@ export function SubmissionDetailPage() {
           <span className="muted">
             {sub.candidate} · {sub.language}
           </span>
+          {integrity && <IntegrityChip report={integrity} />}
           {sub.late && (
             <span className="chip chip-late" title="Submitted after the assessment window closed">
               Late

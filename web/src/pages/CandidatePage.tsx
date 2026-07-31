@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
+import { IntegrityNotice, IntegrityOverlay } from '../components/IntegrityGate'
+import { fullscreenSupported, useIntegrity } from '../integrity'
 import { ThemeCycleButton } from '../components/ThemeToggle'
 import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
@@ -73,6 +75,9 @@ export function CandidatePage() {
   const [candidateEmail, setCandidateEmail] = useState('')
   const [gateError, setGateError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
+  // From the liveness probe, so the gate screen knows whether to disclose
+  // monitoring before the candidate identifies themselves.
+  const [gateProctored, setGateProctored] = useState(true)
 
   const [language, setLanguage] = useState<Language | ''>('')
   const [code, setCode] = useState('')
@@ -95,13 +100,30 @@ export function CandidatePage() {
   const [testsResult, setTestsResult] = useState<RunTestsResponse | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
 
+  // Integrity monitoring (I1). Owned here for BOTH candidate flows — one hook,
+  // one event queue — so a multi-question sitting can't double-record; the
+  // AssessmentFlow reports which question is open and renders the same overlay.
+  // `proctored` is the sitting's own setting; a legacy invite omits it and is
+  // monitored.
+  const proctored = invite?.proctored !== false
+  const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null)
+  const integrity = useIntegrity({
+    token: token ?? '',
+    candidateEmail,
+    questionId: activeQuestionId,
+    enabled: stage === 'editor' && proctored,
+  })
+
   // Probe the link only — the question isn't served until the gate below proves
   // the visitor is one of the invited recipients.
   useEffect(() => {
     if (!token) return
     api
       .getInvite(token)
-      .then(() => setStage('gate'))
+      .then((status) => {
+        setGateProctored(status.proctored !== false)
+        setStage('gate')
+      })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 404) setStage('invalid')
         else if (err instanceof ApiError && err.status === 410) setStage('expired')
@@ -145,7 +167,13 @@ export function CandidatePage() {
       } else {
         setLanguage(data.languages[0] ?? '')
       }
+      setActiveQuestionId(data.questions?.[0]?.id ?? null)
       setStage('editor')
+      // Ask for fullscreen off the back of this click. A browser only grants it
+      // from a user gesture, and the start POST above is quick enough to stay
+      // inside that window; a denial is recorded and the sitting continues
+      // unlocked rather than trapping the candidate on a modal.
+      if (data.proctored !== false) void integrity.enterFullscreen()
     } catch (err) {
       if (!(err instanceof ApiError)) {
         setGateError('Something went wrong. Please try again.')
@@ -207,6 +235,7 @@ export function CandidatePage() {
         language,
         code,
       })
+      integrity.flush()  // the sitting's last signals, before this page unmounts
       setStage('submitted')
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) setStage('already_submitted')
@@ -288,6 +317,7 @@ export function CandidatePage() {
             see the problem and a code editor on the next screen. Use the email address your invite
             was sent to.
           </p>
+          {gateProctored && <IntegrityNotice />}
           <div className="stack">
             {gateError && (
               <p role="alert" className="form-error">
@@ -314,7 +344,11 @@ export function CandidatePage() {
               />
             </div>
             <button type="submit" className="btn submit block" disabled={starting}>
-              {starting ? 'Starting…' : 'Start assessment'}
+              {starting
+                ? 'Starting…'
+                : gateProctored && fullscreenSupported()
+                  ? 'Enter fullscreen & start'
+                  : 'Start assessment'}
             </button>
           </div>
         </form>
@@ -337,6 +371,8 @@ export function CandidatePage() {
         assessmentTitle={invite.assessment_title}
         orgName={invite.org_name}
         logoUrl={invite.logo_url}
+        integrity={integrity}
+        onQuestionChange={setActiveQuestionId}
         onExpired={() => setStage('expired')}
       />
     )
@@ -431,6 +467,13 @@ export function CandidatePage() {
               </span>
             )}
           </div>
+
+          <IntegrityOverlay
+            integrity={integrity}
+            remainingLabel={
+              remainingMs !== null && remainingMs > 0 ? `${formatRemaining(remainingMs)} left` : null
+            }
+          />
 
           <div className="editor-wrapper">
             <Editor

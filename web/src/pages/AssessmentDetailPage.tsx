@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
+import { IntegrityCell } from '../components/IntegrityPanel'
 import type { AssessmentAttempt, AssessmentOut, Invite, InviteDelivery } from '../types'
 
 export function AssessmentDetailPage() {
@@ -81,6 +82,9 @@ export function AssessmentDetailPage() {
               ? `${assessment.duration_minutes} min total`
               : 'Untimed'}
             {assessment.org_name && <> · Branded for {assessment.org_name}</>}
+            {/* I1: an unmonitored sitting is the exception, so only that is
+                called out — a monitored one is the default and stays quiet. */}
+            {!assessment.proctored && <> · Not monitored</>}
           </div>
         </div>
         {assessment.logo_url && (
@@ -136,6 +140,7 @@ export function AssessmentDetailPage() {
                       <th>Progress</th>
                       <th>Passed</th>
                       <th>Avg score</th>
+                      <th>Integrity</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -182,6 +187,15 @@ export function AssessmentDetailPage() {
                         </td>
                         <td className="score">
                           {att.avg_score_pct != null ? `${att.avg_score_pct.toFixed(0)}%` : '—'}
+                        </td>
+                        {/* I1: signals belong to the sitting, so this shows even
+                            for a candidate who started and never submitted —
+                            the case with no submission to open a report from. */}
+                        <td>
+                          <IntegrityCell
+                            signals={att.integrity_signals}
+                            blocked={att.integrity_blocked ?? 0}
+                          />
                         </td>
                       </tr>
                     ))}
