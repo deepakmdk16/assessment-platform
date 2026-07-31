@@ -419,3 +419,120 @@ def test_a_stale_offset_from_a_long_sitting_is_kept(client) -> None:
     )
     with Session(db_module.engine) as s:
         assert s.exec(select(IntegrityEvent)).one().offset_ms == 600_000
+
+
+# --- the sitting's monitoring state is frozen, not re-read ------------------ #
+
+
+def _assessment_sitting(client: TestClient, *, proctored: bool, qid: str = "q1") -> tuple[str, str]:
+    """An assessment + a started invite for cand@x.io. Returns (assessment_id, token)."""
+    assert client.post("/questions", json=_question(qid)).status_code == 201
+    aid = client.post(
+        "/assessments",
+        json={"title": "A", "question_ids": [qid], "proctored": proctored},
+    ).json()["id"]
+    token = client.post(
+        f"/assessments/{aid}/invites", json={"recipients": ["cand@x.io"]}
+    ).json()["token"]
+    client.post(
+        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io"}
+    )
+    return aid, token
+
+
+def _submit_assessment(client: TestClient, token: str, monkeypatch, qid: str = "q1") -> str:
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-1"))
+    return client.post(
+        f"/invite/{token}/submit",
+        json={
+            "candidate_name": "C",
+            "candidate_email": "cand@x.io",
+            "language": "python",
+            "code": "print(1)",
+            "question_id": qid,
+        },
+    ).json()["submission_id"]
+
+
+def test_turning_monitoring_off_later_cannot_hide_recorded_signals(client, monkeypatch) -> None:
+    aid, token = _assessment_sitting(client, proctored=True)
+    client.post(
+        f"/invite/{token}/events",
+        json={"candidate_email": "cand@x.io", "events": [_events(kind="fullscreen_exit")]},
+    )
+    sub_id = _submit_assessment(client, token, monkeypatch)
+
+    # The interviewer relaxes the assessment AFTER this sitting ran.
+    assert (
+        client.put(
+            f"/assessments/{aid}",
+            json={"title": "A", "question_ids": ["q1"], "proctored": False},
+        ).status_code
+        == 200
+    )
+    body = client.get(f"/submissions/{sub_id}/integrity").json()
+    # The sitting WAS monitored; its evidence must read the same as before.
+    assert body["monitored"] is True
+    assert body["summary"]["total"] == 1
+
+
+def test_turning_monitoring_on_later_cannot_make_a_sitting_look_clean(client, monkeypatch) -> None:
+    # The inverse, and the worse one: a sitting that genuinely ran unmonitored
+    # must never come back as "no signals — stayed in fullscreen".
+    aid, token = _assessment_sitting(client, proctored=False)
+    sub_id = _submit_assessment(client, token, monkeypatch)
+    assert (
+        client.put(
+            f"/assessments/{aid}",
+            json={"title": "A", "question_ids": ["q1"], "proctored": True},
+        ).status_code
+        == 200
+    )
+    body = client.get(f"/submissions/{sub_id}/integrity").json()
+    assert body["monitored"] is False
+
+
+def test_the_invite_freezes_the_setting_at_mint_time(client) -> None:
+    aid, first = _assessment_sitting(client, proctored=True)
+    client.put(
+        f"/assessments/{aid}", json={"title": "A", "question_ids": ["q1"], "proctored": False}
+    )
+    # A NEW invite picks up the new setting; the existing one keeps the old.
+    second = client.post(
+        f"/assessments/{aid}/invites", json={"recipients": ["later@x.io"]}
+    ).json()["token"]
+    assert client.get(f"/invite/{first}").json()["proctored"] is True
+    assert client.get(f"/invite/{second}").json()["proctored"] is False
+
+
+# --- the attempts grid surfaces signals without a submission ---------------- #
+
+
+def test_attempts_grid_counts_signals_for_a_candidate_who_never_submitted(client) -> None:
+    aid, token = _assessment_sitting(client, proctored=True)
+    client.post(
+        f"/invite/{token}/events",
+        json={
+            "candidate_email": "cand@x.io",
+            "events": [
+                _events(kind="focus_loss"),
+                _events(kind="paste_external", duration_ms=None, size=900, blocked=True),
+            ],
+        },
+    )
+    rows = client.get(f"/assessments/{aid}/attempts").json()
+    assert len(rows) == 1
+    # No submission exists — this is the only surface that can show these.
+    assert rows[0]["questions"][0]["submitted"] is False
+    assert rows[0]["integrity_signals"] == 2
+    assert rows[0]["integrity_blocked"] == 1
+
+
+def test_attempts_grid_separates_unmonitored_from_no_signals(client) -> None:
+    aid1, _ = _assessment_sitting(client, proctored=True)
+    quiet_rows = client.get(f"/assessments/{aid1}/attempts").json()
+    assert quiet_rows[0]["integrity_signals"] == 0  # monitored, nothing recorded
+
+    aid2, _ = _assessment_sitting(client, proctored=False, qid="q2")
+    rows = client.get(f"/assessments/{aid2}/attempts").json()
+    assert rows[0]["integrity_signals"] is None  # nothing to record — not zero

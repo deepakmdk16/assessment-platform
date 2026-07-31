@@ -66,7 +66,10 @@ function detail(e: IntegrityEvent): string | null {
 export function IntegrityPanel({ report }: { report: IntegrityReport }) {
   const { monitored, summary, events } = report
 
-  if (!monitored) {
+  // Recorded signals always win over the monitored flag: if a sitting produced
+  // events, showing them is never wrong, whereas suppressing them would hide
+  // real evidence. Only a sitting with nothing recorded needs the disclaimer.
+  if (!monitored && events.length === 0) {
     return (
       <div className="integrity">
         <h3>Integrity</h3>
@@ -141,6 +144,32 @@ export function IntegrityChip({ report }: { report: IntegrityReport }) {
       title="Integrity signals recorded during this sitting"
     >
       Integrity · {report.summary.total}
+    </span>
+  )
+}
+
+/** One candidate's signal count in the assessment attempts grid. Distinguishes
+ *  three states that must not look alike: an unmonitored sitting (nothing to
+ *  record), a monitored one with nothing recorded, and one with signals. */
+export function IntegrityCell({
+  signals,
+  blocked,
+}: {
+  signals?: number | null
+  blocked: number
+}) {
+  if (signals == null) return <span className="muted">Not monitored</span>
+  if (signals === 0) return <span className="muted">—</span>
+  return (
+    <span
+      className={blocked > 0 ? 'chip chip-bad' : 'chip chip-warn'}
+      title={
+        blocked > 0
+          ? `${signals} signals, including ${blocked} blocked paste${blocked === 1 ? '' : 's'}`
+          : `${signals} signal${signals === 1 ? '' : 's'} recorded during this sitting`
+      }
+    >
+      {signals}
     </span>
   )
 }

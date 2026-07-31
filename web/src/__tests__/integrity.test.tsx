@@ -6,7 +6,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { IntegrityPanel } from '../components/IntegrityPanel'
+import { IntegrityCell, IntegrityPanel } from '../components/IntegrityPanel'
 import { normalizeClipboard, useIntegrity } from '../integrity'
 import { api } from '../api'
 import type { IntegrityReport } from '../types'
@@ -270,8 +270,82 @@ describe('the interviewer panel', () => {
   })
 
   it('does not let an unmonitored sitting read as a clean one', () => {
-    render(<IntegrityPanel report={report({ monitored: false })} />)
+    // An unmonitored sitting records nothing, so this is the state that matters:
+    // empty, and it must NOT render as "No signals — stayed in fullscreen…".
+    render(
+      <IntegrityPanel
+        report={report({
+          monitored: false,
+          summary: {
+            total: 0,
+            focus_losses: 0,
+            away_ms: 0,
+            fullscreen_exits: 0,
+            pastes_blocked: 0,
+            devtools_opens: 0,
+          },
+          events: [],
+        })}
+      />,
+    )
     expect(screen.getByText(/ran unmonitored/)).toBeInTheDocument()
     expect(screen.queryByText('No signals')).not.toBeInTheDocument()
+  })
+})
+
+describe('states that must not look alike', () => {
+  const clean: IntegrityReport = {
+    monitored: true,
+    summary: {
+      total: 0,
+      focus_losses: 0,
+      away_ms: 0,
+      fullscreen_exits: 0,
+      pastes_blocked: 0,
+      devtools_opens: 0,
+    },
+    events: [],
+  }
+
+  it('still shows recorded events if the sitting is reported unmonitored', () => {
+    // Belt and braces behind the Invite.proctored snapshot: recorded evidence
+    // always wins over the flag, because suppressing it would hide the truth.
+    render(
+      <IntegrityPanel
+        report={{
+          ...clean,
+          monitored: false,
+          summary: { ...clean.summary, total: 1, fullscreen_exits: 1 },
+          events: [
+            {
+              kind: 'fullscreen_exit',
+              offset_ms: 1000,
+              duration_ms: 4000,
+              size: null,
+              blocked: false,
+              question_id: null,
+              question_title: null,
+            },
+          ],
+        }}
+      />,
+    )
+    expect(screen.getByText('Exited fullscreen')).toBeInTheDocument()
+    expect(screen.queryByText(/ran unmonitored/)).not.toBeInTheDocument()
+  })
+
+  it('tells an unmonitored sitting apart from one with no signals, in the grid', () => {
+    const { rerender } = render(<IntegrityCell signals={null} blocked={0} />)
+    expect(screen.getByText('Not monitored')).toBeInTheDocument()
+
+    rerender(<IntegrityCell signals={0} blocked={0} />)
+    expect(screen.queryByText('Not monitored')).not.toBeInTheDocument()
+    expect(screen.getByText('—')).toBeInTheDocument()
+
+    rerender(<IntegrityCell signals={4} blocked={1} />)
+    expect(screen.getByText('4')).toHaveAttribute(
+      'title',
+      '4 signals, including 1 blocked paste',
+    )
   })
 })

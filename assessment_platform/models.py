@@ -237,6 +237,15 @@ class Invite(SQLModel, table=True):
     # entry is {recipient, sent, error}. See schemas.InviteDeliveryOut.
     deliveries: list[dict] = Field(default_factory=list, sa_column=Column(JSON))
     expires_at: datetime | None = None
+    # Whether THIS sitting is monitored (I1) — a snapshot of the assessment's
+    # `proctored` setting taken when the invite was minted, never read live.
+    # Deliberately frozen, like the A12 branding snapshot: an interviewer who
+    # flips the assessment setting later must not rewrite how a sitting that
+    # already happened reads. Reading it live meant turning monitoring off hid
+    # evidence already recorded, and turning it on made a sitting that ran
+    # unmonitored report as a clean one. A quick-screen invite has no assessment
+    # and is always monitored.
+    proctored: bool = True
     status: str = "active"
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()

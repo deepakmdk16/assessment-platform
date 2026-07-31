@@ -192,8 +192,28 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
     in the candidate's browser, so no signals ≠ a clean sitting, and an unmonitored
     sitting reports as such rather than as clean. Signals never touch the verdict.
     16 backend pytest + 14 web vitest green; mockup signed off before the `.tsx`.
+    **The sitting's monitoring state is frozen on the invite** (`Invite.proctored`,
+    migration `b1e7f3a52c94`, backfilled from each invite's assessment) rather than
+    re-read from `Assessment.proctored`. `/integration-check` caught the live-read
+    version rewriting history in both directions: relaxing an assessment after the
+    fact hid evidence that had already been recorded, and tightening it made a
+    sitting that genuinely ran unmonitored report as a clean one — the exact
+    false-clean reading the flag exists to prevent. The panel also renders recorded
+    events whatever the flag says; suppressing real evidence is never the safer
+    default. The **attempts grid** carries a per-candidate signal count (null =
+    unmonitored, which is not zero), so an interviewer can triage a sitting without
+    opening each submission — and, more importantly, so a candidate who tripped
+    signals and **never submitted** is visible at all: they have an attempt row but
+    no submission to hang a report off.
     **Deliberately NOT built:** a risk score / ranking (that's the integrity-report
-    part below), and a signal-count column in the attempts grid.
+    part below). **Known gaps, not yet built (from `/integration-check`):** the
+    global submissions list, the per-question "Quick screen" results table, and the
+    CSV export carry `late` but no integrity signal — the CSV omission means the
+    export silently loses a signal class the UI has. Assessments are also not
+    editable from the UI at all (`PUT /assessments/{id}` has no caller), so
+    `proctored` is effectively create-only; when an edit page is added, note that
+    the endpoint is full-replace and `proctored` defaults true, so a PUT omitting
+    it would silently re-enable monitoring.
   - **Structural anti-cheat (our moat — prefer over surveillance):** per-candidate
     unique question variants (see D) makes a leaked bank useless and reduces the need
     for heavy proctoring at all.

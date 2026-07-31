@@ -230,6 +230,14 @@ class AssessmentAttemptOut(BaseModel):
     passed_count: int
     total_count: int
     avg_score_pct: float | None = None
+    # Integrity signals recorded during this candidate's sitting (I1). Counted
+    # here, not just on the submission, so the grid answers "who is worth a look"
+    # WITHOUT opening each submission — and so a candidate who triggered signals
+    # and never submitted is visible at all (they have an attempt row but no
+    # submission to hang a report off). Null for an unmonitored sitting, which
+    # is not the same as zero.
+    integrity_signals: int | None = None
+    integrity_blocked: int = 0  # of those, pastes actually blocked (the severe kind)
 
 
 class QuestionDraftIn(BaseModel):

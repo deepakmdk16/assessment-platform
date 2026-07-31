@@ -269,6 +269,11 @@ export interface AssessmentAttempt {
   passed_count: number
   total_count: number
   avg_score_pct: number | null
+  /** Integrity signals recorded during this candidate's sitting (I1). null = the
+   *  sitting wasn't monitored, which is not the same as zero signals. */
+  integrity_signals?: number | null
+  /** Of those, pastes actually blocked — the severe kind. */
+  integrity_blocked?: number
 }
 
 // --- Analytics (AR1) -------------------------------------------------------

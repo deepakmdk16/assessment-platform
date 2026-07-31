@@ -1348,6 +1348,9 @@ def create_assessment_invite(
         created_by=_require_id(current.id),
         recipients=[_normalize_email(r) for r in body.recipients],
         expires_at=body.expires_at,
+        # Freeze the assessment's monitoring setting onto the sitting (I1); the
+        # other two invite paths have no assessment and keep the default True.
+        proctored=assessment.proctored,
     )
     session.add(invite)
     session.commit()
@@ -1517,6 +1520,22 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
         if s.candidate_email is not None
     ]
     results = _results_by_submission(subs, session)
+    # Integrity signals per candidate across this assessment's invites (I1), so
+    # the grid can flag who is worth opening — including a candidate who tripped
+    # signals and never submitted, who has no submission to read a report from.
+    signals: dict[str, int] = {}
+    blocked: dict[str, int] = {}
+    monitored_invites = {
+        i_id
+        for i_id in invite_ids
+        if (inv := session.get(Invite, i_id)) is not None and inv.proctored
+    }
+    for ev in session.exec(
+        select(IntegrityEvent).where(col(IntegrityEvent.invite_id).in_(invite_ids))
+    ).all():
+        signals[ev.candidate_email] = signals.get(ev.candidate_email, 0) + 1
+        if ev.kind == "paste_external" and ev.blocked:
+            blocked[ev.candidate_email] = blocked.get(ev.candidate_email, 0) + 1
     # (candidate_email, question_id) -> the submission's result / id / late flag.
     graded: dict[tuple[str, str], AssessmentResult] = {}
     submission_id_by_pair: dict[tuple[str, str], str] = {}
@@ -1580,6 +1599,14 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
                 avg_score_pct=(
                     sum(graded_scores) / len(graded_scores) if graded_scores else None
                 ),
+                # None (not 0) when this candidate's sitting wasn't monitored —
+                # "nothing recorded" and "nothing to record" must not look alike.
+                integrity_signals=(
+                    signals.get(attempt.candidate_email, 0)
+                    if attempt.invite_id in monitored_invites
+                    else None
+                ),
+                integrity_blocked=blocked.get(attempt.candidate_email, 0),
             )
         )
     return out
@@ -2182,10 +2209,8 @@ def _candidate_question_view(
         assessment_title=invite.assessment.title if invite.assessment else None,
         org_name=invite.assessment.org_name if invite.assessment else None,
         logo_url=invite.assessment.logo_url if invite.assessment else None,
-        # Integrity monitoring (I1): an assessment invite honors its assessment's
-        # toggle; a legacy single-question ("Quick screen") invite has no
-        # Assessment row to read and is always monitored.
-        proctored=invite.assessment.proctored if invite.assessment else True,
+        # Integrity monitoring (I1), frozen on the invite when it was minted.
+        proctored=invite.proctored,
     )
 
 
@@ -2200,13 +2225,9 @@ def get_invite(token: str, session: Session = Depends(get_session)) -> InviteSta
     """
     invite = _load_invite_or_error(token, session)
     # Whether this sitting is monitored (I1) — needed before /start so the gate
-    # screen can disclose it up front. A legacy single-question invite has no
-    # Assessment and is always monitored.
-    proctored = True
-    if invite.assessment_id is not None:
-        assessment = session.get(Assessment, invite.assessment_id)
-        proctored = assessment.proctored if assessment is not None else True
-    return InviteStatusOut(status="active", proctored=proctored)
+    # screen can disclose it up front. Read from the invite's own frozen
+    # snapshot, so it says what this sitting will actually do.
+    return InviteStatusOut(status="active", proctored=invite.proctored)
 
 
 @app.post("/invite/{token}/start", response_model=InvitePublicOut)
@@ -2700,10 +2721,7 @@ def get_submission_integrity(
         return _integrity_report(monitored=False, events=[], session=session)
 
     invite = session.get(Invite, sub.invite_id)
-    monitored = True
-    if invite is not None and invite.assessment_id is not None:
-        assessment = session.get(Assessment, invite.assessment_id)
-        monitored = assessment.proctored if assessment is not None else True
+    monitored = invite.proctored if invite is not None else True
     rows = session.exec(
         select(IntegrityEvent)
         .where(
