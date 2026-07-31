@@ -536,3 +536,77 @@ def test_attempts_grid_separates_unmonitored_from_no_signals(client) -> None:
     aid2, _ = _assessment_sitting(client, proctored=False, qid="q2")
     rows = client.get(f"/assessments/{aid2}/attempts").json()
     assert rows[0]["integrity_signals"] is None  # nothing to record — not zero
+
+
+# --- the list / export surfaces (the I1 gap-closure: they carried `late` but
+# --- no integrity signal, so the CSV silently lost a signal class the UI has) - #
+
+
+def test_lists_and_export_carry_the_sittings_signal_count(client, monkeypatch) -> None:
+    _, token = _assessment_sitting(client, proctored=True)
+    client.post(
+        f"/invite/{token}/events",
+        json={
+            "candidate_email": "cand@x.io",
+            "events": [
+                _events(kind="focus_loss"),
+                _events(kind="paste_external", duration_ms=None, size=900, blocked=True),
+            ],
+        },
+    )
+    _submit_assessment(client, token, monkeypatch)
+
+    row = client.get("/submissions").json()["items"][0]
+    assert row["integrity_signals"] == 2
+    assert row["integrity_blocked"] == 1
+
+    q_row = client.get("/questions/q1/submissions").json()["items"][0]
+    assert q_row["integrity_signals"] == 2
+    assert q_row["integrity_blocked"] == 1
+
+    lines = client.get("/submissions/export").text.splitlines()
+    header = lines[0].split(",")
+    signals_col = header.index("integrity_signals")
+    blocked_col = header.index("integrity_blocked_pastes")
+    cells = lines[1].split(",")
+    assert cells[signals_col] == "2"
+    assert cells[blocked_col] == "1"
+
+
+def test_lists_and_export_report_unmonitored_as_blank_not_zero(client, monkeypatch) -> None:
+    _, token = _assessment_sitting(client, proctored=False)
+    _submit_assessment(client, token, monkeypatch)
+
+    row = client.get("/submissions").json()["items"][0]
+    assert row["integrity_signals"] is None
+
+    q_row = client.get("/questions/q1/submissions").json()["items"][0]
+    assert q_row["integrity_signals"] is None
+
+    lines = client.get("/submissions/export").text.splitlines()
+    header = lines[0].split(",")
+    signals_col = header.index("integrity_signals")
+    cells = lines[1].split(",")
+    assert cells[signals_col] == ""  # unmonitored ⇒ blank, never a clean-looking 0
+
+
+def test_a_direct_submission_has_no_sitting_in_the_lists(client, monkeypatch) -> None:
+    # An interviewer's own POST /submissions has no invite/candidate — no sitting
+    # at all, which reads as unmonitored, not as a clean zero.
+    assert client.post("/questions", json=_question("q1")).status_code == 201
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-1"))
+    assert (
+        client.post(
+            "/submissions",
+            json={
+                "question_id": "q1",
+                "candidate": "Cand",
+                "language": "python",
+                "code": "print(1)",
+            },
+        ).status_code
+        == 201
+    )
+    row = client.get("/submissions").json()["items"][0]
+    assert row["integrity_signals"] is None
+    assert row["integrity_blocked"] == 0

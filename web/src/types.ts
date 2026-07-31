@@ -441,6 +441,9 @@ export interface SubmissionRow {
   verdict?: string
   score_pct?: number
   late?: boolean // arrived after the timed window closed (recorded + flagged)
+  // Integrity signals for the sitting (I1); null/undefined = unmonitored, not zero.
+  integrity_signals?: number | null
+  integrity_blocked?: number
   created_at: string
 }
 
@@ -458,6 +461,9 @@ export interface SubmissionSummary {
   verdict?: string
   score_pct?: number
   late?: boolean // arrived after the timed window closed (recorded + flagged)
+  // Integrity signals for the sitting (I1); null/undefined = unmonitored, not zero.
+  integrity_signals?: number | null
+  integrity_blocked?: number
   // Set when this submission came in through an assessment invite (A3).
   assessment_id?: string | null
   assessment_title?: string | null

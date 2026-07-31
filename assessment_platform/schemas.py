@@ -388,6 +388,11 @@ class SubmissionSummaryOut(BaseModel):
     verdict: str | None = None
     score_pct: float | None = None
     late: bool = False  # arrived after the timed window closed (recorded + flagged)
+    # Integrity signals recorded during the sitting this submission came from (I1).
+    # None = the sitting wasn't monitored (or there was no sitting at all — an
+    # interviewer's direct submission), which must not read as a clean zero.
+    integrity_signals: int | None = None
+    integrity_blocked: int = 0  # of those, pastes actually blocked (the severe kind)
     # Set when this submission came in through an assessment invite (A3): lets the
     # list tell an assessment sitting apart from a standalone single-question
     # attempt without a second fetch per row.
@@ -652,6 +657,9 @@ class DashboardSubmissionOut(BaseModel):
     verdict: str | None = None
     score_pct: float | None = None
     late: bool = False  # arrived after the timed window closed (recorded + flagged)
+    # Integrity signals for the sitting (I1); None = unmonitored, not zero.
+    integrity_signals: int | None = None
+    integrity_blocked: int = 0
     created_at: datetime
 
 

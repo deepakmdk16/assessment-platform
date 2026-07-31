@@ -57,4 +57,24 @@ describe('SubmissionsPage — assessment linkage (A3)', () => {
     expect(await screen.findByText('Backend Screen')).toBeInTheDocument()
     expect(screen.getByText('Standalone')).toBeInTheDocument()
   })
+
+  it('shows each sitting integrity count, telling unmonitored apart from a clean zero (I1)', async () => {
+    vi.mocked(api.listAllSubmissions).mockResolvedValue(
+      page([
+        sub({ id: 's1', candidate: 'Alice', integrity_signals: 3, integrity_blocked: 1 }),
+        sub({ id: 's2', candidate: 'Bob', integrity_signals: 0, integrity_blocked: 0 }),
+        sub({ id: 's3', candidate: 'Carol', integrity_signals: null }),
+      ]),
+    )
+
+    render(
+      <MemoryRouter>
+        <SubmissionsPage />
+      </MemoryRouter>,
+    )
+
+    const flagged = await screen.findByTitle('3 signals, including 1 blocked paste')
+    expect(flagged).toHaveTextContent('3')
+    expect(screen.getByText('Not monitored')).toBeInTheDocument() // null ≠ 0
+  })
 })

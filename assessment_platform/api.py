@@ -227,6 +227,7 @@ def _submission_summary(
     sub: Submission,
     result: AssessmentResult | None,
     assessment: Assessment | None = None,
+    integrity: tuple[int | None, int] = (None, 0),
 ) -> SubmissionSummaryOut:
     return SubmissionSummaryOut(
         id=sub.id,
@@ -240,6 +241,8 @@ def _submission_summary(
         verdict=result.verdict if result else None,
         score_pct=result.score_pct if result else None,
         late=sub.late,
+        integrity_signals=integrity[0],
+        integrity_blocked=integrity[1],
         assessment_id=assessment.id if assessment else None,
         assessment_title=assessment.title if assessment else None,
     )
@@ -275,6 +278,46 @@ def _assessments_by_submission(
         if s.invite_id is not None and s.invite_id in invite_to_assessment:
             result[s.id] = invite_to_assessment[s.invite_id]
     return result
+
+
+def _integrity_by_submission(
+    subs: Sequence[Submission], session: Session
+) -> dict[str, tuple[int | None, int]]:
+    """Per-submission integrity counts `(signals, blocked)` keyed by submission_id,
+    batched (invites, then events — no N+1). Signals are counted per *sitting*
+    (invite + candidate), matching the attempts grid: `None` means the sitting
+    wasn't monitored — or there was no sitting at all (an interviewer's direct
+    submission) — which must not read as a clean zero."""
+    invite_ids = {s.invite_id for s in subs if s.invite_id is not None}
+    proctored: dict[int, bool] = {}
+    if invite_ids:
+        for inv in session.exec(
+            select(Invite).where(col(Invite.id).in_(invite_ids))
+        ).all():
+            proctored[_require_id(inv.id)] = inv.proctored
+    signals: dict[tuple[int, str], int] = {}
+    blocked: dict[tuple[int, str], int] = {}
+    monitored_ids = {i for i, p in proctored.items() if p}
+    if monitored_ids:
+        for ev in session.exec(
+            select(IntegrityEvent).where(col(IntegrityEvent.invite_id).in_(monitored_ids))
+        ).all():
+            key = (ev.invite_id, ev.candidate_email)
+            signals[key] = signals.get(key, 0) + 1
+            if ev.kind == "paste_external" and ev.blocked:
+                blocked[key] = blocked.get(key, 0) + 1
+    out: dict[str, tuple[int | None, int]] = {}
+    for s in subs:
+        if (
+            s.invite_id is None
+            or s.candidate_email is None
+            or not proctored.get(s.invite_id, False)
+        ):
+            out[s.id] = (None, 0)
+        else:
+            key = (s.invite_id, s.candidate_email)
+            out[s.id] = (signals.get(key, 0), blocked.get(key, 0))
+    return out
 
 
 def _results_by_submission(
@@ -2631,8 +2674,12 @@ def list_submissions(
     ).all()
     results = _results_by_submission(subs, session)
     assessments = _assessments_by_submission(subs, session)
+    integrity = _integrity_by_submission(subs, session)
     items = [
-        _submission_summary(sub, results.get(sub.id), assessments.get(sub.id)) for sub in subs
+        _submission_summary(
+            sub, results.get(sub.id), assessments.get(sub.id), integrity[sub.id]
+        )
+        for sub in subs
     ]
     return Page(items=items, total=total, limit=limit, offset=offset)
 
@@ -2657,6 +2704,7 @@ def export_submissions(
         .order_by(col(Submission.created_at).desc(), col(Submission.id))
     ).all()
     results = _results_by_submission(subs, session)
+    integrity = _integrity_by_submission(subs, session)
     titles = {
         q.id: q.title
         for q in session.exec(select(Question).where(Question.owner_id == current.id)).all()
@@ -2668,16 +2716,21 @@ def export_submissions(
         [
             "submission_id", "question_id", "question_title", "candidate",
             "candidate_email", "language", "status", "verdict", "score_pct", "late",
-            "created_at",
+            "integrity_signals", "integrity_blocked_pastes", "created_at",
         ]
     )
     for sub in subs:
         r = results.get(sub.id)
+        signals, blocked_pastes = integrity[sub.id]
         writer.writerow(
             [
                 sub.id, sub.question_id, titles.get(sub.question_id, ""), sub.candidate,
                 sub.candidate_email or "", sub.language, sub.status,
                 r.verdict if r else "", r.score_pct if r else "", sub.late,
+                # Blank (not 0) when the sitting wasn't monitored — "nothing
+                # recorded" and "nothing to record" must not look alike.
+                signals if signals is not None else "",
+                blocked_pastes if signals is not None else "",
                 sub.created_at.isoformat(),
             ]
         )
@@ -2843,9 +2896,11 @@ def question_submissions(
         .limit(limit)
     ).all()
     results = _results_by_submission(subs, session)
+    integrity = _integrity_by_submission(subs, session)
     items = []
     for sub in subs:
         result = results.get(sub.id)
+        signals, blocked_pastes = integrity[sub.id]
         items.append(
             DashboardSubmissionOut(
                 submission_id=sub.id,
@@ -2856,6 +2911,8 @@ def question_submissions(
                 verdict=result.verdict if result else None,
                 score_pct=result.score_pct if result else None,
                 late=sub.late,
+                integrity_signals=signals,
+                integrity_blocked=blocked_pastes,
                 created_at=sub.created_at,
             )
         )

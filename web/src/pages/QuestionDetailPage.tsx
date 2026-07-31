@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass, difficultyClass } from '../badges'
+import { IntegrityCell } from '../components/IntegrityPanel'
 import { Pager } from '../components/Pager'
 import type { Invite, InviteDelivery, QuestionOut, SubmissionRow } from '../types'
 
@@ -277,6 +278,7 @@ export function QuestionDetailPage() {
                     <th>Status</th>
                     <th>Verdict</th>
                     <th>Score</th>
+                    <th>Integrity</th>
                     <th>Submitted</th>
                   </tr>
                 </thead>
@@ -312,6 +314,12 @@ export function QuestionDetailPage() {
                         )}
                       </td>
                       <td className="score">{s.score_pct != null ? `${s.score_pct}%` : '—'}</td>
+                      <td>
+                        <IntegrityCell
+                          signals={s.integrity_signals}
+                          blocked={s.integrity_blocked ?? 0}
+                        />
+                      </td>
                       <td>{s.created_at}</td>
                     </tr>
                   ))}
