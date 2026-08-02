@@ -220,8 +220,18 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   - **Structural anti-cheat (our moat — prefer over surveillance):** per-candidate
     unique question variants (see D) makes a leaked bank useless and reduces the need
     for heavy proctoring at all.
-  - **Integrity report:** per-attempt risk score + flagged-event timeline for the
-    interviewer, so signals are actionable rather than raw logs.
+  - **Integrity report — IN PROGRESS (backend landed on
+    `feature/i1-integrity-report`).** Deterministic, DB-free scoring in
+    `integrity.py` (score 0-100 + level none/low/elevated/high + the reasons
+    that drove it; severe signals — blocked outside pastes, devtools — dominate,
+    ambient focus flicker accumulates slowly under per-kind caps; the two
+    context kinds `paste_internal`/`fullscreen_denied` never score). Surfaced as
+    `IntegrityReportOut.risk` (recorded events are always scored, whatever the
+    monitoring flag; null only for a quiet unmonitored sitting) and
+    `AssessmentAttemptOut.integrity_risk` (level; null = unmonitored, matching
+    the count column). A triage hint, never proof, never part of a verdict.
+    Remaining: the UI (risk banner on the Integrity tab + risk-aware grid chip)
+    — mockup pending sign-off.
   - **Identity / webcam — DEFERRED (do not build yet).** Start photo, periodic
     snapshots, optional continuous video. Held back deliberately: the cost isn't the
     capture, it's consent/compliance (GDPR/BIPA), storage, and bias/false-positive

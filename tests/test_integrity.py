@@ -610,3 +610,66 @@ def test_a_direct_submission_has_no_sitting_in_the_lists(client, monkeypatch) ->
     row = client.get("/submissions").json()["items"][0]
     assert row["integrity_signals"] is None
     assert row["integrity_blocked"] == 0
+
+
+# --- the risk score (I1 integrity report) ----------------------------------- #
+
+
+def test_report_carries_a_risk_score_with_reasons(client, monkeypatch) -> None:
+    token = _invited(client)
+    client.post(
+        f"/invite/{token}/events",
+        json={
+            "candidate_email": "cand@x.io",
+            "question_id": "q1",
+            "events": [
+                _events(kind="paste_external", duration_ms=None, size=900, blocked=True),
+                _events(kind="devtools", duration_ms=None),
+            ],
+        },
+    )
+    sub_id = _submit(client, token, monkeypatch)
+    risk = client.get(f"/submissions/{sub_id}/integrity").json()["risk"]
+    assert risk["score"] == 45
+    assert risk["level"] == "elevated"
+    assert [r["label"] for r in risk["reasons"]] == [
+        "1 outside paste blocked",
+        "devtools opened 1 time",
+    ]
+
+
+def test_a_quiet_monitored_sitting_scores_an_explicit_none_level(client, monkeypatch) -> None:
+    token = _invited(client)
+    sub_id = _submit(client, token, monkeypatch)
+    risk = client.get(f"/submissions/{sub_id}/integrity").json()["risk"]
+    assert risk == {"score": 0, "level": "none", "reasons": []}
+
+
+def test_an_unmonitored_quiet_sitting_has_no_risk_to_report(client, monkeypatch) -> None:
+    # null, not "none": an unmonitored sitting recorded nothing, so a score would
+    # dress up absence-of-evidence as a clean reading.
+    _, token = _assessment_sitting(client, proctored=False)
+    sub_id = _submit_assessment(client, token, monkeypatch)
+    assert client.get(f"/submissions/{sub_id}/integrity").json()["risk"] is None
+
+
+def test_attempts_grid_carries_the_risk_level(client) -> None:
+    aid, token = _assessment_sitting(client, proctored=True)
+    client.post(
+        f"/invite/{token}/events",
+        json={
+            "candidate_email": "cand@x.io",
+            "events": [
+                _events(kind="paste_external", duration_ms=None, size=900, blocked=True),
+                _events(kind="paste_external", duration_ms=None, size=901, blocked=True),
+            ],
+        },
+    )
+    rows = client.get(f"/assessments/{aid}/attempts").json()
+    assert rows[0]["integrity_risk"] == "high"
+
+    quiet_aid, _ = _assessment_sitting(client, proctored=True, qid="q2")
+    assert client.get(f"/assessments/{quiet_aid}/attempts").json()[0]["integrity_risk"] == "none"
+
+    off_aid, _ = _assessment_sitting(client, proctored=False, qid="q3")
+    assert client.get(f"/assessments/{off_aid}/attempts").json()[0]["integrity_risk"] is None

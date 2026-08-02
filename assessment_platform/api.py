@@ -31,7 +31,7 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from . import agent_client, analytics, config, email_client, signing
+from . import agent_client, analytics, config, email_client, integrity, signing
 from .auth import (
     create_access_token,
     get_current_interviewer,
@@ -81,6 +81,8 @@ from .schemas import (
     IntegrityEventOut,
     IntegrityEventsIn,
     IntegrityReportOut,
+    IntegrityRiskOut,
+    IntegrityRiskReasonOut,
     IntegritySummaryOut,
     InterviewerOut,
     InterviewerUpdate,
@@ -1568,6 +1570,7 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
     # signals and never submitted, who has no submission to read a report from.
     signals: dict[str, int] = {}
     blocked: dict[str, int] = {}
+    candidate_events: dict[str, list[IntegrityEvent]] = {}
     monitored_invites = {
         i_id
         for i_id in invite_ids
@@ -1577,6 +1580,7 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
         select(IntegrityEvent).where(col(IntegrityEvent.invite_id).in_(invite_ids))
     ).all():
         signals[ev.candidate_email] = signals.get(ev.candidate_email, 0) + 1
+        candidate_events.setdefault(ev.candidate_email, []).append(ev)
         if ev.kind == "paste_external" and ev.blocked:
             blocked[ev.candidate_email] = blocked.get(ev.candidate_email, 0) + 1
     # (candidate_email, question_id) -> the submission's result / id / late flag.
@@ -1650,6 +1654,17 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
                     else None
                 ),
                 integrity_blocked=blocked.get(attempt.candidate_email, 0),
+                # Same null semantics as the count: a level exists only for a
+                # monitored sitting (a quiet one reads "none", not null).
+                integrity_risk=(
+                    integrity.risk_level(
+                        integrity.risk_score(
+                            list(candidate_events.get(attempt.candidate_email, []))
+                        )[0]
+                    )
+                    if attempt.invite_id in monitored_invites
+                    else None
+                ),
             )
         )
     return out
@@ -2805,9 +2820,21 @@ def _integrity_report(
         pastes_blocked=sum(1 for e in events if e.kind == "paste_external" and e.blocked),
         devtools_opens=sum(1 for e in events if e.kind == "devtools"),
     )
+    # Recorded events are always scored, whatever the monitoring flag says; risk
+    # is null only when there is nothing to score AND the sitting was unmonitored
+    # (a monitored, quiet sitting scores an explicit 0 / "none").
+    risk = None
+    if events or monitored:
+        score, reasons = integrity.risk_score(list(events))
+        risk = IntegrityRiskOut(
+            score=score,
+            level=integrity.risk_level(score),
+            reasons=[IntegrityRiskReasonOut(label=lb, points=p) for lb, p in reasons],
+        )
     return IntegrityReportOut(
         monitored=monitored,
         summary=summary,
+        risk=risk,
         events=[
             IntegrityEventOut(
                 kind=e.kind,

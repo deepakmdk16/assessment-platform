@@ -51,6 +51,9 @@ deterministic grade.
 - `analytics.py` — DB-free aggregation helpers (pass-rate, median/percentile,
   daily trend, time-to-solve) behind the `/analytics/*` endpoints; the maths is
   unit-tested without a database (AR1).
+- `integrity.py` — DB-free risk scoring over a sitting's integrity signals
+  (score/level/reasons, I1); a triage hint, never proof, and never part of a
+  verdict.
 - `auth.py` — interviewer auth: bcrypt hashing + stateless JWT bearer.
 - `agent_client.py` — the outbound call that triggers the agent (the mock
   boundary in tests).
