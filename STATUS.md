@@ -139,10 +139,21 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
 
 ## C. Backlog — table-stakes & hardening (open items moved from PRODUCT_BACKLOG)
 
-- **CX2 · In-progress candidate code lives only in `localStorage`.** Autosave is
-  debounced to `localStorage` (`CandidatePage.tsx:37,95`) — lost on cleared storage,
-  incognito, or a device switch. Optional server-side draft persistence keyed by
-  invite token so work survives a browser/device change. **M.**
+- **CX2 · Server-side draft persistence — DONE 2026-07-31.** In-progress
+  candidate code used to live only in `localStorage` (lost on cleared storage,
+  incognito, or a device switch). Now autosaved server-side too: `CandidateDraft`
+  (migration `c8a4e6f2d190`, additive; one row per invite+candidate+question,
+  upserted) behind `PUT /invite/{token}/draft` (same identity gates as /events —
+  live link + invited recipient + a question the sitting serves; NOT gated on
+  already-submitted, never starts a clock; own `draft_save` rate bucket, code
+  capped at 100k chars) and `GET /invite/{token}/draft` (all of the sitting's
+  drafts in one fetch; empty list, not 404, on a cold start). Client: both flows
+  autosave debounced 2s fire-and-forget (localStorage keeps the 500ms fast path);
+  restore prefers localStorage (freshest on the same browser), falling back to
+  the server copy — `AssessmentFlow` seeds each question's editor from its own
+  draft. No interviewer surface reads drafts — a draft is the candidate's own
+  work-in-progress until submitted. No UI change beyond restored content (no
+  mockup needed).
 - **AR1 · Aggregate analytics — DONE 2026-07-27.** The dashboard was a bare
   question list with no stats/metrics route. **Backend:** a DB-free, unit-tested
   `analytics.py` (pass-rate, median/percentile, daily trend, time-to-solve,

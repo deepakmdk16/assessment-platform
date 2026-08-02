@@ -378,6 +378,18 @@ export interface InviteStatusResponse {
 }
 
 /** `POST /invite/{token}/start` — the question, released after the email check. */
+/** One autosaved draft of a sitting (CX2), as returned by GET /invite/{token}/draft. */
+export interface CandidateDraft {
+  question_id: string
+  code: string
+  language: string
+  updated_at: string
+}
+
+export interface CandidateDraftsResponse {
+  drafts: CandidateDraft[]
+}
+
 export interface InviteStartResponse {
   /** The first question — kept so the pre-T4 single-question UI keeps working. */
   question: InviteQuestionPublic

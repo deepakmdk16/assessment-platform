@@ -45,6 +45,7 @@ from .models import (
     AssessmentQuestion,
     AssessmentResult,
     CandidateAttempt,
+    CandidateDraft,
     CandidateSlotVariant,
     IntegrityEvent,
     Interviewer,
@@ -67,6 +68,9 @@ from .schemas import (
     AssessmentQuestionOut,
     AssessmentSlotIn,
     AssessmentUpdate,
+    CandidateDraftIn,
+    CandidateDraftOut,
+    CandidateDraftsOut,
     CandidateQuestionPublic,
     CandidateQuestionView,
     CandidateRunIn,
@@ -2538,6 +2542,90 @@ def candidate_integrity_events(
         )
     session.commit()
     return Response(status_code=204)
+
+
+@app.put("/invite/{token}/draft", status_code=204)
+def candidate_save_draft(
+    token: str,
+    body: CandidateDraftIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Autosave the candidate's in-progress code server-side (CX2), so work
+    survives a cleared cache, incognito window, or device switch.
+
+    Same identity gates as the rest of the candidate surface (live link +
+    invited recipient + a question this sitting actually serves), but — like
+    /events — NOT gated on "hasn't submitted yet": a save racing the submit by a
+    moment isn't worth failing. Not an attempt and not a submission: saving
+    never starts a clock and never grades, and no interviewer surface reads a
+    draft — it's the candidate's own work-in-progress until they submit.
+    """
+    limiter.check(
+        "draft_save",
+        client_ip(request),
+        config.DRAFT_SAVE_RATE_LIMIT_MAX,
+        config.RATE_LIMIT_WINDOW_S,
+    )
+    invite = _load_invite_or_error(token, session)
+    email = _normalize_email(body.candidate_email)
+    _check_invited(invite, email)
+    question = _resolve_question(invite, body.question_id, email, session)
+
+    draft = session.exec(
+        select(CandidateDraft).where(
+            CandidateDraft.invite_id == invite.id,
+            CandidateDraft.candidate_email == email,
+            CandidateDraft.question_id == question.id,
+        )
+    ).first()
+    if draft is None:
+        draft = CandidateDraft(
+            invite_id=_require_id(invite.id),
+            candidate_email=email,
+            question_id=question.id,
+            code=body.code,
+            language=body.language,
+        )
+    else:
+        draft.code = body.code
+        draft.language = body.language
+    draft.updated_at = datetime.now(timezone.utc)
+    session.add(draft)
+    session.commit()
+    return Response(status_code=204)
+
+
+@app.get("/invite/{token}/draft", response_model=CandidateDraftsOut)
+def candidate_get_drafts(
+    token: str,
+    candidate_email: str,
+    session: Session = Depends(get_session),
+) -> CandidateDraftsOut:
+    """Every autosaved draft of this candidate's sitting, for restore after
+    /start — one fetch covers a whole multi-question assessment. Same gates as
+    the save; returns an empty list rather than 404 when nothing was saved, so
+    the client needs no error path for the common cold start."""
+    invite = _load_invite_or_error(token, session)
+    email = _normalize_email(candidate_email)
+    _check_invited(invite, email)
+    rows = session.exec(
+        select(CandidateDraft).where(
+            CandidateDraft.invite_id == invite.id,
+            CandidateDraft.candidate_email == email,
+        )
+    ).all()
+    return CandidateDraftsOut(
+        drafts=[
+            CandidateDraftOut(
+                question_id=d.question_id,
+                code=d.code,
+                language=d.language,
+                updated_at=d.updated_at,
+            )
+            for d in rows
+        ]
+    )
 
 
 # --------------------------------------------------------------------------- #

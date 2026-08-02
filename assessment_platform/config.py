@@ -149,6 +149,11 @@ REGISTER_RATE_LIMIT_MAX = int(os.getenv("REGISTER_RATE_LIMIT_MAX", "5"))
 # both a billing hole and a way to exhaust the thread pool. Generous enough for
 # real authoring (a draft takes tens of seconds), low enough to stop a loop.
 DRAFT_RATE_LIMIT_MAX = int(os.getenv("DRAFT_RATE_LIMIT_MAX", "10"))
+
+# Candidate draft autosaves (CX2). Debounced client-side, but a fast typist with
+# short pauses can legitimately save every few seconds — generous like the run
+# bucket, cheap single-row upserts.
+DRAFT_SAVE_RATE_LIMIT_MAX = int(os.getenv("DRAFT_SAVE_RATE_LIMIT_MAX", "60"))
 # Candidate Run / Run-against-tests. Higher than submit (a candidate iterates
 # many times in a sitting) but still capped: these execute untrusted code on the
 # agent for free, and run-tests is a pass/fail oracle — unlimited, it would let

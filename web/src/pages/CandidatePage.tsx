@@ -7,7 +7,13 @@ import { fullscreenSupported, useIntegrity } from '../integrity'
 import { ThemeCycleButton } from '../components/ThemeToggle'
 import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
-import type { InviteStartResponse, Language, RunResponse, RunTestsResponse } from '../types'
+import type {
+  CandidateDraft as ServerDraft,
+  InviteStartResponse,
+  Language,
+  RunResponse,
+  RunTestsResponse,
+} from '../types'
 import { AssessmentFlow } from './AssessmentFlow'
 import { CandidateNotice } from './CandidateNotice'
 import { ConsoleResult } from './ConsoleResult'
@@ -82,6 +88,10 @@ export function CandidatePage() {
   const [language, setLanguage] = useState<Language | ''>('')
   const [code, setCode] = useState('')
   const [draftRestored, setDraftRestored] = useState(false)
+  // Server-side drafts for this sitting (CX2), fetched once at /start. The
+  // single-question restore below uses them when localStorage has nothing
+  // (cleared cache / device switch); AssessmentFlow seeds its answers from them.
+  const [serverDrafts, setServerDrafts] = useState<ServerDraft[]>([])
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -140,6 +150,24 @@ export function CandidatePage() {
     return () => clearTimeout(t)
   }, [stage, token, code, language])
 
+  // Server-side autosave (CX2), single-question flow only — AssessmentFlow
+  // saves per question itself. Gentler cadence than the localStorage one, and
+  // fire-and-forget: a lost save costs at most a few seconds of typing.
+  useEffect(() => {
+    if (stage !== 'editor' || !token || isMultiQuestion || !code) return
+    const t = setTimeout(() => {
+      void api
+        .saveCandidateDraft(token, {
+          candidate_email: candidateEmail,
+          question_id: activeQuestionId,
+          code,
+          language,
+        })
+        .catch(() => {})
+    }, 2000)
+    return () => clearTimeout(t)
+  }, [stage, token, isMultiQuestion, code, language, candidateEmail, activeQuestionId])
+
   useEffect(() => {
     if (token && (stage === 'submitted' || stage === 'already_submitted')) clearDraft(token)
   }, [stage, token])
@@ -153,9 +181,21 @@ export function CandidatePage() {
       const data = await api.startInvite(token, candidateEmail, candidateName)
       setInvite(data)
       setDeadline(data.deadline ?? null)
-      // Restore an autosaved draft for this invite, if any; only keep a saved
-      // language that's still offered, else fall back to the first choice.
-      const saved = loadDraft(token)
+      // Server-side drafts for the sitting (CX2). Best-effort: a failed fetch
+      // restores nothing rather than blocking the start.
+      let drafts: ServerDraft[] = []
+      try {
+        drafts = (await api.getCandidateDrafts(token, candidateEmail)).drafts
+      } catch {
+        // offline / rate-limited — the localStorage path below still works
+      }
+      setServerDrafts(drafts)
+      // Restore an autosaved draft for this invite, if any — localStorage first
+      // (freshest on the same browser), else the server copy (survives a cleared
+      // cache or a device switch). Only keep a saved language that's still
+      // offered, else fall back to the first choice.
+      const server = drafts.find((d) => d.question_id === data.questions?.[0]?.id) ?? drafts[0]
+      const saved = loadDraft(token) ?? (server?.code ? server : null)
       if (saved?.code) {
         setCode(saved.code)
         setLanguage(
@@ -372,6 +412,7 @@ export function CandidatePage() {
         orgName={invite.org_name}
         logoUrl={invite.logo_url}
         integrity={integrity}
+        initialDrafts={serverDrafts}
         onQuestionChange={setActiveQuestionId}
         onExpired={() => setStage('expired')}
       />

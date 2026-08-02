@@ -357,6 +357,36 @@ class IntegrityEvent(SQLModel, table=True):
     created_at: datetime = _created_at()
 
 
+class CandidateDraft(SQLModel, table=True):
+    """A candidate's in-progress code, autosaved server-side (CX2) so work
+    survives a cleared cache, incognito window, or device switch — localStorage
+    alone loses all three. One row per (invite, candidate, question), upserted
+    by the save route; the localStorage copy stays as the fast first-choice
+    restore on the same browser.
+
+    Deliberately NOT an attempt or a submission: saving a draft never starts a
+    clock and never grades. Content is the candidate's own work-in-progress —
+    it reaches interviewers only when submitted, so no read surface exposes it.
+    """
+
+    __table_args__ = (
+        UniqueConstraint(
+            "invite_id",
+            "candidate_email",
+            "question_id",
+            name="uq_draft_invite_candidate_question",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    invite_id: int = Field(foreign_key="invite.id", index=True)
+    candidate_email: str = Field(index=True)
+    question_id: str = Field(foreign_key="question.id")
+    code: str
+    language: str
+    updated_at: datetime = _created_at()
+
+
 class Submission(SQLModel, table=True):
     # One attempt per candidate per invite PER QUESTION, enforced by the DATABASE.
     # (T4: an assessment invite carries several questions, so the candidate gets one
