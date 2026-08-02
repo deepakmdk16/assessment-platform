@@ -130,3 +130,40 @@ def test_a_cold_start_reads_an_empty_list_not_an_error(client) -> None:
     token = _single_invite(client)
     body = client.get(f"/invite/{token}/draft", params={"candidate_email": "cand@x.io"}).json()
     assert body == {"drafts": []}
+
+
+# --- question deletion vs sitting activity (surfaced by /integration-check:
+# --- the delete 500'd on the FK for any started-but-unsubmitted sitting) ----- #
+
+
+def test_delete_refuses_a_question_with_a_started_sitting(client) -> None:
+    token = _single_invite(client)
+    client.post(
+        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io"}
+    )
+    resp = client.delete("/questions/q1")
+    assert resp.status_code == 409  # was a raw FK 500
+    assert "candidate activity" in resp.json()["detail"]
+
+
+def test_delete_refuses_a_question_with_integrity_evidence(client) -> None:
+    # Events are evidence — deleting them silently is the false-clean reading
+    # I1 guards against, so the question refuses to go while they exist.
+    token = _single_invite(client)
+    client.post(
+        f"/invite/{token}/events",
+        json={
+            "candidate_email": "cand@x.io",
+            "question_id": "q1",
+            "events": [{"kind": "focus_loss", "offset_ms": 0, "duration_ms": 10}],
+        },
+    )
+    assert client.delete("/questions/q1").status_code == 409
+
+
+def test_delete_cascades_a_disposable_draft(client) -> None:
+    token = _single_invite(client)
+    assert _save(client, token).status_code == 204
+    assert client.delete("/questions/q1").status_code == 204  # was a raw FK 500
+    with Session(db_module.engine) as s:
+        assert s.exec(select(CandidateDraft)).all() == []

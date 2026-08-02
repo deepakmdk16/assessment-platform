@@ -27,7 +27,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -1067,6 +1067,48 @@ def delete_question(
                 "are recorded against it. Revoke its invites instead."
             ),
         )
+    # A sitting is a record even before (or without) a submission: an attempt is
+    # someone having sat down, and integrity events are evidence — cascading
+    # either away would destroy exactly what they exist to keep (deleting
+    # recorded evidence is the false-clean reading I1 guards against). Without
+    # this check the delete used to 500 on the FK anyway; now it refuses with
+    # the same guidance as the submissions case.
+    invite_ids = list(
+        session.exec(select(Invite.id).where(Invite.question_id == question_id)).all()
+    )
+    activity = session.exec(
+        select(func.count())
+        .select_from(CandidateAttempt)
+        .where(col(CandidateAttempt.invite_id).in_(invite_ids))
+    ).one() if invite_ids else 0
+    activity += session.exec(
+        select(func.count())
+        .select_from(IntegrityEvent)
+        # By this question's own invites OR naming it from inside an assessment
+        # sitting (events record the question that was open).
+        .where(
+            or_(
+                col(IntegrityEvent.invite_id).in_(invite_ids),
+                col(IntegrityEvent.question_id) == question_id,
+            )
+        )
+    ).one()
+    if activity:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot delete question {question_id!r}: candidate activity is recorded "
+                "against it. Revoke its invites instead."
+            ),
+        )
+    # Drafts carry no independent record — unsubmitted work-in-progress goes
+    # with the question, like its invites and test cases. (Every draft names
+    # its question, so this also covers drafts saved via this question's own
+    # invites.)
+    for draft in session.exec(
+        select(CandidateDraft).where(CandidateDraft.question_id == question_id)
+    ).all():
+        session.delete(draft)
     session.delete(q)
     session.commit()
 
