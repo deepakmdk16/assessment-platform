@@ -318,6 +318,7 @@ export function QuestionDetailPage() {
                         <IntegrityCell
                           signals={s.integrity_signals}
                           blocked={s.integrity_blocked ?? 0}
+                          risk={s.integrity_risk}
                         />
                       </td>
                       <td>{s.created_at}</td>

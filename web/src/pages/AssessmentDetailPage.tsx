@@ -195,6 +195,7 @@ export function AssessmentDetailPage() {
                           <IntegrityCell
                             signals={att.integrity_signals}
                             blocked={att.integrity_blocked ?? 0}
+                            risk={att.integrity_risk}
                           />
                         </td>
                       </tr>

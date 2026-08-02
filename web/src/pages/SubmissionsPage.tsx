@@ -157,6 +157,7 @@ export function SubmissionsPage() {
                       <IntegrityCell
                         signals={s.integrity_signals}
                         blocked={s.integrity_blocked ?? 0}
+                        risk={s.integrity_risk}
                       />
                     </td>
                     <td>{new Date(s.created_at).toLocaleDateString()}</td>

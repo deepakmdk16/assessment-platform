@@ -238,6 +238,9 @@ class AssessmentAttemptOut(BaseModel):
     # is not the same as zero.
     integrity_signals: int | None = None
     integrity_blocked: int = 0  # of those, pastes actually blocked (the severe kind)
+    # The sitting's risk level from integrity.py (none|low|elevated|high) — the
+    # triage column. Null exactly when integrity_signals is (unmonitored).
+    integrity_risk: str | None = None
 
 
 class QuestionDraftIn(BaseModel):
@@ -393,6 +396,7 @@ class SubmissionSummaryOut(BaseModel):
     # interviewer's direct submission), which must not read as a clean zero.
     integrity_signals: int | None = None
     integrity_blocked: int = 0  # of those, pastes actually blocked (the severe kind)
+    integrity_risk: str | None = None  # sitting's risk level; null when signals is
     # Set when this submission came in through an assessment invite (A3): lets the
     # list tell an assessment sitting apart from a standalone single-question
     # attempt without a second fetch per row.
@@ -660,6 +664,7 @@ class DashboardSubmissionOut(BaseModel):
     # Integrity signals for the sitting (I1); None = unmonitored, not zero.
     integrity_signals: int | None = None
     integrity_blocked: int = 0
+    integrity_risk: str | None = None  # sitting's risk level; null when signals is
     created_at: datetime
 
 
@@ -807,6 +812,24 @@ class IntegritySummaryOut(BaseModel):
     devtools_opens: int
 
 
+class IntegrityRiskReasonOut(BaseModel):
+    """One factor that contributed to the risk score, e.g. '2 outside pastes
+    blocked' worth 60 — so the interviewer sees what drove the level, not a
+    bare number."""
+
+    label: str
+    points: int
+
+
+class IntegrityRiskOut(BaseModel):
+    """The sitting's triage hint (integrity.py): a deterrent-grade signal to
+    look closer, never proof and never part of the verdict."""
+
+    score: int  # 0-100
+    level: str  # none | low | elevated | high
+    reasons: list[IntegrityRiskReasonOut]
+
+
 class IntegrityReportOut(BaseModel):
     """A sitting's integrity signals, as read from one submission. Signals belong
     to the whole sitting (invite + candidate), not to a single question, so a
@@ -815,4 +838,8 @@ class IntegrityReportOut(BaseModel):
 
     monitored: bool  # false = this sitting ran unmonitored, so "no signals" means nothing
     summary: IntegritySummaryOut
+    # Null only when there is nothing to score AND the sitting was unmonitored —
+    # recorded events are always scored, whatever the flag says (suppressing real
+    # evidence is never the safer default).
+    risk: IntegrityRiskOut | None = None
     events: list[IntegrityEventOut]

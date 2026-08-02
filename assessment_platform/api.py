@@ -31,7 +31,7 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from . import agent_client, analytics, config, email_client, signing
+from . import agent_client, analytics, config, email_client, integrity, signing
 from .auth import (
     create_access_token,
     get_current_interviewer,
@@ -81,6 +81,8 @@ from .schemas import (
     IntegrityEventOut,
     IntegrityEventsIn,
     IntegrityReportOut,
+    IntegrityRiskOut,
+    IntegrityRiskReasonOut,
     IntegritySummaryOut,
     InterviewerOut,
     InterviewerUpdate,
@@ -227,7 +229,7 @@ def _submission_summary(
     sub: Submission,
     result: AssessmentResult | None,
     assessment: Assessment | None = None,
-    integrity: tuple[int | None, int] = (None, 0),
+    integrity: tuple[int | None, int, str | None] = (None, 0, None),
 ) -> SubmissionSummaryOut:
     return SubmissionSummaryOut(
         id=sub.id,
@@ -243,6 +245,7 @@ def _submission_summary(
         late=sub.late,
         integrity_signals=integrity[0],
         integrity_blocked=integrity[1],
+        integrity_risk=integrity[2],
         assessment_id=assessment.id if assessment else None,
         assessment_title=assessment.title if assessment else None,
     )
@@ -282,12 +285,12 @@ def _assessments_by_submission(
 
 def _integrity_by_submission(
     subs: Sequence[Submission], session: Session
-) -> dict[str, tuple[int | None, int]]:
-    """Per-submission integrity counts `(signals, blocked)` keyed by submission_id,
-    batched (invites, then events — no N+1). Signals are counted per *sitting*
-    (invite + candidate), matching the attempts grid: `None` means the sitting
-    wasn't monitored — or there was no sitting at all (an interviewer's direct
-    submission) — which must not read as a clean zero."""
+) -> dict[str, tuple[int | None, int, str | None]]:
+    """Per-submission integrity triage `(signals, blocked, risk_level)` keyed by
+    submission_id, batched (invites, then events — no N+1). Counted and scored
+    per *sitting* (invite + candidate), matching the attempts grid: `None` means
+    the sitting wasn't monitored — or there was no sitting at all (an
+    interviewer's direct submission) — which must not read as a clean zero."""
     invite_ids = {s.invite_id for s in subs if s.invite_id is not None}
     proctored: dict[int, bool] = {}
     if invite_ids:
@@ -295,28 +298,28 @@ def _integrity_by_submission(
             select(Invite).where(col(Invite.id).in_(invite_ids))
         ).all():
             proctored[_require_id(inv.id)] = inv.proctored
-    signals: dict[tuple[int, str], int] = {}
-    blocked: dict[tuple[int, str], int] = {}
+    events: dict[tuple[int, str], list[IntegrityEvent]] = {}
     monitored_ids = {i for i, p in proctored.items() if p}
     if monitored_ids:
         for ev in session.exec(
             select(IntegrityEvent).where(col(IntegrityEvent.invite_id).in_(monitored_ids))
         ).all():
-            key = (ev.invite_id, ev.candidate_email)
-            signals[key] = signals.get(key, 0) + 1
-            if ev.kind == "paste_external" and ev.blocked:
-                blocked[key] = blocked.get(key, 0) + 1
-    out: dict[str, tuple[int | None, int]] = {}
+            events.setdefault((ev.invite_id, ev.candidate_email), []).append(ev)
+    out: dict[str, tuple[int | None, int, str | None]] = {}
     for s in subs:
         if (
             s.invite_id is None
             or s.candidate_email is None
             or not proctored.get(s.invite_id, False)
         ):
-            out[s.id] = (None, 0)
+            out[s.id] = (None, 0, None)
         else:
-            key = (s.invite_id, s.candidate_email)
-            out[s.id] = (signals.get(key, 0), blocked.get(key, 0))
+            evs = events.get((s.invite_id, s.candidate_email), [])
+            out[s.id] = (
+                len(evs),
+                sum(1 for e in evs if e.kind == "paste_external" and e.blocked),
+                integrity.risk_level(integrity.risk_score(evs)[0]),
+            )
     return out
 
 
@@ -1568,6 +1571,7 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
     # signals and never submitted, who has no submission to read a report from.
     signals: dict[str, int] = {}
     blocked: dict[str, int] = {}
+    candidate_events: dict[str, list[IntegrityEvent]] = {}
     monitored_invites = {
         i_id
         for i_id in invite_ids
@@ -1577,6 +1581,7 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
         select(IntegrityEvent).where(col(IntegrityEvent.invite_id).in_(invite_ids))
     ).all():
         signals[ev.candidate_email] = signals.get(ev.candidate_email, 0) + 1
+        candidate_events.setdefault(ev.candidate_email, []).append(ev)
         if ev.kind == "paste_external" and ev.blocked:
             blocked[ev.candidate_email] = blocked.get(ev.candidate_email, 0) + 1
     # (candidate_email, question_id) -> the submission's result / id / late flag.
@@ -1650,6 +1655,17 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
                     else None
                 ),
                 integrity_blocked=blocked.get(attempt.candidate_email, 0),
+                # Same null semantics as the count: a level exists only for a
+                # monitored sitting (a quiet one reads "none", not null).
+                integrity_risk=(
+                    integrity.risk_level(
+                        integrity.risk_score(
+                            list(candidate_events.get(attempt.candidate_email, []))
+                        )[0]
+                    )
+                    if attempt.invite_id in monitored_invites
+                    else None
+                ),
             )
         )
     return out
@@ -2716,12 +2732,13 @@ def export_submissions(
         [
             "submission_id", "question_id", "question_title", "candidate",
             "candidate_email", "language", "status", "verdict", "score_pct", "late",
-            "integrity_signals", "integrity_blocked_pastes", "created_at",
+            "integrity_signals", "integrity_blocked_pastes", "integrity_risk",
+            "created_at",
         ]
     )
     for sub in subs:
         r = results.get(sub.id)
-        signals, blocked_pastes = integrity[sub.id]
+        signals, blocked_pastes, risk = integrity[sub.id]
         writer.writerow(
             [
                 sub.id, sub.question_id, titles.get(sub.question_id, ""), sub.candidate,
@@ -2731,6 +2748,7 @@ def export_submissions(
                 # recorded" and "nothing to record" must not look alike.
                 signals if signals is not None else "",
                 blocked_pastes if signals is not None else "",
+                risk or "",
                 sub.created_at.isoformat(),
             ]
         )
@@ -2805,9 +2823,21 @@ def _integrity_report(
         pastes_blocked=sum(1 for e in events if e.kind == "paste_external" and e.blocked),
         devtools_opens=sum(1 for e in events if e.kind == "devtools"),
     )
+    # Recorded events are always scored, whatever the monitoring flag says; risk
+    # is null only when there is nothing to score AND the sitting was unmonitored
+    # (a monitored, quiet sitting scores an explicit 0 / "none").
+    risk = None
+    if events or monitored:
+        score, reasons = integrity.risk_score(list(events))
+        risk = IntegrityRiskOut(
+            score=score,
+            level=integrity.risk_level(score),
+            reasons=[IntegrityRiskReasonOut(label=lb, points=p) for lb, p in reasons],
+        )
     return IntegrityReportOut(
         monitored=monitored,
         summary=summary,
+        risk=risk,
         events=[
             IntegrityEventOut(
                 kind=e.kind,
@@ -2900,7 +2930,7 @@ def question_submissions(
     items = []
     for sub in subs:
         result = results.get(sub.id)
-        signals, blocked_pastes = integrity[sub.id]
+        signals, blocked_pastes, risk = integrity[sub.id]
         items.append(
             DashboardSubmissionOut(
                 submission_id=sub.id,
@@ -2913,6 +2943,7 @@ def question_submissions(
                 late=sub.late,
                 integrity_signals=signals,
                 integrity_blocked=blocked_pastes,
+                integrity_risk=risk,
                 created_at=sub.created_at,
             )
         )
