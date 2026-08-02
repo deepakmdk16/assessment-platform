@@ -8,7 +8,9 @@
 // to match the submission by that id.
 import http from 'node:http'
 
-const PORT = Number(process.env.MOCK_AGENT_PORT ?? 8000)
+// Default kept off :8000 — the real assess-agent's port — so a bare run can't
+// collide with (or be mistaken for) an actual grader on the same machine.
+const PORT = Number(process.env.MOCK_AGENT_PORT ?? 8100)
 const CALLBACK_DELAY_MS = Number(process.env.MOCK_AGENT_DELAY_MS ?? 150)
 // Optional shared secret, matching the platform's X-Assess-Token contract.
 const CALLBACK_TOKEN = process.env.CALLBACK_TOKEN || null

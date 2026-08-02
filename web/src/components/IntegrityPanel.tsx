@@ -170,11 +170,22 @@ export function IntegrityPanel({ report }: { report: IntegrityReport }) {
  *  a clean sitting stays visually quiet. */
 export function IntegrityChip({ report }: { report: IntegrityReport }) {
   if (!report.monitored || report.summary.total === 0) return null
-  const severe = report.summary.pastes_blocked > 0
+  // Colour by the risk level so the header agrees with the tab's banner — a
+  // sitting can reach "high" without a blocked paste (devtools + heavy ambient),
+  // and the old blocked-pastes rule showed it amber. Blocked-pastes stays the
+  // fallback for a report without a risk.
+  const level = report.risk?.level
+  const severe = level != null ? level === 'high' : report.summary.pastes_blocked > 0
+  const chipClass =
+    level === 'low' ? 'chip chip-neutral' : severe ? 'chip chip-bad' : 'chip chip-warn'
   return (
     <span
-      className={severe ? 'chip chip-bad' : 'chip chip-warn'}
-      title="Integrity signals recorded during this sitting"
+      className={chipClass}
+      title={
+        level != null
+          ? `risk ${level} — integrity signals recorded during this sitting`
+          : 'Integrity signals recorded during this sitting'
+      }
     >
       Integrity · {report.summary.total}
     </span>
