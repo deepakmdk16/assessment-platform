@@ -6,7 +6,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { IntegrityCell, IntegrityPanel } from '../components/IntegrityPanel'
+import { IntegrityCell, IntegrityChip, IntegrityPanel } from '../components/IntegrityPanel'
 import { normalizeClipboard, useIntegrity } from '../integrity'
 import { api } from '../api'
 import type { IntegrityReport } from '../types'
@@ -392,5 +392,31 @@ describe('states that must not look alike', () => {
       'title',
       'risk low — 2 signals recorded during this sitting',
     )
+  })
+
+  it('colours the header chip by level, so it agrees with the banner', () => {
+    const base = {
+      monitored: true,
+      summary: {
+        total: 4,
+        focus_losses: 3,
+        away_ms: 400_000,
+        fullscreen_exits: 0,
+        pastes_blocked: 0,
+        devtools_opens: 1,
+      },
+      events: [],
+    }
+    // "high" reached WITHOUT a blocked paste — the old blocked-pastes rule
+    // showed this amber while the banner said High.
+    const { rerender } = render(
+      <IntegrityChip report={{ ...base, risk: { score: 51, level: 'high', reasons: [] } }} />,
+    )
+    expect(screen.getByText('Integrity · 4')).toHaveClass('chip-bad')
+
+    rerender(
+      <IntegrityChip report={{ ...base, risk: { score: 12, level: 'low', reasons: [] } }} />,
+    )
+    expect(screen.getByText('Integrity · 4')).toHaveClass('chip-neutral')
   })
 })
