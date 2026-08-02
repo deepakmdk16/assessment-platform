@@ -594,6 +594,31 @@ class CandidateSubmitOut(BaseModel):
     status: str
 
 
+class CandidateDraftIn(BaseModel):
+    """Autosave of in-progress code (CX2). Bounded because it's an
+    unauthenticated write — far above any real solution, far below a flood."""
+
+    candidate_email: EmailStr
+    # None targets the invite's single question, like CandidateSubmitIn.
+    question_id: str | None = None
+    code: str = Field(max_length=100_000)
+    language: str
+
+
+class CandidateDraftOut(BaseModel):
+    question_id: str
+    code: str
+    language: str
+    updated_at: datetime
+
+
+class CandidateDraftsOut(BaseModel):
+    """Every draft of one candidate's sitting — one fetch restores a whole
+    multi-question assessment."""
+
+    drafts: list[CandidateDraftOut]
+
+
 class CandidateRunIn(BaseModel):
     """Run the candidate's code against input they typed themselves."""
 

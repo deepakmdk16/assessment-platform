@@ -7,6 +7,7 @@ import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
 import type { IntegrityState } from '../integrity'
 import type {
+  CandidateDraft,
   CandidateQuestionPublic,
   Language,
   RunResponse,
@@ -37,6 +38,9 @@ interface Props {
    *  for the whole sitting — so this flow only reports which question is open and
    *  renders the enforcement overlay. */
   integrity: IntegrityState
+  /** Server-side autosaves from an earlier visit to this sitting (CX2), fetched
+   *  by CandidatePage at /start; seeds the per-question answers below. */
+  initialDrafts?: CandidateDraft[]
   onQuestionChange: (questionId: string) => void
   /** Bubble a 410/404 (expired/revoked) up so the page shows the shared notice. */
   onExpired: () => void
@@ -59,14 +63,32 @@ export function AssessmentFlow({
   orgName,
   logoUrl,
   integrity,
+  initialDrafts,
   onQuestionChange,
   onExpired,
 }: Props) {
   const { resolved } = useTheme()
 
   const [current, setCurrent] = useState(0)
+  // Each question starts from its server draft when one exists (CX2) — a reload
+  // or device switch resumes where the candidate left off, per question. Only a
+  // draft language still offered is kept.
   const [answers, setAnswers] = useState<Record<string, Answer>>(() =>
-    Object.fromEntries(questions.map((q) => [q.id, { code: '', language: languages[0] ?? '' }])),
+    Object.fromEntries(
+      questions.map((q) => {
+        const draft = initialDrafts?.find((d) => d.question_id === q.id)
+        if (!draft?.code) return [q.id, { code: '', language: languages[0] ?? '' }]
+        return [
+          q.id,
+          {
+            code: draft.code,
+            language: languages.includes(draft.language as Language)
+              ? (draft.language as Language)
+              : (languages[0] ?? ''),
+          },
+        ]
+      }),
+    ),
   )
   const [submitted, setSubmitted] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(questions.map((q) => [q.id, q.submitted])),
@@ -101,6 +123,24 @@ export function AssessmentFlow({
   // settled (regardless of individual success, so a blank-left question can't
   // hold the candidate on the IDE forever).
   const complete = submittedCount === questions.length || (timeUp && autoSubmitSettled)
+
+  // Server-side autosave of the open question (CX2). Debounced, fire-and-forget
+  // — a lost save costs at most a few seconds of typing; skipped once this
+  // question is submitted or time is up (nothing left worth saving).
+  useEffect(() => {
+    if (!answer?.code || locked) return
+    const t = setTimeout(() => {
+      void api
+        .saveCandidateDraft(token, {
+          candidate_email: candidateEmail,
+          question_id: cq.id,
+          code: answer.code,
+          language: answer.language,
+        })
+        .catch(() => {})
+    }, 2000)
+    return () => clearTimeout(t)
+  }, [token, candidateEmail, cq.id, answer?.code, answer?.language, locked])
 
   // Switch questions and reset the scratch console (its output belonged to the
   // previous question); code/language are kept per question in `answers`. Done in

@@ -27,7 +27,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -45,6 +45,7 @@ from .models import (
     AssessmentQuestion,
     AssessmentResult,
     CandidateAttempt,
+    CandidateDraft,
     CandidateSlotVariant,
     IntegrityEvent,
     Interviewer,
@@ -67,6 +68,9 @@ from .schemas import (
     AssessmentQuestionOut,
     AssessmentSlotIn,
     AssessmentUpdate,
+    CandidateDraftIn,
+    CandidateDraftOut,
+    CandidateDraftsOut,
     CandidateQuestionPublic,
     CandidateQuestionView,
     CandidateRunIn,
@@ -1063,6 +1067,48 @@ def delete_question(
                 "are recorded against it. Revoke its invites instead."
             ),
         )
+    # A sitting is a record even before (or without) a submission: an attempt is
+    # someone having sat down, and integrity events are evidence — cascading
+    # either away would destroy exactly what they exist to keep (deleting
+    # recorded evidence is the false-clean reading I1 guards against). Without
+    # this check the delete used to 500 on the FK anyway; now it refuses with
+    # the same guidance as the submissions case.
+    invite_ids = list(
+        session.exec(select(Invite.id).where(Invite.question_id == question_id)).all()
+    )
+    activity = session.exec(
+        select(func.count())
+        .select_from(CandidateAttempt)
+        .where(col(CandidateAttempt.invite_id).in_(invite_ids))
+    ).one() if invite_ids else 0
+    activity += session.exec(
+        select(func.count())
+        .select_from(IntegrityEvent)
+        # By this question's own invites OR naming it from inside an assessment
+        # sitting (events record the question that was open).
+        .where(
+            or_(
+                col(IntegrityEvent.invite_id).in_(invite_ids),
+                col(IntegrityEvent.question_id) == question_id,
+            )
+        )
+    ).one()
+    if activity:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot delete question {question_id!r}: candidate activity is recorded "
+                "against it. Revoke its invites instead."
+            ),
+        )
+    # Drafts carry no independent record — unsubmitted work-in-progress goes
+    # with the question, like its invites and test cases. (Every draft names
+    # its question, so this also covers drafts saved via this question's own
+    # invites.)
+    for draft in session.exec(
+        select(CandidateDraft).where(CandidateDraft.question_id == question_id)
+    ).all():
+        session.delete(draft)
     session.delete(q)
     session.commit()
 
@@ -2538,6 +2584,90 @@ def candidate_integrity_events(
         )
     session.commit()
     return Response(status_code=204)
+
+
+@app.put("/invite/{token}/draft", status_code=204)
+def candidate_save_draft(
+    token: str,
+    body: CandidateDraftIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Autosave the candidate's in-progress code server-side (CX2), so work
+    survives a cleared cache, incognito window, or device switch.
+
+    Same identity gates as the rest of the candidate surface (live link +
+    invited recipient + a question this sitting actually serves), but — like
+    /events — NOT gated on "hasn't submitted yet": a save racing the submit by a
+    moment isn't worth failing. Not an attempt and not a submission: saving
+    never starts a clock and never grades, and no interviewer surface reads a
+    draft — it's the candidate's own work-in-progress until they submit.
+    """
+    limiter.check(
+        "draft_save",
+        client_ip(request),
+        config.DRAFT_SAVE_RATE_LIMIT_MAX,
+        config.RATE_LIMIT_WINDOW_S,
+    )
+    invite = _load_invite_or_error(token, session)
+    email = _normalize_email(body.candidate_email)
+    _check_invited(invite, email)
+    question = _resolve_question(invite, body.question_id, email, session)
+
+    draft = session.exec(
+        select(CandidateDraft).where(
+            CandidateDraft.invite_id == invite.id,
+            CandidateDraft.candidate_email == email,
+            CandidateDraft.question_id == question.id,
+        )
+    ).first()
+    if draft is None:
+        draft = CandidateDraft(
+            invite_id=_require_id(invite.id),
+            candidate_email=email,
+            question_id=question.id,
+            code=body.code,
+            language=body.language,
+        )
+    else:
+        draft.code = body.code
+        draft.language = body.language
+    draft.updated_at = datetime.now(timezone.utc)
+    session.add(draft)
+    session.commit()
+    return Response(status_code=204)
+
+
+@app.get("/invite/{token}/draft", response_model=CandidateDraftsOut)
+def candidate_get_drafts(
+    token: str,
+    candidate_email: str,
+    session: Session = Depends(get_session),
+) -> CandidateDraftsOut:
+    """Every autosaved draft of this candidate's sitting, for restore after
+    /start — one fetch covers a whole multi-question assessment. Same gates as
+    the save; returns an empty list rather than 404 when nothing was saved, so
+    the client needs no error path for the common cold start."""
+    invite = _load_invite_or_error(token, session)
+    email = _normalize_email(candidate_email)
+    _check_invited(invite, email)
+    rows = session.exec(
+        select(CandidateDraft).where(
+            CandidateDraft.invite_id == invite.id,
+            CandidateDraft.candidate_email == email,
+        )
+    ).all()
+    return CandidateDraftsOut(
+        drafts=[
+            CandidateDraftOut(
+                question_id=d.question_id,
+                code=d.code,
+                language=d.language,
+                updated_at=d.updated_at,
+            )
+            for d in rows
+        ]
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -23,6 +23,8 @@ vi.mock('../../api', () => {
       submitCandidate: vi.fn(),
       runCandidate: vi.fn(),
       runCandidateTests: vi.fn(),
+      getCandidateDrafts: vi.fn(() => Promise.resolve({ drafts: [] })),
+      saveCandidateDraft: vi.fn(() => Promise.resolve()),
     },
     ApiError,
   }
@@ -519,3 +521,85 @@ describe('CandidatePage', () => {
     expect(await screen.findByText(/invalid/i)).toBeInTheDocument()
   })
 })
+
+describe('server drafts (CX2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({ drafts: [] })
+    vi.mocked(api.saveCandidateDraft).mockResolvedValue(undefined)
+  })
+
+  async function startSitting() {
+    const user = userEvent.setup()
+    renderCandidatePage()
+    await user.type(await screen.findByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+    return user
+  }
+
+  it('restores the server draft when localStorage has nothing (device switch)', async () => {
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({
+      drafts: [
+        { question_id: 'q1', code: 'server saved code', language: 'javascript', updated_at: 'x' },
+      ],
+    })
+
+    await startSitting()
+
+    expect(await screen.findByLabelText(/code editor/i)).toHaveValue('server saved code')
+    expect(screen.getByLabelText(/language/i)).toHaveValue('javascript')
+  })
+
+  it('prefers the same-browser localStorage draft over the server copy', async () => {
+    localStorage.setItem(
+      'assessment-draft:tok123',
+      JSON.stringify({ code: 'local, freshest', language: 'python' }),
+    )
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({
+      drafts: [{ question_id: 'q1', code: 'older server copy', language: 'python', updated_at: 'x' }],
+    })
+
+    await startSitting()
+
+    expect(await screen.findByLabelText(/code editor/i)).toHaveValue('local, freshest')
+  })
+
+  it('autosaves the code to the server while editing', async () => {
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    const user = await startSitting()
+
+    await user.type(await screen.findByLabelText(/code editor/i), 'print(42)')
+    // The server save is debounced (2s) behind the localStorage one.
+    await waitFor(
+      () =>
+        expect(api.saveCandidateDraft).toHaveBeenCalledWith(
+          'tok123',
+          expect.objectContaining({ candidate_email: 'jane@example.com', code: 'print(42)' }),
+        ),
+      { timeout: 4000 },
+    )
+  })
+
+  it('seeds each question of a multi-question sitting from its own draft', async () => {
+    vi.mocked(api.startInvite).mockResolvedValue(multiStartResponse)
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({
+      drafts: [
+        { question_id: 'q2', code: 'draft for merge intervals', language: 'python', updated_at: 'x' },
+      ],
+    })
+
+    const user = await startSitting()
+
+    // q1 had no draft — blank editor.
+    expect(await screen.findByLabelText(/code editor/i)).toHaveValue('')
+    // q2 resumes from its server draft.
+    await user.click(screen.getByRole('tab', { name: /merge intervals/i }))
+    expect(screen.getByLabelText(/code editor/i)).toHaveValue('draft for merge intervals')
+  })
+})
+

@@ -3,6 +3,7 @@ import type {
   AssessmentAttempt,
   AssessmentIn,
   AssessmentOut,
+  CandidateDraftsResponse,
   IntegrityEventIn,
   IntegrityReport,
   Invite,
@@ -307,6 +308,19 @@ export const api = {
       question_id?: string
     },
   ) => request<SubmitResponse>(`/invite/${token}/submit`, { method: 'POST', body: data }),
+
+  /** Server-side autosave (CX2). Fire-and-forget like the integrity events —
+   *  localStorage stays the fast same-browser restore; this survives a cleared
+   *  cache or a device switch. */
+  saveCandidateDraft: (
+    token: string,
+    data: { candidate_email: string; question_id?: string | null; code: string; language: string },
+  ) => request<void>(`/invite/${token}/draft`, { method: 'PUT', body: data }),
+
+  getCandidateDrafts: (token: string, candidate_email: string) =>
+    request<CandidateDraftsResponse>(
+      `/invite/${token}/draft?${new URLSearchParams({ candidate_email })}`,
+    ),
 }
 
 /** Fetch the owner-scoped submissions CSV (authenticated) and trigger a browser
