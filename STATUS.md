@@ -220,18 +220,22 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   - **Structural anti-cheat (our moat — prefer over surveillance):** per-candidate
     unique question variants (see D) makes a leaked bank useless and reduces the need
     for heavy proctoring at all.
-  - **Integrity report — IN PROGRESS (backend landed on
-    `feature/i1-integrity-report`).** Deterministic, DB-free scoring in
-    `integrity.py` (score 0-100 + level none/low/elevated/high + the reasons
-    that drove it; severe signals — blocked outside pastes, devtools — dominate,
-    ambient focus flicker accumulates slowly under per-kind caps; the two
-    context kinds `paste_internal`/`fullscreen_denied` never score). Surfaced as
+  - **Integrity report — DONE 2026-07-31 (branch `feature/i1-integrity-report`).**
+    Deterministic, DB-free scoring in `integrity.py` (score 0-100 + level
+    none/low/elevated/high + the reasons that drove it; severe signals —
+    blocked outside pastes, devtools — dominate, ambient focus flicker
+    accumulates slowly under per-kind caps; the two context kinds
+    `paste_internal`/`fullscreen_denied` never score). Surfaced as
     `IntegrityReportOut.risk` (recorded events are always scored, whatever the
-    monitoring flag; null only for a quiet unmonitored sitting) and
-    `AssessmentAttemptOut.integrity_risk` (level; null = unmonitored, matching
-    the count column). A triage hint, never proof, never part of a verdict.
-    Remaining: the UI (risk banner on the Integrity tab + risk-aware grid chip)
-    — mockup pending sign-off.
+    monitoring flag; null only for a quiet unmonitored sitting),
+    `AssessmentAttemptOut.integrity_risk`, and `integrity_risk` on both list
+    rows + the CSV (null/blank = unmonitored, matching the count column). UI
+    (mockup signed off before the `.tsx`): a risk banner on the Integrity tab
+    — level pill + score, reasons with point contributions, and an always-on
+    "not proof, never part of the verdict" disclaimer — and the shared grid
+    chip now colours by level (high → red, elevated → amber, low → neutral)
+    on the attempts grid, submissions list, and quick-screen table. A triage
+    hint, never proof, never part of a verdict.
   - **Identity / webcam — DEFERRED (do not build yet).** Start photo, periodic
     snapshots, optional continuous video. Held back deliberately: the cost isn't the
     capture, it's consent/compliance (GDPR/BIPA), storage, and bias/false-positive

@@ -262,11 +262,36 @@ describe('the interviewer panel', () => {
             pastes_blocked: 0,
             devtools_opens: 0,
           },
+          risk: { score: 0, level: 'none', reasons: [] },
           events: [],
         })}
       />,
     )
     expect(screen.getByText('No signals')).toBeInTheDocument()
+    expect(screen.getByText('0 / 100')).toBeInTheDocument()
+  })
+
+  it('shows the risk banner with the reasons that drove the level', () => {
+    render(
+      <IntegrityPanel
+        report={report({
+          risk: {
+            score: 45,
+            level: 'elevated',
+            reasons: [
+              { label: '1 outside paste blocked', points: 30 },
+              { label: 'devtools opened 1 time', points: 15 },
+            ],
+          },
+        })}
+      />,
+    )
+    expect(screen.getByText('Elevated')).toBeInTheDocument()
+    expect(screen.getByText('45 / 100')).toBeInTheDocument()
+    expect(screen.getByText('1 outside paste blocked')).toBeInTheDocument()
+    expect(screen.getByText('+30')).toBeInTheDocument()
+    // The not-proof disclaimer is part of the banner, always shown with it.
+    expect(screen.getByText(/never part of the verdict/)).toBeInTheDocument()
   })
 
   it('does not let an unmonitored sitting read as a clean one', () => {
@@ -346,6 +371,26 @@ describe('states that must not look alike', () => {
     expect(screen.getByText('4')).toHaveAttribute(
       'title',
       '4 signals, including 1 blocked paste',
+    )
+  })
+
+  it('colours the grid chip by risk level, not only by blocked pastes', () => {
+    const { rerender } = render(<IntegrityCell signals={2} blocked={2} risk="high" />)
+    expect(screen.getByText('2')).toHaveClass('chip-bad')
+    expect(screen.getByText('2')).toHaveAttribute(
+      'title',
+      'risk high — 2 signals, including 2 blocked pastes',
+    )
+
+    rerender(<IntegrityCell signals={3} blocked={0} risk="elevated" />)
+    expect(screen.getByText('3')).toHaveClass('chip-warn')
+
+    // Ambient-only signals no longer read amber: low risk is neutral.
+    rerender(<IntegrityCell signals={2} blocked={0} risk="low" />)
+    expect(screen.getByText('2')).toHaveClass('chip-neutral')
+    expect(screen.getByText('2')).toHaveAttribute(
+      'title',
+      'risk low — 2 signals recorded during this sitting',
     )
   })
 })

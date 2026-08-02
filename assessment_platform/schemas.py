@@ -396,6 +396,7 @@ class SubmissionSummaryOut(BaseModel):
     # interviewer's direct submission), which must not read as a clean zero.
     integrity_signals: int | None = None
     integrity_blocked: int = 0  # of those, pastes actually blocked (the severe kind)
+    integrity_risk: str | None = None  # sitting's risk level; null when signals is
     # Set when this submission came in through an assessment invite (A3): lets the
     # list tell an assessment sitting apart from a standalone single-question
     # attempt without a second fetch per row.
@@ -663,6 +664,7 @@ class DashboardSubmissionOut(BaseModel):
     # Integrity signals for the sitting (I1); None = unmonitored, not zero.
     integrity_signals: int | None = None
     integrity_blocked: int = 0
+    integrity_risk: str | None = None  # sitting's risk level; null when signals is
     created_at: datetime
 
 

@@ -559,18 +559,22 @@ def test_lists_and_export_carry_the_sittings_signal_count(client, monkeypatch) -
     row = client.get("/submissions").json()["items"][0]
     assert row["integrity_signals"] == 2
     assert row["integrity_blocked"] == 1
+    assert row["integrity_risk"] == "elevated"  # blocked paste 30 + focus loss 4
 
     q_row = client.get("/questions/q1/submissions").json()["items"][0]
     assert q_row["integrity_signals"] == 2
     assert q_row["integrity_blocked"] == 1
+    assert q_row["integrity_risk"] == "elevated"
 
     lines = client.get("/submissions/export").text.splitlines()
     header = lines[0].split(",")
     signals_col = header.index("integrity_signals")
     blocked_col = header.index("integrity_blocked_pastes")
+    risk_col = header.index("integrity_risk")
     cells = lines[1].split(",")
     assert cells[signals_col] == "2"
     assert cells[blocked_col] == "1"
+    assert cells[risk_col] == "elevated"
 
 
 def test_lists_and_export_report_unmonitored_as_blank_not_zero(client, monkeypatch) -> None:
@@ -579,15 +583,19 @@ def test_lists_and_export_report_unmonitored_as_blank_not_zero(client, monkeypat
 
     row = client.get("/submissions").json()["items"][0]
     assert row["integrity_signals"] is None
+    assert row["integrity_risk"] is None
 
     q_row = client.get("/questions/q1/submissions").json()["items"][0]
     assert q_row["integrity_signals"] is None
+    assert q_row["integrity_risk"] is None
 
     lines = client.get("/submissions/export").text.splitlines()
     header = lines[0].split(",")
     signals_col = header.index("integrity_signals")
+    risk_col = header.index("integrity_risk")
     cells = lines[1].split(",")
     assert cells[signals_col] == ""  # unmonitored ⇒ blank, never a clean-looking 0
+    assert cells[risk_col] == ""
 
 
 def test_a_direct_submission_has_no_sitting_in_the_lists(client, monkeypatch) -> None:

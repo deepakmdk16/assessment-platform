@@ -1,7 +1,7 @@
 /** The interviewer's view of a sitting's integrity signals (I1): summary counts,
  *  then the timeline. Evidence for a human — it never touches the verdict. */
 
-import type { IntegrityEvent, IntegrityReport } from '../types'
+import type { IntegrityEvent, IntegrityReport, IntegrityRisk } from '../types'
 
 /** Offsets are from the candidate's own start, so they line up with the clock
  *  without any date arithmetic. */
@@ -63,8 +63,41 @@ function detail(e: IntegrityEvent): string | null {
   return parts.length > 0 ? parts.join(' · ') : null
 }
 
+/** The triage banner above the summary: level + score + what drove it. The
+ *  disclaimer is part of the banner and always shown — the score runs over
+ *  browser-side signals, so it is a hint to look closer, never proof. */
+function RiskBanner({ risk }: { risk: IntegrityRisk }) {
+  const levelLabel: Record<string, string> = {
+    high: 'High',
+    elevated: 'Elevated',
+    low: 'Low',
+    none: 'No signals',
+  }
+  return (
+    <div className="risk-banner">
+      <span className={`risk-level risk-${risk.level}`}>
+        {levelLabel[risk.level] ?? risk.level}
+        <span className="risk-score">{risk.score} / 100</span>
+      </span>
+      {risk.reasons.length > 0 && (
+        <span className="risk-reasons">
+          {risk.reasons.map((r) => (
+            <span className="risk-reason" key={r.label}>
+              {r.label}
+              <span className="pts">+{r.points}</span>
+            </span>
+          ))}
+        </span>
+      )}
+      <p className="risk-disclaimer">
+        A triage hint from browser-side signals — not proof, and never part of the verdict.
+      </p>
+    </div>
+  )
+}
+
 export function IntegrityPanel({ report }: { report: IntegrityReport }) {
-  const { monitored, summary, events } = report
+  const { monitored, summary, events, risk } = report
 
   // Recorded signals always win over the monitored flag: if a sitting produced
   // events, showing them is never wrong, whereas suppressing them would hide
@@ -84,9 +117,9 @@ export function IntegrityPanel({ report }: { report: IntegrityReport }) {
   return (
     <div className="integrity">
       <h3>Integrity</h3>
+      {risk != null && <RiskBanner risk={risk} />}
       {summary.total === 0 ? (
         <p className="empty-state">
-          <span className="chip chip-good">No signals</span>
           Stayed in fullscreen, no outside pastes, never left the tab.
         </p>
       ) : (
@@ -154,21 +187,32 @@ export function IntegrityChip({ report }: { report: IntegrityReport }) {
 export function IntegrityCell({
   signals,
   blocked,
+  risk,
 }: {
   signals?: number | null
   blocked: number
+  /** The sitting's risk level; drives the colour when present (high → red,
+   *  elevated → amber, low → neutral). Absent falls back to blocked-driven. */
+  risk?: string | null
 }) {
   if (signals == null) return <span className="muted">Not monitored</span>
   if (signals === 0) return <span className="muted">—</span>
+  const chipClass =
+    risk != null
+      ? risk === 'high'
+        ? 'chip chip-bad'
+        : risk === 'elevated'
+          ? 'chip chip-warn'
+          : 'chip chip-neutral'
+      : blocked > 0
+        ? 'chip chip-bad'
+        : 'chip chip-warn'
+  const detail =
+    blocked > 0
+      ? `${signals} signals, including ${blocked} blocked paste${blocked === 1 ? '' : 's'}`
+      : `${signals} signal${signals === 1 ? '' : 's'} recorded during this sitting`
   return (
-    <span
-      className={blocked > 0 ? 'chip chip-bad' : 'chip chip-warn'}
-      title={
-        blocked > 0
-          ? `${signals} signals, including ${blocked} blocked paste${blocked === 1 ? '' : 's'}`
-          : `${signals} signal${signals === 1 ? '' : 's'} recorded during this sitting`
-      }
-    >
+    <span className={chipClass} title={risk != null ? `risk ${risk} — ${detail}` : detail}>
       {signals}
     </span>
   )

@@ -274,6 +274,8 @@ export interface AssessmentAttempt {
   integrity_signals?: number | null
   /** Of those, pastes actually blocked — the severe kind. */
   integrity_blocked?: number
+  /** The sitting's risk level (none|low|elevated|high); null when unmonitored. */
+  integrity_risk?: string | null
 }
 
 // --- Analytics (AR1) -------------------------------------------------------
@@ -444,6 +446,7 @@ export interface SubmissionRow {
   // Integrity signals for the sitting (I1); null/undefined = unmonitored, not zero.
   integrity_signals?: number | null
   integrity_blocked?: number
+  integrity_risk?: string | null
   created_at: string
 }
 
@@ -464,6 +467,7 @@ export interface SubmissionSummary {
   // Integrity signals for the sitting (I1); null/undefined = unmonitored, not zero.
   integrity_signals?: number | null
   integrity_blocked?: number
+  integrity_risk?: string | null
   // Set when this submission came in through an assessment invite (A3).
   assessment_id?: string | null
   assessment_title?: string | null
@@ -578,6 +582,19 @@ export interface IntegrityEvent extends IntegrityEventIn {
   blocked: boolean
 }
 
+export interface IntegrityRiskReason {
+  label: string
+  points: number
+}
+
+/** The sitting's triage hint (0-100 + level + what drove it). A deterrent-grade
+ *  signal to look closer — never proof, never part of the verdict. */
+export interface IntegrityRisk {
+  score: number
+  level: string // none | low | elevated | high
+  reasons: IntegrityRiskReason[]
+}
+
 export interface IntegritySummary {
   total: number
   focus_losses: number
@@ -592,5 +609,7 @@ export interface IntegritySummary {
 export interface IntegrityReport {
   monitored: boolean
   summary: IntegritySummary
+  /** Null only when there's nothing to score AND the sitting was unmonitored. */
+  risk?: IntegrityRisk | null
   events: IntegrityEvent[]
 }
