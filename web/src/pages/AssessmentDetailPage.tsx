@@ -414,8 +414,10 @@ export function AssessmentDetailPage() {
               Indefinite (no timer)
             </label>
             <p className="cellsub">
-              A changed time limit only applies to attempts that start after you save — it can’t
-              revive an attempt whose clock has already run out. Re-invite to give a fresh clock.
+              Applies to every attempt immediately — a timed attempt’s deadline is its own start
+              time plus this limit, so changing it also moves the deadline for candidates
+              mid-sitting (their on-screen countdown updates only when they reload). It can’t
+              restart a sitting whose timer already ran out — re-invite to give a fresh clock.
             </p>
           </div>
           <div className="field">

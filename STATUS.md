@@ -109,9 +109,16 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   per-question ("Quick screen") results table, and the CSV export (`late` column)
   — the pills are the `chip-late` amber style. Backend + web tests
   updated (the old "past-grace ⇒ 410" timer test now asserts 201 + `late=true`);
-  full suites green. **Note:** editing an existing assessment's duration does *not*
-  rescue already-expired attempts (deadline = each attempt's own `started_at` +
-  duration); re-invite to give a fresh clock.
+  full suites green. **Note (sharpened 2026-08-03 while wiring the edit
+  dialog):** the deadline is each attempt's own `started_at` + the assessment's
+  *current* duration, read live at submit — so editing the duration moves
+  every existing attempt's deadline immediately, in both directions (a shorter
+  limit will flag in-flight candidates' future submits late; a longer one even
+  un-lates a not-yet-submitted expired attempt server-side). What an edit
+  still can't do is restart a sitting: the candidate's client auto-submitted
+  at the buzzer it fetched at `/start` (the countdown only re-reads on
+  reload), so re-invite remains the way to give a fresh clock. The edit
+  dialog's duration hint states these semantics.
 
 ---
 
