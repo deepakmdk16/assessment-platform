@@ -109,9 +109,16 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   per-question ("Quick screen") results table, and the CSV export (`late` column)
   — the pills are the `chip-late` amber style. Backend + web tests
   updated (the old "past-grace ⇒ 410" timer test now asserts 201 + `late=true`);
-  full suites green. **Note:** editing an existing assessment's duration does *not*
-  rescue already-expired attempts (deadline = each attempt's own `started_at` +
-  duration); re-invite to give a fresh clock.
+  full suites green. **Note (sharpened 2026-08-03 while wiring the edit
+  dialog):** the deadline is each attempt's own `started_at` + the assessment's
+  *current* duration, read live at submit — so editing the duration moves
+  every existing attempt's deadline immediately, in both directions (a shorter
+  limit will flag in-flight candidates' future submits late; a longer one even
+  un-lates a not-yet-submitted expired attempt server-side). What an edit
+  still can't do is restart a sitting: the candidate's client auto-submitted
+  at the buzzer it fetched at `/start` (the countdown only re-reads on
+  reload), so re-invite remains the way to give a fresh clock. The edit
+  dialog's duration hint states these semantics.
 
 ---
 
@@ -123,6 +130,9 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   callers 429 everyone else). Support exists, defaults OFF — safe for direct dev,
   wrong the moment there's a load balancer in front. A deploy-time checklist item.
   Chained proxies (CDN → LB) need `client_ip()` revisited, as it trusts one hop.
+  The second limiter deploy knob is `RATE_LIMIT_BACKEND=db` for any multi-worker
+  deploy (SEC4, §C — done; with the default `memory`, N workers multiply every
+  limit by N).
 - **DB calls run on the event loop in the async agent routes (residual).** The six
   agent-calling routes `await` the agent over `httpx.AsyncClient`, so slow agent I/O
   no longer holds a pooled thread. But the DB is still synchronous SQLModel, so the
@@ -175,8 +185,9 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   (backend pytest, web vitest incl. new panel + format-helper tests, lint, types,
   build); mockup signed off before the `.tsx`. **Feature complete.**
 - **I1 · Integrity / proctoring suite (staged; scope agreed 2026-07-24).**
-  **Stage 1 (browser telemetry) DONE 2026-07-28**; the other two active parts
-  remain. **Webcam/video stays DEFERRED.**
+  All three active parts are DONE — browser telemetry (2026-07-28), structural
+  anti-cheat (variant sets, see below), and the integrity report (2026-07-31).
+  **Webcam/video stays DEFERRED.**
   - **Browser telemetry — DONE 2026-07-28.** `IntegrityEvent` (migration
     `a9d1f4c07b53`, additive) records six signal kinds per sitting, keyed like
     `CandidateAttempt` by `(invite, candidate_email)` because a tab switch belongs
@@ -223,11 +234,15 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
     on both list rows; `integrity_signals`/`integrity_blocked_pastes` CSV columns,
     blank — never 0 — for an unmonitored sitting), reusing the attempts-grid
     semantics via one batched `_integrity_by_submission` helper and the existing
-    `IntegrityCell` chip. **Remaining known gap:** assessments are not editable
-    from the UI at all (`PUT /assessments/{id}` has no caller), so `proctored` is
-    effectively create-only; when an edit page is added, note that the endpoint is
-    full-replace and `proctored` defaults true, so a PUT omitting it would
-    silently re-enable monitoring.
+    `IntegrityCell` chip. **Gap closed 2026-08-03:** assessment settings are
+    now editable from the UI — an Edit dialog on `AssessmentDetailPage` (title,
+    timer, monitoring, branding) calls `PUT /assessments/{id}`, always sending
+    the current `proctored` explicitly (the endpoint is full-replace and
+    defaults it true) and resending the slot list verbatim so the A9 lock never
+    trips on a settings-only edit. The question set itself stays deliberately
+    non-editable in the UI: post-invite the server 409s it, and pre-invite
+    editing would mean rebuilding the builder on the detail page — not planned
+    unless there's real demand (the dialog says to create a new assessment).
   - **Structural anti-cheat (our moat — prefer over surveillance):** per-candidate
     unique question variants (see D) makes a leaked bank useless and reduces the need
     for heavy proctoring at all.
@@ -283,9 +298,22 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   regenerating a drifting variant instead of the advisory parity warning.
 - **SEC1 · `REGISTRATION_CODE` unset by default → open interviewer sign-up.** Must be
   set in prod (`config.py:110`). Deploy-checklist item. **XS.**
-- **SEC4 · Rate limiter is per-process**, won't hold across workers/instances
-  (`ratelimit.py`). Fine for single-process dev; needs a shared store for horizontal
-  scale. **M.**
+- **SEC4 · Rate limiter shared store — DONE 2026-08-03.** `RATE_LIMIT_BACKEND`
+  selects the backend: `memory` (default, the existing in-process sliding
+  window — unchanged for dev/tests) or `db` — fixed-window counters in a new
+  `RateLimitCounter` table (migration `a4f8c2d6e9b1`, additive; nothing reads
+  it unless the backend is selected), shared by every worker/instance on the
+  same database, so limits hold fleet-wide with no new infrastructure (works
+  on SQLite and Postgres alike). The hot path is one conditional atomic
+  `UPDATE … SET count = count + 1 WHERE count < max`, so concurrent workers
+  can't jointly overshoot; the first-hit INSERT race falls back to the same
+  increment; a 429'd request never consumes quota (matching the memory
+  backend); dead windows are swept lazily with a 1-day grace. 9 offline unit
+  tests, driven through two limiter instances wherever cross-process sharing
+  is the claim. **Deploy-checklist item:** set `RATE_LIMIT_BACKEND=db`
+  whenever the API runs more than one process — with `memory`, N workers
+  silently multiply every limit by N (companion knob to
+  `TRUST_PROXY_HEADERS`, §B).
 
 ---
 

@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AssessmentDetailPage } from '../AssessmentDetailPage'
-import { api } from '../../api'
+import { api, ApiError } from '../../api'
 import type { AssessmentAttempt, AssessmentOut, Invite } from '../../types'
 
 vi.mock('../../api', () => {
@@ -20,6 +20,7 @@ vi.mock('../../api', () => {
       listAssessmentInvites: vi.fn(),
       listAssessmentAttempts: vi.fn(),
       createAssessmentInvite: vi.fn(),
+      updateAssessment: vi.fn(),
     },
     ApiError,
   }
@@ -222,5 +223,90 @@ describe('AssessmentDetailPage — attempts (A3/A11)', () => {
     const chip = screen.getByTitle(/two sum · submitted late: pass/i)
     expect(chip).toHaveTextContent('1')
     expect(chip).toHaveClass('late')
+  })
+})
+
+describe('AssessmentDetailPage — edit settings', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.getAssessment).mockResolvedValue(assessment)
+    vi.mocked(api.listAssessmentInvites).mockResolvedValue([])
+    vi.mocked(api.listAssessmentAttempts).mockResolvedValue([])
+  })
+
+  async function openEditDialog(user: ReturnType<typeof userEvent.setup>) {
+    renderPage()
+    await screen.findByRole('heading', { name: /backend screen/i })
+    await user.click(screen.getByRole('button', { name: /^edit$/i }))
+    return within(screen.getByRole('dialog'))
+  }
+
+  it('saves settings with the current proctored value and unchanged slots, then re-renders', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.updateAssessment).mockResolvedValue({
+      ...assessment,
+      title: 'Backend Screen v2',
+      proctored: false,
+    })
+
+    const dialog = await openEditDialog(user)
+    await user.clear(dialog.getByLabelText(/title/i))
+    await user.type(dialog.getByLabelText(/title/i), 'Backend Screen v2')
+    await user.click(dialog.getByLabelText(/monitor this assessment/i))
+    await user.click(dialog.getByRole('button', { name: /save changes/i }))
+
+    // The PUT is full-replace: proctored must be sent explicitly (omitted, the
+    // server resets it to true) and the slot list resent verbatim so the A9
+    // post-invite lock never trips on a settings-only edit.
+    await waitFor(() =>
+      expect(api.updateAssessment).toHaveBeenCalledWith('week-1', {
+        title: 'Backend Screen v2',
+        duration_minutes: 90,
+        slots: [{ question_id: 'two-sum' }],
+        org_name: null,
+        logo_url: null,
+        proctored: false,
+      }),
+    )
+    // The page re-renders from the response: new title, and the header calls
+    // out the now-unmonitored sitting.
+    expect(await screen.findByRole('heading', { name: /backend screen v2/i })).toBeInTheDocument()
+    expect(screen.getByText(/not monitored/i)).toBeInTheDocument()
+  })
+
+  it('resends a variant-set slot as a variant_set_id, not a question_id (VS2)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getAssessment).mockResolvedValue({
+      ...assessment,
+      questions: [
+        { question_id: null, variant_set_id: 's1', variant_count: 3, position: 0, title: 'Pairs' },
+      ],
+    })
+    vi.mocked(api.updateAssessment).mockResolvedValue(assessment)
+
+    const dialog = await openEditDialog(user)
+    await user.click(dialog.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() =>
+      expect(api.updateAssessment).toHaveBeenCalledWith(
+        'week-1',
+        expect.objectContaining({ slots: [{ variant_set_id: 's1' }] }),
+      ),
+    )
+  })
+
+  it('keeps the dialog open and shows the API error when the save fails', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.updateAssessment).mockRejectedValue(
+      new ApiError(409, "this assessment's question set can't change"),
+    )
+
+    const dialog = await openEditDialog(user)
+    await user.click(dialog.getByRole('button', { name: /save changes/i }))
+
+    expect(await dialog.findByRole('alert')).toHaveTextContent(/question set can't change/i)
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    // The header still shows the stored title — nothing was applied.
+    expect(screen.getByRole('heading', { name: /^backend screen$/i })).toBeInTheDocument()
   })
 })
