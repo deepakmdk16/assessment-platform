@@ -134,9 +134,15 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or None
 SMTP_FROM = os.getenv("SMTP_FROM", "no-reply@assessment.local")
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
 
-# In-process rate limits (requests per window, seconds). Guards brute-force on
-# login and spam on the public candidate submit (which triggers paid agent jobs).
+# Rate limits (requests per window, seconds). Guards brute-force on login and
+# spam on the public candidate submit (which triggers paid agent jobs).
 # Set the *_MAX to 0 to disable a given limiter.
+# Backend (SEC4): "memory" counts per process — fine for a single-process deploy,
+# but N workers silently multiply every limit by N. Set "db" whenever the API
+# runs with more than one process/instance: counters live in the shared database,
+# so the limit holds fleet-wide. Deploy-checklist item alongside
+# TRUST_PROXY_HEADERS (both make the limiter mean what it says in prod).
+RATE_LIMIT_BACKEND = os.getenv("RATE_LIMIT_BACKEND", "memory")
 RATE_LIMIT_WINDOW_S = int(os.getenv("RATE_LIMIT_WINDOW_S", "60"))
 LOGIN_RATE_LIMIT_MAX = int(os.getenv("LOGIN_RATE_LIMIT_MAX", "10"))
 SUBMIT_RATE_LIMIT_MAX = int(os.getenv("SUBMIT_RATE_LIMIT_MAX", "20"))

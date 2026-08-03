@@ -123,6 +123,9 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   callers 429 everyone else). Support exists, defaults OFF — safe for direct dev,
   wrong the moment there's a load balancer in front. A deploy-time checklist item.
   Chained proxies (CDN → LB) need `client_ip()` revisited, as it trusts one hop.
+  The second limiter deploy knob is `RATE_LIMIT_BACKEND=db` for any multi-worker
+  deploy (SEC4, §C — done; with the default `memory`, N workers multiply every
+  limit by N).
 - **DB calls run on the event loop in the async agent routes (residual).** The six
   agent-calling routes `await` the agent over `httpx.AsyncClient`, so slow agent I/O
   no longer holds a pooled thread. But the DB is still synchronous SQLModel, so the
@@ -288,9 +291,22 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   regenerating a drifting variant instead of the advisory parity warning.
 - **SEC1 · `REGISTRATION_CODE` unset by default → open interviewer sign-up.** Must be
   set in prod (`config.py:110`). Deploy-checklist item. **XS.**
-- **SEC4 · Rate limiter is per-process**, won't hold across workers/instances
-  (`ratelimit.py`). Fine for single-process dev; needs a shared store for horizontal
-  scale. **M.**
+- **SEC4 · Rate limiter shared store — DONE 2026-08-03.** `RATE_LIMIT_BACKEND`
+  selects the backend: `memory` (default, the existing in-process sliding
+  window — unchanged for dev/tests) or `db` — fixed-window counters in a new
+  `RateLimitCounter` table (migration `a4f8c2d6e9b1`, additive; nothing reads
+  it unless the backend is selected), shared by every worker/instance on the
+  same database, so limits hold fleet-wide with no new infrastructure (works
+  on SQLite and Postgres alike). The hot path is one conditional atomic
+  `UPDATE … SET count = count + 1 WHERE count < max`, so concurrent workers
+  can't jointly overshoot; the first-hit INSERT race falls back to the same
+  increment; a 429'd request never consumes quota (matching the memory
+  backend); dead windows are swept lazily with a 1-day grace. 9 offline unit
+  tests, driven through two limiter instances wherever cross-process sharing
+  is the claim. **Deploy-checklist item:** set `RATE_LIMIT_BACKEND=db`
+  whenever the API runs more than one process — with `memory`, N workers
+  silently multiply every limit by N (companion knob to
+  `TRUST_PROXY_HEADERS`, §B).
 
 ---
 

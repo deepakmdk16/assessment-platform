@@ -441,3 +441,23 @@ class AssessmentResult(SQLModel, table=True):
     received_at: datetime = Field(default_factory=_utcnow)
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
+
+
+class RateLimitCounter(SQLModel, table=True):
+    """One fixed-window rate-limit counter (SEC4, `RATE_LIMIT_BACKEND=db`).
+
+    A row per (bucket, client, window): every worker/instance sharing the
+    database shares the count, which is what makes the limit hold across
+    horizontally-scaled deploys — the in-memory limiter's counters are invisible
+    to sibling processes. `window_start` is wall-clock epoch seconds floored to
+    the window, so processes agree on the window without coordinating; rows from
+    past windows are dead weight and are purged lazily on later checks.
+
+    Deliberately has no created_at/updated_at: rows are high-churn counters, not
+    durable records, and the window key already carries the only time that matters.
+    """
+
+    bucket: str = Field(primary_key=True)
+    client: str = Field(primary_key=True)
+    window_start: int = Field(primary_key=True, index=True)
+    count: int = 1
