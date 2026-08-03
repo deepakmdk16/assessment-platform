@@ -175,8 +175,9 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   (backend pytest, web vitest incl. new panel + format-helper tests, lint, types,
   build); mockup signed off before the `.tsx`. **Feature complete.**
 - **I1 · Integrity / proctoring suite (staged; scope agreed 2026-07-24).**
-  **Stage 1 (browser telemetry) DONE 2026-07-28**; the other two active parts
-  remain. **Webcam/video stays DEFERRED.**
+  All three active parts are DONE — browser telemetry (2026-07-28), structural
+  anti-cheat (variant sets, see below), and the integrity report (2026-07-31).
+  **Webcam/video stays DEFERRED.**
   - **Browser telemetry — DONE 2026-07-28.** `IntegrityEvent` (migration
     `a9d1f4c07b53`, additive) records six signal kinds per sitting, keyed like
     `CandidateAttempt` by `(invite, candidate_email)` because a tab switch belongs
@@ -223,11 +224,15 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
     on both list rows; `integrity_signals`/`integrity_blocked_pastes` CSV columns,
     blank — never 0 — for an unmonitored sitting), reusing the attempts-grid
     semantics via one batched `_integrity_by_submission` helper and the existing
-    `IntegrityCell` chip. **Remaining known gap:** assessments are not editable
-    from the UI at all (`PUT /assessments/{id}` has no caller), so `proctored` is
-    effectively create-only; when an edit page is added, note that the endpoint is
-    full-replace and `proctored` defaults true, so a PUT omitting it would
-    silently re-enable monitoring.
+    `IntegrityCell` chip. **Gap closed 2026-08-03:** assessment settings are
+    now editable from the UI — an Edit dialog on `AssessmentDetailPage` (title,
+    timer, monitoring, branding) calls `PUT /assessments/{id}`, always sending
+    the current `proctored` explicitly (the endpoint is full-replace and
+    defaults it true) and resending the slot list verbatim so the A9 lock never
+    trips on a settings-only edit. The question set itself stays deliberately
+    non-editable in the UI: post-invite the server 409s it, and pre-invite
+    editing would mean rebuilding the builder on the detail page — not planned
+    unless there's real demand (the dialog says to create a new assessment).
   - **Structural anti-cheat (our moat — prefer over surveillance):** per-candidate
     unique question variants (see D) makes a leaked bank useless and reduces the need
     for heavy proctoring at all.

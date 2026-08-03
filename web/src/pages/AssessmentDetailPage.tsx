@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
@@ -17,6 +17,19 @@ export function AssessmentDetailPage() {
   const [undelivered, setUndelivered] = useState<InviteDelivery[]>([])
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  // Edit dialog (settings only — title/timer/monitoring/branding). The question
+  // set is deliberately not editable here: post-invite the server locks it (A9),
+  // and pre-invite it would mean rebuilding the whole builder on this page.
+  const [editOpen, setEditOpen] = useState(false)
+  const editDialogRef = useRef<HTMLDialogElement>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editDuration, setEditDuration] = useState(60)
+  const [editIndefinite, setEditIndefinite] = useState(false)
+  const [editOrgName, setEditOrgName] = useState('')
+  const [editLogoUrl, setEditLogoUrl] = useState('')
+  const [editProctored, setEditProctored] = useState(true)
+  const [editError, setEditError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -58,6 +71,58 @@ export function AssessmentDetailPage() {
     }
   }
 
+  // Drive the native <dialog> from state (same pattern as the Quick-screen
+  // dialog): focus trapping, Esc-to-close, and the backdrop come for free.
+  useEffect(() => {
+    const el = editDialogRef.current
+    if (!el) return
+    if (editOpen && !el.open) el.showModal()
+    if (!editOpen && el.open) el.close()
+  }, [editOpen, assessment])
+
+  function openEdit() {
+    if (!assessment) return
+    setEditTitle(assessment.title)
+    setEditIndefinite(assessment.duration_minutes == null)
+    setEditDuration(assessment.duration_minutes ?? 60)
+    setEditOrgName(assessment.org_name ?? '')
+    setEditLogoUrl(assessment.logo_url ?? '')
+    setEditProctored(assessment.proctored)
+    setEditError(null)
+    setEditOpen(true)
+  }
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault()
+    if (!id || !assessment) return
+    setEditError(null)
+    setSaving(true)
+    try {
+      const updated = await api.updateAssessment(id, {
+        title: editTitle,
+        duration_minutes: editIndefinite ? null : editDuration,
+        // The PUT is full-replace: resend the current slots verbatim (an
+        // unchanged slot signature never trips the A9 post-invite lock) and
+        // always send `proctored` explicitly — omitted, the server would
+        // silently reset it to true.
+        slots: assessment.questions.map((q) =>
+          q.variant_set_id
+            ? { variant_set_id: q.variant_set_id }
+            : { question_id: q.question_id ?? undefined },
+        ),
+        org_name: editOrgName.trim() || null,
+        logo_url: editLogoUrl.trim() || null,
+        proctored: editProctored,
+      })
+      setAssessment(updated)
+      setEditOpen(false)
+    } catch (err) {
+      setEditError(err instanceof ApiError ? err.message : 'Failed to save changes')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function copyUrl(url: string) {
     try {
       await navigator.clipboard.writeText(url)
@@ -87,9 +152,14 @@ export function AssessmentDetailPage() {
             {!assessment.proctored && <> · Not monitored</>}
           </div>
         </div>
-        {assessment.logo_url && (
-          <img src={assessment.logo_url} alt="" className="ide-brand-logo" />
-        )}
+        <div className="head-actions">
+          {assessment.logo_url && (
+            <img src={assessment.logo_url} alt="" className="ide-brand-logo" />
+          )}
+          <button type="button" className="btn sec sm" onClick={openEdit}>
+            Edit
+          </button>
+        </div>
       </div>
 
       {error && <p className="form-error">{error}</p>}
@@ -303,6 +373,109 @@ export function AssessmentDetailPage() {
           </div>
         </aside>
       </div>
+
+      <dialog
+        ref={editDialogRef}
+        className="modal"
+        aria-labelledby="edit-dialog-title"
+        onClose={() => setEditOpen(false)}
+      >
+        <form className="stack" onSubmit={handleSave}>
+          <h2 id="edit-dialog-title">Edit assessment</h2>
+          <div className="field">
+            <label htmlFor="edit-title">Title</label>
+            <input
+              id="edit-title"
+              value={editTitle}
+              required
+              autoFocus
+              onChange={(e) => setEditTitle(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="edit-duration">Time allowed (whole assessment)</label>
+            <div className="inline-field">
+              <input
+                id="edit-duration"
+                type="number"
+                min={1}
+                value={editDuration}
+                disabled={editIndefinite}
+                onChange={(e) => setEditDuration(Number(e.target.value))}
+              />
+              <span className="muted">minutes</span>
+            </div>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={editIndefinite}
+                onChange={(e) => setEditIndefinite(e.target.checked)}
+              />
+              Indefinite (no timer)
+            </label>
+            <p className="cellsub">
+              A changed time limit only applies to attempts that start after you save — it can’t
+              revive an attempt whose clock has already run out. Re-invite to give a fresh clock.
+            </p>
+          </div>
+          <div className="field">
+            <label htmlFor="edit-proctored">Monitoring</label>
+            <label className="check">
+              <input
+                id="edit-proctored"
+                type="checkbox"
+                checked={editProctored}
+                onChange={(e) => setEditProctored(e.target.checked)}
+              />
+              Monitor this assessment
+            </label>
+            <p className="cellsub">
+              Applies to invites sent after you save. Invites already sent keep the monitoring
+              setting they went out with.
+            </p>
+          </div>
+          <div className="field">
+            <label htmlFor="edit-org">Organization name</label>
+            <input
+              id="edit-org"
+              placeholder="e.g. Acme Corp"
+              value={editOrgName}
+              onChange={(e) => setEditOrgName(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="edit-logo">Logo URL</label>
+            <input
+              id="edit-logo"
+              placeholder="https://…"
+              value={editLogoUrl}
+              onChange={(e) => setEditLogoUrl(e.target.value)}
+            />
+          </div>
+          <p className="cellsub">
+            To change the questions, create a new assessment — the question set is fixed once
+            candidates have been invited.
+          </p>
+          {editError && (
+            <p role="alert" className="form-error">
+              {editError}
+            </p>
+          )}
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="btn sec"
+              onClick={() => setEditOpen(false)}
+              disabled={saving}
+            >
+              Cancel
+            </button>
+            <button type="submit" className="btn" disabled={saving}>
+              {saving ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </form>
+      </dialog>
     </div>
   )
 }

@@ -267,6 +267,11 @@
   font-size: 0.88rem;
   margin-top: 0.2rem;
 }
+.page-head .head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
 
 .count {
   font-family: var(--font-mono);
