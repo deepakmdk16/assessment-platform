@@ -208,3 +208,7 @@ Still open before production:
   key / caller auth there.
 - Candidate `code` is untrusted; the agent sandboxes execution, but treat stored
   code as untrusted data here too.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
