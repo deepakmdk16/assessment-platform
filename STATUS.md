@@ -321,10 +321,9 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
 
 Not scheduled; the durable idea list to draw from.
 
-- **Per-candidate unique question variants (build this — compounds the AI-authoring
-  moat).** Hand each candidate a slightly different generated question from the same
-  brief. Structurally defeats leaked-bank cheating and doubles as anti-cheat (reduces
-  the need for I2). Cross-repo. 
+- **Per-candidate unique question variants — DONE** (shipped as variant sets, §C, and
+  the assessment-slot integration VS2, §A). The only follow-up is agent-side:
+  regenerate a drifting variant instead of the advisory parity warning.
 - **Candidate-feedback agent (cross-repo, not yet chosen).** Actionable feedback to
   candidates; spans both repos (also parked in the agent STATUS).
 - **Per-role rubric customization** — weight readability vs performance vs idiom.
@@ -332,8 +331,659 @@ Not scheduled; the durable idea list to draw from.
   they submit (agent).
 - **Difficulty auto-calibration** — feed real candidate pass-rates back to label
   difficulty empirically (pairs with AR1; cross-repo).
-- **Cross-candidate analytics** — percentile, time-to-solve, per-question
-  discrimination (= AR1).
+- **Cross-candidate analytics — DONE 2026-07-27 as AR1** (§C).
 - **ATS/webhook integration** (Greenhouse, Lever).
 - **Question-bank UX** — tagging, search, clone/reuse.
 - **Candidate practice mode** — a free funnel into the paid product.
+
+---
+
+## E. SaaS-launch audit — 2026-09-06 (open items, ordered P0 → P3)
+
+**How this list was produced (2026-09-06).** Every DONE claim in both STATUS files was traced
+to code and tests by five independent read-only audits (agent claims, platform backend,
+web frontend, SaaS readiness, code quality), then the high-impact claims were checked
+live: both `checkpoints.sh` gates green (agent 265 passed / 4 skipped, platform 266
+passed + web 113 vitest + build), Playwright E2E 9/9, the real-wire cross-repo smoke
+(`scripts/smoke_e2e.py`) PASS, the full platform API flow (register → question →
+assessment → invite → start → draft/events/run → submit → callback → attempts/CSV/
+analytics → archive/delete → cross-owner 403) against a real **Postgres 16** with all 19
+migrations applied, the agent **Docker image built** and its nsjail sandbox exercised
+under `--privileged` over HTTP (egress blocked, 1 GB alloc killed, forks capped at 63,
+C compiles, env clean), and every P1 below re-read at the cited lines. **Not validated:**
+the three LLM surfaces (judge / drafting / adversarial) — no `ANTHROPIC_API_KEY` on the
+machine and the local Ollama install is broken (see A24), and the weekly keyed CI evals
+have been red since 2026-07-27 (A23). An adversarial re-verification workflow was
+started; 19 independent refuters ran before the account session limit stopped it and
+all 19 confirmed their finding (tagged below) — the remaining VERIFY-status items carry
+the tag "single-audit claim". Priorities: **P0** blocks taking money or endangers
+customers · **P1** first paying customers hit it · **P2** fix before scale · **P3** polish.
+Effort: XS minutes · S self-contained · M multi-file · L data + API + UI.
+
+Platform backend (P), web (W) and cross-repo/SaaS (X) items (66: P0: 6, P1: 16, P2: 36, P3: 8).
+Agent-only items (A) live in `../AssesmentAgent/STATUS.md`.
+
+**Suggested sequence.** (1) the cheap P0/P1 correctness + deploy blockers (P01, P02, P04,
+A01, A03, P09, P19, A32, W01, W02); (2) the grading-durability epic as one change
+(A04 + P05 + P10 + P15: platform-owned job table, id minted before trigger, background
+reaper with auto-retry); (3) accounts → organisation → billing (P13 → X01 → X02);
+(4) privacy (X03, X04) and email/notifications (X06, X07); (5) deploy + ops (X05, X08,
+A06, A07, P26, X11); (6) everything else by priority. Close each item by deleting it
+here in the same commit (checkpoint #5).
+
+- **P01 · P0 · XS — No Postgres driver is a dependency — "Postgres-ready via
+DATABASE_URL" cannot work out of the box.**
+  Evidence: pyproject.toml dependencies and uv.lock contain no
+  psycopg/psycopg2/asyncpg; live: `alembic upgrade head` against Postgres 16
+  succeeded only with an ephemeral `uv run --with 'psycopg[binary]'`; all 19
+  migrations then applied cleanly (single head a4f8c2d6e9b1) and the full API flow
+  passed on Postgres. Why: first Postgres deploy fails at import; nothing in CI or
+  tests ever runs the chain on Postgres. Fix: `uv add "psycopg[binary]"`; add a CI
+  job running alembic upgrade head + a smoke against a Postgres service container.
+  _Verified: live run in this audit; source: live._
+- **P13 · P0 · M — Account lifecycle is not SaaS-grade: password min_length=1, no
+reset/verification/change/deletion, 12 h JWT with no revocation, case-sensitive
+email matching.**
+  Evidence: schemas.py:414 RegisterIn.password min_length=1; route map has no
+  reset/verify/change/delete; auth.py:37-44 HS256 12 h (config.py:99
+  JWT_EXPIRE_MIN=720), no jti/refresh/token_version; token in localStorage
+  (web/src/api.ts:38-47); api.py:441-445 and 464-466 compare email exactly so
+  Jane@x.io ≠ jane@x.io (duplicate accounts; mixed-case sign-ups can't log in). Why:
+  first support tickets are "forgot password" and "can't log in"; departed employees
+  can't be logged out; XSS exfiltrates a 12 h session. Fix: min-12 password + breach
+  check; email verification + reset via the mailer; normalise emails (lower()) on
+  register/login with a one-off backfill; short-lived access + refresh in httpOnly
+  cookie; token_version checked in get_current_interviewer.
+  _Verified: cited lines read in this audit; source: backend,saas._
+- **X01 · P0 · L — No organisation/team model — one login per company.**
+  Evidence: only Interviewer rows (platform models.py:43-55); every resource is
+  owner_id-scoped (api.py:504-521); "workspace" means one interviewer's default
+  branding (models.py:52-53); no membership/role/admin/audit-log tables (grep:
+  none). Why: a second hiring manager sees nothing; no hand-off when someone leaves;
+  blocks any team plan. Fix: Organization + Membership(role); move owner_id FKs to
+  org_id; scope queries by membership; org invites replace REGISTRATION_CODE.
+  _Verified: cited lines read in this audit; source: saas._
+- **X02 · P0 · L — No billing, plans, quotas or usage metering; LLM spend is not
+attributable per tenant.**
+  Evidence: grep Stripe|plan|quota|usage in both packages: none; limits are per-IP
+  buckets only (config.py:145-167); per-candidate judge cost is computed on the
+  agent (pricing.py:12-44, judge.py:287-294) and shipped as judge_cost_usd inside
+  the callback (agent.py:203) which the platform stores verbatim in
+  AssessmentResult.full_result JSON and never aggregates; draft cost surfaces per
+  draft only (api.py:686,770-792). Why: cannot take money; one interviewer can burn
+  unlimited Sonnet drafts and compute. Fix: Stripe Checkout + plan on the org;
+  monthly counters (assessments, drafts, candidates) enforced in draft/invite/submit
+  routes; denormalise judge_cost_usd/draft_cost_usd into columns with a per-org
+  rollup.
+  _Verified: cited lines read in this audit; source: saas._
+- **X03 · P0 · M — No PII erasure or retention path for candidate data.**
+  Evidence: deletion is refused once activity exists (api.py:1062-1103); no
+  candidate-scoped delete anywhere; PII stored in Submission (name/email/code),
+  IntegrityEvent, CandidateDraft, CandidateAttempt; no retention job; no
+  backup/restore doc. Why: GDPR/CCPA erasure requests cannot be honoured; a customer
+  DPA will require it. Fix: org-scoped DELETE /candidates/{email} that anonymises
+  the four tables; RETENTION_DAYS purge job; document backups/RPO/RTO.
+  _Verified: cited lines read in this audit; source: saas._
+- **X04 · P0 · S — No privacy policy, terms, DPA or recorded consent for
+proctoring.**
+  Evidence: web/src/components/IntegrityGate.tsx:10-22 is a notice, not a consent
+  record; no policy/terms links anywhere in web/src; nothing stored on
+  CandidateAttempt about consent. Why: selling monitored assessments to
+  EU/UK/California candidates without a documented lawful basis is
+  customer-blocking. Fix: explicit consent checkbox stored on CandidateAttempt;
+  privacy-policy + terms links; a DPA template (legal review).
+  _Verified: cited lines read in this audit; source: saas._
+- **P02 · P1 · XS — Settings-only PUT /assessments/{id} 500s on a variant-set
+assessment once any candidate has started.**
+  Evidence: api.py:1303-1305 unconditionally `a.questions.clear(); session.flush()`;
+  CandidateSlotVariant.assessment_question_id FKs those rows (models.py:315); live
+  on Postgres: 500 `ForeignKeyViolation …
+  candidateslotvariant_assessment_question_id_fkey` on an identical-slots edit after
+  four candidates started; the A9 409 for a changed slot set works. Why: the
+  2026-08-03 edit dialog is broken for exactly the feature it was built alongside;
+  without FK enforcement it would silently orphan assignments and re-roll variants.
+  Fix: leave membership untouched when new_sig == current_sig.
+  _Verified: live run in this audit; source: backend,live._
+- **P03 · P1 · S — Assessment and variant-set invites cannot be revoked (no route,
+no UI); archiving does not stop links.**
+  Evidence: the only revoke route requires Invite.question_id == question_id
+  (api.py:1992-2003); assessment invites have question_id=None (api.py:1437-1446);
+  live: revoke via the question route → 404; _load_invite_or_error checks only
+  invite status/expiry (api.py:2023-2026); the API's own 409 text says "Revoke its
+  invites instead" (api.py:1067,1101); web has revoke only on QuestionDetailPage
+  (api.ts:247-251) and never lets expires_at be set (api.ts:204,236). Why: a leaked
+  assessment link stays live indefinitely. Fix: owner-scoped POST
+  /assessments/{id}/invites/{token}/revoke (+ variant-set) and UI revoke/expiry
+  controls on both surfaces.
+  _Verified: live run in this audit; source: backend,frontend,live._
+- **P04 · P1 · XS — Deleting a question that is a fixed slot of an assessment
+(pre-invite) 500s; same for an assigned variant.**
+  Evidence: delete_question (api.py:1056-1113) never checks
+  AssessmentQuestion.question_id (FK, no cascade, models.py:209) or
+  CandidateSlotVariant.question_id (models.py:316); live on Postgres: DELETE → 500
+  ForeignKeyViolation; the "deleted variant falls through to a fresh assignment"
+  branch (api.py:2088-2091) is unreachable. Why: a plain 500 on a normal interviewer
+  action. Fix: 409 naming the assessments (mirror the submission guard).
+  _Verified: live run in this audit; source: backend,live._
+- **P05 · P1 · S — Callback-before-commit race strands submissions in "running".**
+  Evidence: api.py:2686-2701 awaits trigger_assessment before committing
+  agent_job_id; a fast agent can hit /assessments/callback first; lookup miss
+  (api.py:3141-3148) returns 200 "ignored" so the agent never retries; row sits
+  running until the 15-min reaper and a manual retry. Why: lost grades under normal
+  latency variance. Fix: mint the correlation id platform-side before triggering
+  (send it to the agent), or return 404 for unknown job ids so the agent's retry
+  loop covers it.
+  _Verified: cited lines read in this audit; source: backend._
+- **P09 · P1 · XS — Unbounded request bodies on candidate code/stdin routes; no ASGI
+body limit.**
+  Evidence: schemas.py:352 SubmissionCreate.code, :586 CandidateSubmitIn.code
+  (min_length=1, no max), :627-628 CandidateRunIn code/stdin, :648 RunTests have no
+  max_length; only CandidateDraftIn is capped (100 KB, schemas.py:604); the agent
+  caps at 200 KB (agent api.py:182). Why: an unauthenticated candidate can push
+  multi-MB blobs into Submission.code before the agent 422s. Fix: max_length=200_000
+  to match the agent + a body-size middleware.
+  _Verified: cited lines read in this audit; source: backend,saas._
+- **P10 · P1 · S — Stale "running" submissions are healed lazily, only to error,
+only on interviewer reads, scanning every tenant.**
+  Evidence: _reap_stale_running (api.py:2708-2739) runs when an interviewer loads a
+  list, has no owner filter, no index on Submission.status, marks error after
+  REAP_RUNNING_AFTER_S=900 (config.py:176) and requires a manual Retry (re-executes
+  and re-judges = double LLM cost). Why: a lost callback needs a human to notice;
+  cross-tenant scan on every list. Fix: background reaper task (or cron endpoint)
+  that auto-retries once then alerts; owner-scope the scan; index status.
+  _Verified: cited lines read in this audit; source: backend,saas._
+- **P19 · P1 · XS — The platform never configures logging, so its INFO correlation
+breadcrumbs are dropped in production.**
+  Evidence: api.py:3185-3196 main() calls uvicorn.run with no logging.basicConfig
+  (the agent does, agent api.py:672-675); grep basicConfig|dictConfig in the
+  package: none; logger.info at api.py:2704, 3179 etc. never print; only WARNING+
+  reach stderr via lastResort without timestamps; test_logging_redaction.py uses
+  caplog so can't detect this. Why: the agent→callback path is designed to be
+  debuggable by logs and isn't. Fix: logging.basicConfig(level=LOG_LEVEL, format=…)
+  in main() (JSON formatter for prod).
+  _Verified: cited lines read in this audit; source: saas,quality._
+- **W01 · P1 · XS — Single-question timeout with an empty editor is a dead end.**
+  Evidence: pages/CandidatePage.tsx:312-319 calls doSubmit() unconditionally at
+  time-up; with code === '' the server 422s (min_length=1), :285 sets submitError,
+  stage stays editor, timeUp keeps every button disabled (:603,611,618) and shows
+  "Time's up — submitting…" forever (:447-453); AssessmentFlow.tsx:181,197 handles
+  the blank case. Why: candidate stuck on a locked IDE with a raw validation error.
+  Fix: skip the submit when !code.trim() and show a terminal notice, mirroring
+  AssessmentFlow.
+  _Verified: cited lines read in this audit; source: frontend._
+- **W02 · P1 · S — The candidate IDE loads Monaco from a third-party CDN at
+runtime.**
+  Evidence: package.json has @monaco-editor/react but monaco-editor is only a peer
+  dep (package-lock.json:813/3056 "peer": true); no loader.config in src/;
+  @monaco-editor/loader therefore defaults to
+  https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs; dist is a single 410 KB
+  chunk with no lazy route. Why: a timed, proctored sitting breaks if jsdelivr is
+  blocked/slow or under a CSP; supply-chain pin lives outside the lockfile. Fix: npm
+  i monaco-editor + loader.config({ monaco }) (or vite-plugin-monaco-editor);
+  React.lazy the editor route.
+  _Verified: cited lines read in this audit; source: frontend,quality._
+- **W03 · P1 · S — Every list row is mouse-only.**
+  Evidence: <tr className="clickable-row" onClick=navigate> with no link/focusable
+  target inside at pages/DashboardPage.tsx:170-174, AssessmentsListPage.tsx:113-117,
+  VariantSetsListPage.tsx:81-86, SubmissionsPage.tsx:118-123,
+  QuestionDetailPage.tsx:287-293 (attempts chips do it right:
+  AssessmentDetailPage.tsx:238-243). Why: keyboard/screen-reader users cannot open a
+  question, assessment, set or submission (WCAG 2.1.1). Fix: wrap the title cell in
+  a <Link>; keep the row click as a convenience.
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **X05 · P1 · M — No platform container, prod entrypoint, migration-on-start, or
+compose; the agent needs a privileged host.**
+  Evidence: only AssesmentAgent/Dockerfile exists; no Dockerfile for the platform or
+  web, no compose/helm/fly/render/railway/Procfile; scripts/dev.sh:18 runs alembic
+  upgrade head for dev only; the agent Dockerfile requires --privileged
+  --cgroupns=host (Dockerfile:9-19). Why: first deploy is hand-assembled; a
+  forgotten migration 500s; hosting choice is constrained. Fix: platform Dockerfile
+  (uv + alembic upgrade head && uvicorn), static web build behind nginx,
+  docker-compose wiring agent (privileged) + platform + Postgres; docs/DEPLOY.md.
+  _Verified: cited lines read in this audit; source: saas._
+- **X06 · P1 · S — Results never reach the interviewer proactively.**
+  Evidence: agent_client.py:260 passes email_to=None; no notification or webhook
+  code in the platform; the agent's Gmail mailer (mailer.py:29-30,103-106) is
+  CLI/direct-API only. Why: interviewers must poll the dashboard to learn a
+  candidate finished. Fix: "results ready" email from assessments_callback
+  (api.py:3129) via email_client, plus a per-org webhook.
+  _Verified: cited lines read in this audit; source: saas._
+- **X07 · P1 · S — Email deliverability is not production-grade.**
+  Evidence: invites go via smtplib STARTTLS (email_client.py:37-48) with SMTP_FROM
+  default no-reply@assessment.local (config.py:130-135); plain text, no templates,
+  no unsubscribe/consent footer; README:96-101 already warns Gmail is test-only.
+  Why: invites land in spam; candidates miss interviews; the default from-address is
+  invalid. Fix: Postmark/SES with a verified domain (SPF/DKIM/DMARC), HTML+text
+  templates, per-org reply-to.
+  _Verified: cited lines read in this audit; source: saas._
+- **X08 · P1 · S — No metrics, tracing or error reporting in either service.**
+  Evidence: grep Sentry|opentelemetry|prometheus|/metrics in both packages: none;
+  agent /health is static; platform logging unconfigured (P19). Why: no way to see
+  failed callbacks, grading latency or error rates. Fix: Sentry in both services;
+  /metrics (job count, grade latency, callback failures); structured JSON logs with
+  request ids.
+  _Verified: cited lines read in this audit; source: saas._
+- **X09 · P1 · S — Rate limits are per-IP, never per-tenant, in both services.**
+  Evidence: platform config.py:145-167 and api.py:433,461,2480 key on client_ip;
+  agent ratelimit.py per-IP and in-memory (A13). Why: an office behind one NAT
+  shares one bucket; one tenant cannot be capped independently. Fix: key expensive
+  buckets (draft, submit, invites) on org_id in addition to IP; agent limiting moved
+  to the platform's DB backend.
+  _Verified: cited lines read in this audit; source: saas._
+- **X10 · P1 · M — Interviewer-facing gaps a first paying customer hits.**
+  Evidence: no team (X01); no question import/bulk upload (only hand-form or AI
+  draft, api.py:554); no candidate-facing feedback or score (CandidatePage.tsx:345);
+  no re-invite/extend-deadline (STATUS.md:118-121); no custom domain/white-label
+  beyond logo/org text (models.py:165-166); no ATS/webhook (STATUS.md:337); no
+  self-serve org onboarding. Why: procurement and onboarding stall on table-stakes
+  features. Fix: prioritise team, notifications, import, re-invite after the P0s.
+  _Verified: cited lines read in this audit; source: saas._
+- **P06 · P2 · XS — POST /invite/{token}/events accepts any question_id.**
+  Evidence: api.py:2572-2584; live: unknown id → 500 ForeignKeyViolation; another
+  tenant's valid id is stored and then blocks that tenant's DELETE /questions/{id}
+  via the IntegrityEvent guard (api.py:1087-1093). Why: unauthenticated route can
+  500 and cross-tenant-pollute. Fix: resolve through _resolve_question (must belong
+  to the invite) or null it.
+  _Verified: live run in this audit; source: backend,live._
+- **P07 · P2 · XS — CSV export is vulnerable to formula injection.**
+  Evidence: api.py:2872-2884 writes candidate-supplied candidate, candidate_email
+  and titles raw. Why: a candidate name starting with = + - @ executes in Excel on
+  the interviewer's machine. Fix: quote/prefix cells that start with those
+  characters.
+  _Verified: cited lines read in this audit; source: backend._
+- **P08 · P2 · S — Candidate email plus the secret token land in access logs via the
+draft GET query string.**
+  Evidence: GET /invite/{token}/draft?candidate_email= (api.py:2641-2645,
+  web/src/api.ts:322); uvicorn logs the query string regardless of LOG_PII;
+  test_logging_redaction.py covers only email_client. Why: PII + bearer-equivalent
+  token in plain logs. Fix: carry the email in a header or POST body.
+  _Verified: cited lines read in this audit; source: backend._
+- **P11 · P2 · M — N+1 and heavy list queries.**
+  Evidence: list_questions lazy-loads test_cases per row and ships full test cases +
+  reference solutions (api.py:194-204, 954); list_variant_sets per-row count
+  (896-898); list_assessments per-slot VariantSet get + count + lazy aq.question
+  (1134-1150); _assessment_attempt_rows per-invite session.get(Invite) (1621-1625);
+  analytics_overview loads every owner Submission including code (1783-1788);
+  analytics_assessment re-queries rows it already has (1938-1946). Why: latency
+  grows linearly with library size; analytics pulls every candidate's source. Fix:
+  selectinload, aggregate queries, defer(code), slim list schemas.
+  _Verified: single-audit claim, not independently re-verified; source: backend._
+- **P12 · P2 · S — No pagination on invite and attempts list routes while README
+claims list endpoints paginate.**
+  Evidence: api.py:1410 GET /questions/{id}/invites, 1462 /assessments/{id}/invites,
+  1536 /variant-sets/{id}/invites, 1551 /assessments/{id}/attempts return unbounded
+  lists; README:141. Why: large assessments return unbounded payloads. Fix: Page
+  envelope + limit/offset like the other lists.
+  _Verified: single-audit claim, not independently re-verified; source: backend._
+- **P14 · P2 · S — Every timestamp column is timezone-naive; correctness on Postgres
+depends on the session time zone.**
+  Evidence: grep DateTime(timezone=True) in models.py: 0; sa.DateTime() in
+  migrations: 26; models.py:24-31 as_utc relabels naive values as UTC; nothing pins
+  TimeZone on connect (db.py:44-46); CSV created_at.isoformat() emits no offset on
+  SQLite. Why: deadlines/expiry shift by the DB offset if the server or DB TZ isn't
+  UTC. Fix: `SET TIME ZONE 'UTC'` on connect for Postgres (or migrate to
+  DateTime(timezone=True)); emit offsets in CSV.
+  _Verified: cited lines read in this audit; source: backend._
+- **P15 · P2 · XS — An agent outage at submit burns the candidate's only attempt.**
+  Evidence: api.py:2514-2523 commits the Submission, then trigger failure → status
+  error + 502 to the candidate (api.py:2689-2695); resubmit 409s (api.py:2492);
+  trigger has no retry (agent_client.py:247-264) although draft calls retry 3×
+  (agent_client.py:93-104); only an interviewer can retry. Why: a transient agent
+  blip costs the candidate their sitting. Fix: retry the trigger with backoff;
+  always 201 (row is persisted) and let the background reaper re-trigger; allow
+  candidate retry from error.
+  _Verified: cited lines read in this audit; source: backend,saas._
+- **P16 · P2 · XS — AssessmentUpdate.proctored defaults True on PUT.**
+  Evidence: schemas.py:176; a client omitting the field on a settings edit silently
+  turns monitoring on for future invites. Why: silent behaviour change on a
+  full-replace endpoint. Fix: make proctored required on PUT.
+  _Verified: cited lines read in this audit; source: backend._
+- **P18 · P2 · S — Integrity-event volume is unbounded per sitting and all candidate
+buckets are per-IP.**
+  Evidence: 50 events/batch × 20 batches/min/IP (api.py:2550-2552, schemas.py:814)
+  with no per-sitting cap; a corporate NAT shares 20 starts/submits/batches per
+  minute. Why: table bloat from one sitting; a whole office shares one bucket. Fix:
+  per-sitting cap on stored events; key candidate buckets on (token, email) as well
+  as IP.
+  _Verified: single-audit claim, not independently re-verified; source: backend._
+- **P20 · P2 · XS — The callback handler ignores the shared contract; malformed
+payloads 500 or get stored.**
+  Evidence: contract/callback_contract.py:validate_callback is imported only by
+  tests/test_contract.py (no runtime use in either package); api.py:3153-3156
+  coerces verdict = str(payload.get("verdict") or "ERROR") (stores "PASSED") and
+  float(payload.get("score_pct") or 0.0) raises on non-numeric → 500 → agent retries
+  4× then drops. Why: the byte-mirrored contract exists to gate this and doesn't.
+  Fix: errors = validate_callback(payload); if errors: log + 400.
+  _Verified: single-audit claim, not independently re-verified; source: quality._
+- **P21 · P2 · XS — Candidate-facing 502s echo internal exception text.**
+  Evidence: api.py:2394,2396 (/invite/{token}/run, /run-tests) and 2695 (/submit)
+  return f"… failed: {exc}"; for httpx.HTTPStatusError that is "Server error '500 …'
+  for url 'http://<agent-host>:8000/run'" to an unauthenticated candidate; 677/764
+  do the same to interviewers; _agent_detail (602) sanitises only the 400 case. Why:
+  leaks internal topology and agent status. Fix: log exc, return a fixed message
+  ("grader unavailable, try again").
+  _Verified: cited lines read in this audit; source: quality._
+- **P22 · P2 · M — api.py is a 3,196-line god-module with the split seams already
+drawn.**
+  Evidence: 52 routes, 132 top-level defs, 13 banner sections (lines 160, 383, 399,
+  500, 691, 1117, 1370, 1721, 2014, 2674, 3032, 3084); maintainability index 0;
+  _assessment_attempt_rows 1567-1720 has cyclomatic complexity 40; four copies of
+  the load+404/403 helper (504, 514, 699, 1121); archive/unarchive pairs duplicated
+  (1007-1042 ≡ 1312-1343); create_invite ≡ create_assessment_invite (1375-1408 vs
+  1424-1460); count+slice pagination ×8; manual updated_at writes ×9 despite
+  onupdate=_utcnow (models.py:40); Questions CRUD (924-1115) sits under the "Variant
+  sets" banner. Why: every feature touches one file; reviews collide; the 154-line
+  function is where the next bug lands. Fix: APIRouter per banner into
+  routes/{auth,questions,variant_sets,assessments,invites,analytics,candidate,submissions,callback}.py;
+  serializers → mappers.py; one generic _owned(Model, id, current, session) +
+  _page(stmt, limit, offset); drop manual updated_at.
+  _Verified: cited lines read in this audit; source: quality,backend._
+- **P23 · P2 · XS — The platform test suite is ~6× slower than the agent's because
+every test pays bcrypt cost 12.**
+  Evidence: tests/conftest.py:124-128 registers + logs in per test → auth.py:27
+  bcrypt.gensalt() default rounds; --durations shows ~0.36 s setup per test; live:
+  266 tests in 77.65 s vs agent 265 tests in 12.9 s including real subprocesses.
+  Why: the pre-push gate and dev loop pay ~90 s for hashing. Fix: BCRYPT_ROUNDS env
+  (default 12, tests 4) read in auth.py, or an autouse fixture monkeypatching
+  gensalt.
+  _Verified: live run in this audit; source: quality,live._
+- **P26 · P2 · S — The cross-repo parity gates (signing.py, callback contract) never
+run in CI.**
+  Evidence: scripts/checkpoints.sh (agent :41,59; platform :70,88) skip the
+  byte-parity checks when ../<companion> isn't checked out — always the case in CI
+  (single-repo checkout); CLAUDE.md says "fails the push on divergence" but that
+  holds only with the opt-in pre-push hook, bypassable with --no-verify. Why: a
+  divergence 401s every signed request or lets one side bless a payload the other
+  rejects. Fix: CI step that checks out the companion repo (actions/checkout with
+  repository:/path:) before checkpoints, or a published checksum both CIs assert.
+  _Verified: cited lines read in this audit; source: quality._
+- **P28 · P2 · S — Docs drift bundle (platform): README, STATUS, CLAUDE.md,
+docstrings and .env.example lag the code.**
+  Evidence: README.md:137-140 "/submissions* routes are not yet behind interviewer
+  auth" (they are: api.py:2745,2800,2895); README.md:115-136 route table omits PATCH
+  /auth/me, /assessments*, /variant-sets*, /analytics/*,
+  /invite/{token}/events|draft, /submissions/export|{id}/integrity|{id}/report, and
+  says GET /invite/{token} returns only status; README.md:147-170 data model lists 5
+  of 13 tables; README.md:141-144 "list endpoints are paginated" (four aren't);
+  config.py:181 "submit later than deadline + grace is refused" (stale since A13);
+  schemas.py:576-578 InvitePublicOut.proctored comment says it reads
+  Assessment.proctored (reads the frozen Invite.proctored); models.py:9-10 "every
+  table carries created_at/updated_at" (untrue for CandidateSlotVariant,
+  IntegrityEvent, CandidateDraft, RateLimitCounter); models.py:262 deadline formula
+  wrong for assessment invites; STATUS.md:237-245 edit-dialog claim (P02);
+  STATUS.md:300 cites config.py:110 (is :116); api.py:1067,1101 "Revoke its invites
+  instead" impossible for assessment invites; agent_client.py:4 "four calls" (six);
+  .env.example omits RATE_LIMIT_BACKEND, SUBMIT_GRACE_SECONDS,
+  DRAFT_SAVE_RATE_LIMIT_MAX; CLAUDE.md:29-42 architecture omits ratelimit.py,
+  email_client.py, question_rules.py; STATUS.md §D first bullet "Per-candidate
+  unique question variants (build this)" already shipped (§C variant sets + §A VS2)
+  and "cross-candidate analytics (= AR1)" is done; STATUS §A carries only DONE
+  entries against the pending-only rule; web/README.md routes/tests stale and says
+  the candidate page calls /submit with no /start. Why: a new operator or agent
+  inherits wrong facts; the docs-drift gate covers only module names. Fix: one docs
+  pass; add a route-table drift check to checkpoints.sh; prune DONE entries from
+  STATUS.md.
+  _Verified: single-audit claim, not independently re-verified; source:
+  backend,saas._
+- **W04 · P2 · S — The localStorage draft is keyed by token only and always beats
+the server copy.**
+  Evidence: key DRAFT_PREFIX + token (CandidatePage.tsx:40,150); restore order
+  loadDraft(token) ?? server (:198-199) ignores updated_at (types.ts:386) and
+  candidate email, while invites are multi-recipient (types.ts:183). Why: on a
+  shared machine candidate B inherits A's unsubmitted code; a stale local draft
+  hides newer work saved from another device. Fix: key the local draft by token +
+  email and compare timestamps before choosing.
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W05 · P2 · XS — The fullscreen "block" does not lock the keyboard.**
+  Evidence: .modal-scrim is a pointer overlay only (components.css:2536-2546);
+  Monaco readOnly is timeUp (CandidatePage.tsx:534) / locked
+  (AssessmentFlow.tsx:405) and never includes mustReturnToFullscreen; the dialog
+  moves no focus (IntegrityGate.tsx:54); STATUS says leaving fullscreen "blocks the
+  editor". Why: a candidate who exits fullscreen can keep typing behind the scrim.
+  Fix: add || integrity.mustReturnToFullscreen to readOnly and focus the modal
+  button on open.
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W06 · P2 · XS — The Integrity tab shows "Loading…" forever when the report fetch
+fails.**
+  Evidence: SubmissionDetailPage.tsx:92-97 swallows the error and leaves integrity
+  null, so :212-217 renders the loading text indefinitely. Why: interviewer can't
+  tell failed from slow. Fix: track a failed state and show an error line.
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W07 · P2 · XS — The header IntegrityChip hides recorded events for an
+unmonitored sitting, contradicting the panel and tab.**
+  Evidence: IntegrityPanel.tsx:172 `if (!report.monitored || report.summary.total
+  === 0) return null` while the panel deliberately shows those events (:102-105) and
+  the tab badge counts them (SubmissionDetailPage.tsx:206); STATUS principle:
+  recorded evidence is never suppressed. Why: header and tab disagree on the same
+  sitting. Fix: drop the !report.monitored guard in the chip.
+  _Verified: cited lines read in this audit; source: frontend._
+- **W08 · P2 · XS — Pydantic 422 validation errors surface as "[object Object]".**
+  Evidence: api.ts:101 assigns data.detail (an array for validation errors) straight
+  into the Error message; every page prints err.message; only AddQuestionPage:38
+  handles the list form. Why: unactionable errors on any schema failure (e.g. the
+  empty-code submit). Fix: normalise in request(): if detail is an array, join the
+  msg fields.
+  _Verified: cited lines read in this audit; source: frontend,quality._
+- **W09 · P2 · XS — A transient network failure on boot logs the interviewer out.**
+  Evidence: auth/AuthContext.tsx:35-39 clears the token on any me() rejection, not
+  just 401. Why: flaky Wi-Fi forces a re-login. Fix: clearToken() only on ApiError
+  401; otherwise keep the token and retry.
+  _Verified: cited lines read in this audit; source: frontend._
+- **W10 · P2 · M — Error handling is per-page ad hoc; no request timeout;
+ErrorBoundary only logs; 401 redirect loses returnTo.**
+  Evidence: global handling exists only for 401 (api.ts:93-95,333,352 → logout,
+  AuthContext.tsx:21-25); 403/404/410/429/5xx/network fall through to ~19 copies of
+  `err instanceof ApiError ? err.message : 'Failed to …'` (47 setError call sites);
+  QuestionDetailPage.tsx:46-60 discards the server detail and blanks the page if any
+  of three fetches fails (:147) with no cancelled guard; api.ts:87-91 has no
+  AbortController/timeout; components/ErrorBoundary.tsx:24-27 only console.errors;
+  api.ts itself has no unit test (12 files vi.mock the whole client). Why:
+  inconsistent UX, hung requests hang the page, no error telemetry. Fix: central
+  describeError(err) + toast; AbortController with timeout; wire an error reporter;
+  one api.test.ts.
+  _Verified: single-audit claim, not independently re-verified; source:
+  frontend,quality._
+- **W11 · P2 · XS — Integrity monitoring and the countdown keep running after a
+multi-question sitting completes.**
+  Evidence: enabled: stage === 'editor' && proctored (CandidatePage.tsx:125) and
+  stage never leaves editor in the multi flow (AssessmentFlow.tsx:272-279 renders
+  the completion notice internally). Why: post-completion tab switches are recorded
+  against the sitting. Fix: AssessmentFlow calls an onComplete that flips stage.
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W12 · P2 · S — Silent truncation at 100/200 rows.**
+  Evidence: builder library NewAssessmentPage.tsx:42 (200, no pager); submissions
+  title map SubmissionsPage.tsx:12; per-question stats DashboardPage.tsx:37;
+  analytics assessment picker AnalyticsPanel.tsx:59 (default 100). Why: larger
+  workspaces silently lose rows and stats. Fix: page or search these sources.
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W13 · P2 · XS — The logo URL is rendered unvalidated in the candidate's
+browser.**
+  Evidence: NewAssessmentPage.tsx:207-208 live-previews whatever is typed;
+  AssessmentFlow.tsx:288 renders it for candidates; check whether schemas.py
+  validates logo_url (https only). Why: http:// logos trigger mixed content; the
+  candidate's IP is sent to an arbitrary host. Fix: require https:// client- and
+  server-side.
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W14 · P2 · S — Accessibility details.**
+  Evidence: builder reorder/remove buttons named "↑", "↓", "✕" and every picker row
+  has an identical "Add" (NewAssessmentPage.tsx:250-258,285,313); per-recipient
+  variant <select> has no label (VariantSetInvitePanel.tsx:118-131); bare <label>
+  without htmlFor (AddQuestionPage.tsx:521,530); sidebar active link has no
+  aria-current (Sidebar.tsx:35-74); ARIA tablist without arrow-key handling
+  (AssessmentFlow.tsx:319-333); Monaco Tab-trap has no escape hint; positives:
+  native <dialog> + autoFocus for invite/edit, role="alert"/"status" used
+  consistently. Why: WCAG name/role/value failures on interviewer surfaces. Fix:
+  accessible names/labels, aria-current, arrow keys on the tablist; add jsx-a11y
+  lint.
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W16 · P2 · M — Duplicated logic that should be shared.**
+  Evidence: candidate IDE panel duplicated ~130 lines (CandidatePage.tsx:491-623 vs
+  AssessmentFlow.tsx:368-495) plus countdown (:298-309 / :160-170), auto-submit and
+  doRun; CandidatePage.tsx:433-436 re-inlines timerClass from
+  candidateTimer.ts:9-11; three recipient parsers with different semantics
+  (QuestionDetailPage.tsx:95-98, AssessmentDetailPage.tsx:54-57,
+  VariantSetInvitePanel.tsx:7-18 — only the last lowercases/dedupes); invite table +
+  delivery warning duplicated (QuestionDetailPage.tsx:193-262,348-357 vs
+  AssessmentDetailPage.tsx:279-331,342-351); copyUrl ×3
+  (VariantSetInvitePanel.tsx:173 has no feedback and an unhandled rejection);
+  branding preview ×2 (NewAssessmentPage.tsx:204-215, SettingsPage.tsx:84-92);
+  archive toggle ×2; three duration formatters (analytics/format.ts:22-36,
+  IntegrityPanel.tsx:16-20, candidateTimer.ts:14-21); 15 pages hand-roll
+  useEffect+cancelled+Promise.all. Why: divergent behaviour (recipient parsing) and
+  double maintenance. Fix: shared CandidateIde + useCountdown + useAsync hooks; one
+  parseRecipients; one InviteTable; one formatDuration.
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W17 · P2 · XS — components.css carries raw colour literals against the token
+rule; the hex guard scans only .tsx.**
+  Evidence: 21 raw colour literals in styles/components.css (lines 36, 38, 45, 76,
+  77, 82, 83, 156, 157, 164, 167, 196, 197, 368, 374, 548, 1009, 1227, 1321, 1330,
+  1554); worst .editor-wrapper { background: #1e1e1e } (:1554) is Monaco-dark in the
+  light theme; scripts/check-no-hex.mjs:8,15 scans only .tsx and only hex; the
+  ESLint rule catches only JSX style. Why: a re-theme cannot be done in tokens.css
+  alone as CONVENTIONS promises. Fix: move the literals to tokens; extend the guard
+  to .ts and rgb()/hsl().
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W18 · P2 · S — Hand-written types.ts mirrors 66 pydantic schemas with no drift
+gate.**
+  Evidence: types.ts (627 lines, 61 exports) vs schemas.py (66 classes); no OpenAPI
+  generation; api.ts:112 is an unchecked `as T`; looseness already exists:
+  QuestionIn.required_complexity: string vs backend str | None (schemas.py:98),
+  InviteStatus = string (types.ts:163). Why: a renamed/nullable backend field ships
+  silently. Fix: openapi-typescript from /openapi.json → types.gen.ts with a CI diff
+  step.
+  _Verified: cited lines read in this audit; source: quality._
+- **W19 · P2 · M — E2E covers only the single-question quick-screen path.**
+  Evidence: five specs (interviewer-candidate-flow, invite-lifecycle, candidate-run,
+  submission-report, draft-with-ai); e2e/mock-agent.mjs serves /questions/draft,
+  /run, /run/tests, /assessments only (no /questions/draft-set); uncovered: login
+  page, logout/401, assessment builder (mixed slots, A8 preselect), assessment
+  detail (invite, attempts grid, edit dialog, A9 409), variant sets
+  (draft/review/save/detail/round-robin/override), set-slot assessment +
+  per-candidate variant, multi-question candidate flow, timer/auto-submit/late pill,
+  integrity (gate, modal, paste block, events → tab, risk banner, chips), draft
+  autosave, analytics, settings/branding, archive, pagination, CSV, PDF, expired
+  invite, theme toggle, narrow layout; rate limits are off in E2E so 429 UX is
+  untestable. Why: the multi-question, variant-set and integrity features that
+  define the product have zero browser coverage. Fix: extend the mock agent
+  (draft-set) and add specs for the highest-value flows (assessment
+  build→invite→multi-question sitting→attempts grid; variant set → set-slot;
+  integrity gate).
+  _Verified: cited lines read in this audit; source: frontend._
+- **X11 · P2 · XS — No dependency vulnerability scanning, Dependabot, security
+headers or HTTPS enforcement docs.**
+  Evidence: .github/ in both repos has only workflows/; checkpoints.sh secret scan
+  is regex-only; no pip-audit/npm audit in CI; no security-headers middleware (rely
+  on the proxy, undocumented). Why: CVEs in bookworm toolchains/node/react go
+  unnoticed; headers depend on an undocumented proxy. Fix: Dependabot (pip, npm,
+  docker, actions) + pip-audit/npm audit --audit-level=high in CI;
+  HSTS/CSP/X-Frame-Options at the proxy, documented.
+  _Verified: cited lines read in this audit; source: saas._
+- **X12 · P2 · M — Candidate identity is a claim; recipient enumeration via
+/start.**
+  Evidence: platform api.py:2030-2043: a forwarded link + a guessed invited email =
+  impersonation; 403 vs 200 on /start reveals which emails were invited;
+  README:109-113 documents the model. Why: a shared link can be sat by anyone who
+  knows a recipient's address. Fix: per-recipient tokens (one Invite row per
+  recipient) or an emailed OTP at start.
+  _Verified: single-audit claim, not independently re-verified; source: saas._
+- **X13 · P2 · S — No API versioning; boot-time config validation missing.**
+  Evidence: no /v1 prefix on platform routes; agent app version "0.2.0", platform
+  "0.1.0" (api.py:69-71); config.py:91-97 generates an ephemeral JWT_SECRET with
+  only a warning; no fail-fast for missing tokens/secrets in production. Why:
+  customers integrating CSV/ATS/webhooks can't be evolved safely; a prod boot with a
+  missing secret silently rotates every session. Fix: /v1 prefix on public platform
+  routes; ENV=production check that refuses to boot without
+  JWT_SECRET/ASSESS_API_TOKEN/CALLBACK_TOKEN.
+  _Verified: cited lines read in this audit; source: saas._
+- **X14 · P2 · S — AGPL-3.0 + informal commercial offer will cause procurement
+friction (not legal advice).**
+  Evidence: both LICENSE files are AGPL-3.0 (switched 2026-09-05); README.md:302-313
+  offers a commercial licence via a GitHub issue; no CLA, EULA or pricing. Why:
+  enterprise legal teams often blocklist AGPL; any outside contribution without a
+  CLA removes the right to relicense. Fix: keep AGPL for the community edition;
+  publish a written commercial EULA + pricing; require a CLA.
+  _Verified: cited lines read in this audit; source: saas._
+- **X15 · P2 · XS — Cost-per-candidate numbers in STATUS are misread; authoring cost
+is not baselined; no per-tenant rollup.**
+  Evidence: agent STATUS.md:190-193 reports 4,202 input / 3,153 output / 17,730
+  cache-read tokens for a 7-candidate eval run (eval.py:133-138 prints totals then
+  averages) ≈ $0.0109 per candidate on Sonnet ($3/$15 per M, cache read 0.1×,
+  pricing.py:17,21-22); STATUS.md:175-176 treats the same figures as per-candidate;
+  authoring bound: max_tokens=8000 (authoring.py:861) × up to 2 attempts ≈
+  $0.25-0.30 worst case per draft, ×K≤8 per variant set; judge skipped entirely when
+  code fails to execute (agent.py:93-95). Why: pricing decisions built on a 7×
+  overstated cost; drafts are the real spend and unmetered. Fix: correct the STATUS
+  numbers; baseline draft cost; roll up judge_cost_usd/draft_cost_usd per org (X02).
+  _Verified: single-audit claim, not independently re-verified; source: saas._
+- **X16 · P2 · XS — Proxy trust is single-hop and the agent limiter is in-memory
+only.**
+  Evidence: platform ratelimit.py:156-177 trusts one X-Forwarded-For hop; agent
+  ratelimit.py:1-9 in-process. Why: CDN→LB chains mis-key the limiter; a second
+  agent replica doubles agent-side limits. Fix: configurable trusted-hop depth; move
+  agent limiting to the platform.
+  _Verified: cited lines read in this audit; source: saas._
+- **A30 · P3 · XS — Python versions differ per repo and none match production.**
+  Evidence: agent CI pins 3.10, platform CI 3.12, both declare >=3.10, local venvs
+  3.12, agent Dockerfile ships Debian bookworm python3 (3.11); no matrix. Why: a
+  3.11-only failure in the image is invisible to CI. Fix: strategy.matrix.python:
+  [3.10, 3.12] in both (add 3.11 for the agent).
+  _Verified: cited lines read in this audit; source: quality._
+- **P17 · P3 · XS — _owned_variant_set returns 404 for foreign resources while
+CONVENTIONS mandates 403.**
+  Evidence: api.py:699-705 vs CONVENTIONS.md:32; deliberate per
+  test_slice_vs2.py:126-128. Why: inconsistent with every other owner helper. Fix:
+  align to 403 or document the exception in CONVENTIONS.
+  _Verified: cited lines read in this audit; source: backend._
+- **P24 · P3 · XS — Round-robin assignment and id generation are check-then-insert;
+explicit id collisions 500 instead of 409.**
+  Evidence: api.py:1494-1510 and 2098-2103 compute cursor = count(...) then insert
+  (two concurrent calls hand out the same variant; correctness preserved by
+  uq_candidate_slot_variant + re-read at 2113-2121); explicit ids (565, 1216) and
+  _generate_id (539) collide into an uncaught IntegrityError. Why: 500 on a
+  duplicate id; rotation skews under concurrency. Fix: catch IntegrityError → 409 in
+  create routes; accept skew or select the least-used variant.
+  _Verified: single-audit claim, not independently re-verified; source: quality._
+- **P25 · P3 · S — Missing indexes and free-text enum columns; CandidateDraft
+timestamps wrong.**
+  Evidence: no index on Submission.status (used by _reap_stale_running and
+  dashboards), Submission.created_at (ordering, analytics cutoffs), Invite.status,
+  AssessmentResult.verdict; IntegrityEvent has only single-column indexes for
+  (invite_id, candidate_email) reads; status/verdict/category/kind are bare str with
+  comments (models.py:89, 141, 249, 419, 434) hence `# type: ignore[arg-type]` at
+  api.py:200; CandidateDraft.updated_at uses _created_at() (models.py:387) so lacks
+  onupdate, and the table has no created_at contrary to models.py:9-10 and
+  CONVENTIONS. Why: full scans on the hot paths as data grows; invalid states
+  representable. Fix: one migration adding the indexes; sa.Enum(native_enum=False)
+  or CHECK constraints; fix the draft timestamps.
+  _Verified: single-audit claim, not independently re-verified; source: quality._
+- **P27 · P3 · XS — No pre-commit config or gitleaks on the platform; 7 unused noqa;
+mypy strict gap; tests unchecked.**
+  Evidence: no .pre-commit-config.yaml in the platform tree (agent has the two-tier
+  config); secret scan is 4 grep patterns in checkpoints.sh; RUF100 reports all 7 `#
+  noqa` unused; mypy --strict = 22 errors (21 bare dict/list, 13 in
+  agent_client.py); tests excluded from mypy. Why: weaker pre-commit backstop than
+  the companion repo. Fix: copy the agent's two-tier pre-commit config; delete dead
+  noqa; type the dicts.
+  _Verified: cited lines read in this audit; source: quality._
+- **W15 · P3 · XS — Dead client code.**
+  Evidence: api.updateQuestion, deleteQuestion, deleteAssessment
+  (api.ts:150-155,198-200) have zero non-test callers. Why: unused surface. Fix:
+  delete or wire (question edit/delete exist server-side).
+  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W20 · P3 · XS — TS strict not pinned; eslint not type-checked; no jsx-a11y;
+layout shift while analytics load.**
+  Evidence: tsconfig.app.json does not set "strict": true (only true via the TS 6
+  default; 7 errors appear with --strictNullChecks false); eslint uses
+  tseslint.recommended (not recommendedTypeChecked); no jsx-a11y;
+  AnalyticsPanel.tsx:83 returns null until the overview arrives (layout jumps). Why:
+  strictness depends on a compiler default; a11y regressions are unlinted. Fix: pin
+  strict; recommendedTypeChecked + jsx-a11y; fixed-height skeleton.
+  _Verified: cited lines read in this audit; source: quality._
+- **W21 · P3 · XS — Product name "assess.dev" is hardcoded in the candidate header;
+start gate cannot show branding before identification.**
+  Evidence: AssessmentFlow.tsx:293 "Powered by assess.dev"; live: GET
+  /invite/{token} pre-start returns only status + proctored, branding arrives in the
+  /start payload. Why: product naming/white-label is baked into a component;
+  candidates see a generic gate for a branded assessment. Fix: brand constant from
+  config/env; carry title/org/logo in the pre-start public view.
+  _Verified: cited lines read in this audit; source: frontend,saas._
