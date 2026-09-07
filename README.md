@@ -65,7 +65,11 @@ safe path for an evolving `dev.db`.
 | `AGENT_RUN_TIMEOUT_S`   | `60.0`                     | Timeout for the candidate's synchronous Run / Run-against-tests calls (compile + execute, no LLM). |
 | `HOST` / `PORT`     | `127.0.0.1` / `9000`           | Bind address for `platform-api`.                     |
 | `JWT_SECRET`        | *(ephemeral if unset)*         | HMAC secret for interviewer JWTs. **Required in prod** — if unset, an ephemeral per-process secret is generated (tokens don't survive a restart) and a warning is logged. |
-| `JWT_EXPIRE_MIN`    | `720`                          | Interviewer access-token lifetime (minutes).         |
+| `JWT_EXPIRE_MIN`    | `15`                           | Interviewer access-token lifetime (minutes). Short on purpose: the SPA holds it in memory only; sessions outlive it via the refresh cookie. |
+| `REFRESH_EXPIRE_DAYS` | `30`                         | Refresh-token lifetime — an httpOnly cookie scoped to `/auth`; how long a browser stays signed in. Sliding. |
+| `COOKIE_SECURE`     | *(on iff `PLATFORM_BASE_URL` is https)* | `Secure` flag on the refresh cookie. Browsers drop a Secure cookie set over plain http, so leave the default. |
+| `COOKIE_SAMESITE`   | `lax`                          | `lax` when the SPA and API share a site (same host or subdomains of one domain); `none` (Secure required) only for unrelated domains. |
+| `PASSWORD_BREACH_CHECK` | `true`                     | Check new passwords against Have I Been Pwned (k-anonymity; only a 5-char hash prefix leaves the server; fails open). Off under test. |
 | `FRONTEND_BASE_URL` | `http://127.0.0.1:5173`        | Frontend origin; candidate invite links are `{FRONTEND_BASE_URL}/t/{token}`. |
 | `RUN_RATE_LIMIT_MAX` | `60`                          | Candidate Run / Run-against-tests per `RATE_LIMIT_WINDOW_S`. These are free agent compute, and run-tests is a pass/fail oracle — don't disable in prod. `0` disables. |
 
@@ -105,9 +109,15 @@ Resend) with a verified sending domain.
 
 ## Endpoints
 
-Interviewer routes require a `Bearer` JWT (from `/auth/login`) and are
-owner-scoped. Candidate routes are **public but token-gated** (no bearer) and
-never expose test cases / expected outputs.
+Interviewer routes require a `Bearer` JWT and are owner-scoped. `/auth/login`
+returns a short-lived access token **and** sets an httpOnly `refresh_token`
+cookie (path `/auth`); `POST /auth/refresh` trades the cookie for a new access
+token, which is how the SPA resumes a session on page load. Every token carries
+the account's `token_version`; a password change or reset bumps it, signing out
+every device at once. Passwords: ≥ 12 characters, ≤ 72 bytes, and not in a
+known breach. Emails are lower-cased on register and login. Candidate routes
+are **public but token-gated** (no bearer) and never expose test cases /
+expected outputs.
 
 Candidate routes are additionally **bound to the invite's recipients**: the caller
 must identify with an email the invite was sent to, and a candidate who already
@@ -118,9 +128,18 @@ forwarded link, not deliberate impersonation.
 | Method | Path                              | Auth        | Purpose                                                        |
 | ------ | --------------------------------- | ----------- | ------------------------------------------------------------- |
 | GET    | `/health`                         | none        | `{"status":"ok"}`                                             |
-| POST   | `/auth/register`                  | none        | Register an interviewer → `{id,email,name}` (409 if email taken). |
-| POST   | `/auth/login`                     | none        | → `{access_token, token_type:"bearer"}` (401 on bad creds).   |
+| POST   | `/auth/register`                  | none        | Register an interviewer → `{id,email,name,email_verified}` (409 if email taken, 422 weak/breached password); emails a confirmation link. |
+| POST   | `/auth/login`                     | none        | → `{access_token, token_type:"bearer"}` + refresh cookie (401 on bad creds). |
+| POST   | `/auth/refresh`                   | cookie      | → a new `{access_token}` and re-issued cookie (401 = not signed in). |
+| POST   | `/auth/logout`                    | none        | Clears this browser's refresh cookie (204).                   |
 | GET    | `/auth/me`                        | bearer      | Current interviewer.                                          |
+| PATCH  | `/auth/me`                        | bearer      | Update workspace defaults (branding).                         |
+| DELETE | `/auth/me`                        | bearer      | Delete the account and everything it owns; body `{password}` (403 wrong password). |
+| POST   | `/auth/change-password`           | bearer      | `{current_password,new_password}` → fresh session; every other device is signed out. |
+| POST   | `/auth/forgot-password`           | none        | `{email}` → 202 either way; emails a one-hour, single-use reset link if the address has an account. |
+| POST   | `/auth/reset-password`            | none        | `{token,new_password}` → 204 (400 bad/used/expired link). Signs out every device. |
+| POST   | `/auth/verify-email`              | none        | `{token}` from the emailed link → 204 (400 bad/expired).      |
+| POST   | `/auth/resend-verification`       | bearer      | Re-send the confirmation link (202).                          |
 | POST   | `/questions`                      | bearer      | Create a question (owned by caller).                         |
 | POST   | `/questions/draft`                | bearer      | Draft a question from a brief via the agent. **Stores nothing** — the interviewer reviews/edits, then saves via `POST /questions`. |
 | GET    | `/questions`                      | bearer      | List the caller's own questions (active only; `?include_archived=true` to include archived). |

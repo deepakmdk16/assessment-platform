@@ -28,6 +28,7 @@ const owner = (over: Partial<User> = {}): User => ({
   name: 'Owner',
   default_org_name: null,
   default_logo_url: null,
+  email_verified: true,
   ...over,
 })
 

@@ -22,12 +22,14 @@ vi.mock('../../api', () => {
     }
   }
   return {
-    api: { login: vi.fn(), me: vi.fn(), register: vi.fn() },
+    api: { login: vi.fn(), me: vi.fn(), register: vi.fn(), logout: vi.fn() },
     ApiError,
     getToken: vi.fn(() => null),
     setToken: vi.fn(),
     clearToken: vi.fn(),
     setUnauthorizedHandler: vi.fn(),
+    // No live session on boot: the provider's refresh attempt resolves false.
+    tryRefresh: vi.fn(async () => false),
   }
 })
 
@@ -55,6 +57,7 @@ describe('LoginPage', () => {
       name: 'Ada',
       default_org_name: null,
       default_logo_url: null,
+      email_verified: true,
     })
 
     renderLoginPage()

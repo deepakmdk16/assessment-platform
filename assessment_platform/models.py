@@ -51,6 +51,13 @@ class Interviewer(SQLModel, table=True):
     # still stores its own snapshot. logo_url is a URL reference, never base64.
     default_org_name: str | None = None
     default_logo_url: str | None = None
+    # Revocation switch for stateless JWTs: every access/refresh token carries
+    # the version it was minted under and is refused once this moves. Bumped by
+    # a password change or reset, so "log out everywhere" needs no session table.
+    token_version: int = Field(default=0)
+    # When the address was confirmed via the emailed link (or a password reset,
+    # which proves the same thing). None = unverified; nothing is gated on it yet.
+    email_verified_at: datetime | None = None
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 

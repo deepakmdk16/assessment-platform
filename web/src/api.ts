@@ -33,18 +33,23 @@ import type {
 } from './types'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:9000'
-const TOKEN_KEY = 'assessment_platform_token'
+
+// The access token lives only in memory: it is short-lived by design and never
+// goes into localStorage, where any script on the page could read it. The
+// long-lived credential is the httpOnly refresh cookie the browser holds for
+// /auth, which script can't touch — see tryRefresh.
+let accessToken: string | null = null
 
 export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
+  return accessToken
 }
 
 export function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token)
+  accessToken = token
 }
 
 export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY)
+  accessToken = null
 }
 
 export class ApiError extends Error {
@@ -70,7 +75,32 @@ interface RequestOptions {
   auth?: boolean
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+let refreshing: Promise<boolean> | null = null
+
+/** Trade the refresh cookie for a new access token. Concurrent callers share one
+ *  in-flight request. Resolves false when there is no live session. */
+export function tryRefresh(): Promise<boolean> {
+  if (!refreshing) {
+    refreshing = fetch(`${BASE_URL}/auth/refresh`, { method: 'POST', credentials: 'include' })
+      .then(async (res) => {
+        if (!res.ok) return false
+        const data = (await res.json()) as LoginResponse
+        setToken(data.access_token)
+        return true
+      })
+      .catch(() => false)
+      .finally(() => {
+        refreshing = null
+      })
+  }
+  return refreshing
+}
+
+async function request<T>(
+  path: string,
+  options: RequestOptions = {},
+  retried = false,
+): Promise<T> {
   const { method = 'GET', body, auth = false } = options
 
   const headers: Record<string, string> = {}
@@ -88,9 +118,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: 'include',
   })
 
   if (res.status === 401 && auth) {
+    // Access tokens expire in minutes, so a 401 usually just means that: refresh
+    // and replay once. Only a failed refresh is a real sign-out.
+    if (!retried && (await tryRefresh())) {
+      return request<T>(path, options, true)
+    }
     unauthorizedHandler?.()
   }
 
@@ -126,6 +162,30 @@ export const api = {
 
   updateMe: (data: { default_org_name: string | null; default_logo_url: string | null }) =>
     request<User>('/auth/me', { method: 'PATCH', body: data, auth: true }),
+
+  logout: () => request<void>('/auth/logout', { method: 'POST' }),
+
+  forgotPassword: (email: string) =>
+    request<{ detail: string }>('/auth/forgot-password', { method: 'POST', body: { email } }),
+
+  resetPassword: (token: string, new_password: string) =>
+    request<void>('/auth/reset-password', { method: 'POST', body: { token, new_password } }),
+
+  changePassword: (current_password: string, new_password: string) =>
+    request<LoginResponse>('/auth/change-password', {
+      method: 'POST',
+      body: { current_password, new_password },
+      auth: true,
+    }),
+
+  verifyEmail: (token: string) =>
+    request<void>('/auth/verify-email', { method: 'POST', body: { token } }),
+
+  resendVerification: () =>
+    request<{ detail: string }>('/auth/resend-verification', { method: 'POST', auth: true }),
+
+  deleteAccount: (password: string) =>
+    request<void>('/auth/me', { method: 'DELETE', body: { password }, auth: true }),
 
   listQuestions: (includeArchived = false, offset = 0, limit = 100) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
@@ -323,14 +383,26 @@ export const api = {
     ),
 }
 
-/** Fetch the owner-scoped submissions CSV (authenticated) and trigger a browser
- *  download. Kept out of `request` because it returns a file, not JSON. */
-export async function exportSubmissionsCsv(): Promise<void> {
+/** A raw authenticated GET for the file downloads below (which bypass `request`
+ *  because they return a file, not JSON), with the same refresh-and-replay on an
+ *  expired access token. */
+async function authedFetch(path: string, retried = false): Promise<Response> {
   const token = getToken()
-  const res = await fetch(`${BASE_URL}/submissions/export`, {
+  const res = await fetch(`${BASE_URL}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: 'include',
   })
-  if (res.status === 401) unauthorizedHandler?.()
+  if (res.status === 401) {
+    if (!retried && (await tryRefresh())) return authedFetch(path, true)
+    unauthorizedHandler?.()
+  }
+  return res
+}
+
+/** Fetch the owner-scoped submissions CSV (authenticated) and trigger a browser
+ *  download. */
+export async function exportSubmissionsCsv(): Promise<void> {
+  const res = await authedFetch('/submissions/export')
   if (!res.ok) throw new ApiError(res.status, res.statusText)
   const url = URL.createObjectURL(await res.blob())
   const a = document.createElement('a')
@@ -345,11 +417,7 @@ export async function exportSubmissionsCsv(): Promise<void> {
 /** Fetch a submission's PDF report (authenticated) from the agent proxy and
  *  trigger a browser download. A file, not JSON, so it bypasses `request`. */
 export async function downloadSubmissionReport(submissionId: string): Promise<void> {
-  const token = getToken()
-  const res = await fetch(`${BASE_URL}/submissions/${submissionId}/report`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
-  if (res.status === 401) unauthorizedHandler?.()
+  const res = await authedFetch(`/submissions/${submissionId}/report`)
   if (!res.ok) throw new ApiError(res.status, res.statusText)
   const url = URL.createObjectURL(await res.blob())
   const a = document.createElement('a')

@@ -29,16 +29,25 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, or_, text, update
+from sqlalchemy import delete, func, or_, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, col, select
+from sqlmodel import Session, SQLModel, col, select
 
 from . import agent_client, analytics, config, db, email_client, integrity, signing
 from .auth import (
+    REFRESH_COOKIE,
+    clear_refresh_cookie,
     create_access_token,
+    create_refresh_token,
+    create_reset_token,
+    create_verify_token,
     get_current_interviewer,
     hash_password,
+    interviewer_from_action_token,
+    interviewer_from_refresh,
+    is_breached_password,
+    set_refresh_cookie,
     verify_password,
 )
 from .config import PLATFORM_BASE_URL
@@ -84,7 +93,10 @@ from .schemas import (
     CandidateSubmitIn,
     CandidateSubmitOut,
     CandidateTestOutcomeOut,
+    ChangePasswordIn,
     DashboardSubmissionOut,
+    DeleteAccountIn,
+    ForgotPasswordIn,
     IntegrityEventOut,
     IntegrityEventsIn,
     IntegrityReportOut,
@@ -99,6 +111,7 @@ from .schemas import (
     InvitePublicOut,
     InviteStatusOut,
     LoginIn,
+    MessageOut,
     OverviewAnalyticsOut,
     Page,
     QuestionAnalyticsOut,
@@ -108,6 +121,7 @@ from .schemas import (
     QuestionOut,
     QuestionUpdate,
     RegisterIn,
+    ResetPasswordIn,
     ResultOut,
     ScoreBucketOut,
     SubmissionCreate,
@@ -125,6 +139,7 @@ from .schemas import (
     VariantSetInviteCreate,
     VariantSetOut,
     VariantSetSummaryOut,
+    VerifyEmailIn,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,9 +175,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
-    # No credentials cross-origin: the JWT rides in the Authorization header, not
-    # a cookie, so cookie/credential CORS is unnecessary (and can't combine with
-    # a wildcard origin anyway).
+    # The refresh token is an httpOnly cookie, so the SPA's /auth calls must be
+    # credentialed. Only the explicit origins above are ever allowed (credentials
+    # can't combine with a wildcard, and shouldn't).
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -451,7 +467,79 @@ def _interviewer_out(interviewer: Interviewer) -> InterviewerOut:
         name=interviewer.name,
         default_org_name=interviewer.default_org_name,
         default_logo_url=interviewer.default_logo_url,
+        email_verified=interviewer.email_verified_at is not None,
     )
+
+
+def _reject_breached(password: str) -> None:
+    if is_breached_password(password):
+        raise HTTPException(
+            status_code=422,
+            detail="that password appears in a known data breach; please choose another.",
+        )
+
+
+def _issue_session(interviewer: Interviewer, response: Response) -> TokenOut:
+    """A fresh access token in the body plus a (re)issued refresh cookie."""
+    set_refresh_cookie(response, create_refresh_token(interviewer))
+    return TokenOut(access_token=create_access_token(interviewer))
+
+
+def _set_password(interviewer: Interviewer, new_password: str) -> None:
+    interviewer.password_hash = hash_password(new_password)
+    # Every token minted before this — every device, this one included — is
+    # void from here on. A caller that should stay signed in gets a new session.
+    interviewer.token_version += 1
+    interviewer.updated_at = datetime.now(timezone.utc)
+
+
+def _send_verification(interviewer: Interviewer) -> None:
+    url = f"{config.FRONTEND_BASE_URL}/verify-email?token={create_verify_token(interviewer)}"
+    email_client.send_account_email(
+        interviewer.email,
+        "Confirm your email address",
+        f"Hi {interviewer.name},\n\n"
+        "Confirm this address for your coding-assessment account by opening:\n"
+        f"{url}\n\n"
+        "The link is valid for 3 days. If you didn't create an account, ignore this email.",
+        url,
+    )
+
+
+def _purge_interviewer(owner_id: int, session: Session) -> None:
+    """Hard-delete an interviewer and every row that hangs off them, children
+    first so no foreign key is ever left dangling: results → submissions →
+    sitting rows (attempts, slot variants, integrity events, drafts) → invites →
+    assessment slots → assessments → test cases → questions → variant sets → the
+    account. This is the one path that removes recorded submissions: the account
+    holder is the record's owner, and taking their data with them is what
+    deleting an account means (and what a data-subject request requires)."""
+    question_ids = select(Question.id).where(Question.owner_id == owner_id)
+    assessment_ids = select(Assessment.id).where(Assessment.owner_id == owner_id)
+    invite_ids = select(Invite.id).where(Invite.created_by == owner_id)
+    submission_ids = select(Submission.id).where(
+        or_(
+            col(Submission.question_id).in_(question_ids),
+            col(Submission.invite_id).in_(invite_ids),
+        )
+    )
+    steps: list[tuple[type[SQLModel], Any]] = [
+        (AssessmentResult, col(AssessmentResult.submission_id).in_(submission_ids)),
+        (Submission, col(Submission.id).in_(submission_ids)),
+        (CandidateAttempt, col(CandidateAttempt.invite_id).in_(invite_ids)),
+        (CandidateSlotVariant, col(CandidateSlotVariant.invite_id).in_(invite_ids)),
+        (IntegrityEvent, col(IntegrityEvent.invite_id).in_(invite_ids)),
+        (CandidateDraft, col(CandidateDraft.invite_id).in_(invite_ids)),
+        (Invite, col(Invite.created_by) == owner_id),
+        (AssessmentQuestion, col(AssessmentQuestion.assessment_id).in_(assessment_ids)),
+        (Assessment, col(Assessment.owner_id) == owner_id),
+        (QuestionTestCase, col(QuestionTestCase.question_id).in_(question_ids)),
+        (Question, col(Question.owner_id) == owner_id),
+        (VariantSet, col(VariantSet.owner_id) == owner_id),
+        (Interviewer, col(Interviewer.id) == owner_id),
+    ]
+    for table, condition in steps:
+        session.execute(delete(table).where(condition))
 
 
 @app.post("/auth/register", response_model=InterviewerOut, status_code=201)
@@ -469,35 +557,163 @@ def register(
         body.registration_code, config.REGISTRATION_CODE
     ):
         raise HTTPException(status_code=403, detail="invalid or missing registration code.")
-    existing = session.exec(
-        select(Interviewer).where(Interviewer.email == body.email)
-    ).first()
+    # Stored and compared lower-cased, so Jane@x.io and jane@x.io are one account.
+    email = _normalize_email(body.email)
+    existing = session.exec(select(Interviewer).where(Interviewer.email == email)).first()
     if existing is not None:
-        raise HTTPException(status_code=409, detail=f"email {body.email!r} already registered.")
+        raise HTTPException(status_code=409, detail=f"email {email!r} already registered.")
+    _reject_breached(body.password)
     interviewer = Interviewer(
-        email=body.email,
+        email=email,
         password_hash=hash_password(body.password),
         name=body.name,
     )
     session.add(interviewer)
     session.commit()
     session.refresh(interviewer)
+    # Best-effort, like invite mail: a mailer outage must not block sign-up. The
+    # link can be re-sent from the account.
+    _send_verification(interviewer)
     return _interviewer_out(interviewer)
 
 
 @app.post("/auth/login", response_model=TokenOut)
 def login(
-    body: LoginIn, request: Request, session: Session = Depends(get_session)
+    body: LoginIn,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_session),
 ) -> TokenOut:
     limiter.check(
         "login", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
     interviewer = session.exec(
-        select(Interviewer).where(Interviewer.email == body.email)
+        select(Interviewer).where(Interviewer.email == _normalize_email(body.email))
     ).first()
     if interviewer is None or not verify_password(body.password, interviewer.password_hash):
         raise HTTPException(status_code=401, detail="invalid email or password.")
-    return TokenOut(access_token=create_access_token(_require_id(interviewer.id)))
+    return _issue_session(interviewer, response)
+
+
+@app.post("/auth/refresh", response_model=TokenOut)
+def refresh_session(
+    request: Request, response: Response, session: Session = Depends(get_session)
+) -> TokenOut:
+    """Trade the refresh cookie for a new access token (and a re-issued cookie,
+    so the session slides). How the SPA resumes a session on page load and
+    recovers from an expired access token — the only thing the cookie is for."""
+    interviewer = interviewer_from_refresh(request.cookies.get(REFRESH_COOKIE), session)
+    if interviewer is None:
+        raise HTTPException(status_code=401, detail="not signed in.")
+    return _issue_session(interviewer, response)
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(response: Response) -> None:
+    """Sign this browser out: drop its refresh cookie. Other devices keep their
+    sessions; changing the password is what signs out everywhere."""
+    clear_refresh_cookie(response)
+
+
+@app.post("/auth/forgot-password", response_model=MessageOut, status_code=202)
+def forgot_password(
+    body: ForgotPasswordIn, request: Request, session: Session = Depends(get_session)
+) -> MessageOut:
+    limiter.check(
+        "forgot", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
+    interviewer = session.exec(
+        select(Interviewer).where(Interviewer.email == _normalize_email(body.email))
+    ).first()
+    if interviewer is not None:
+        url = f"{config.FRONTEND_BASE_URL}/reset-password?token={create_reset_token(interviewer)}"
+        email_client.send_account_email(
+            interviewer.email,
+            "Reset your password",
+            f"Hi {interviewer.name},\n\n"
+            "Someone asked to reset the password for this coding-assessment account. "
+            "If that was you, open:\n"
+            f"{url}\n\n"
+            "The link works once and expires in 1 hour. If you didn't ask for it, "
+            "ignore this email — your password is unchanged.",
+            url,
+        )
+    # The same answer whether or not the address has an account, so this can't
+    # be used to find out which emails are registered.
+    return MessageOut(detail="if that address has an account, a reset link has been emailed.")
+
+
+@app.post("/auth/reset-password", status_code=204)
+def reset_password(body: ResetPasswordIn, session: Session = Depends(get_session)) -> None:
+    interviewer = interviewer_from_action_token(body.token, "reset", session)
+    if interviewer is None:
+        raise HTTPException(status_code=400, detail="invalid or expired reset link.")
+    _reject_breached(body.new_password)
+    _set_password(interviewer, body.new_password)
+    # Following a link mailed to the address proves control of it.
+    interviewer.email_verified_at = interviewer.email_verified_at or datetime.now(timezone.utc)
+    session.add(interviewer)
+    session.commit()
+
+
+@app.post("/auth/change-password", response_model=TokenOut)
+def change_password(
+    body: ChangePasswordIn,
+    response: Response,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> TokenOut:
+    """Change the caller's password. Re-entering the current one is what stops a
+    lifted access token from taking the account over. Signs every other device
+    out (token_version) and hands this one a fresh session."""
+    if not verify_password(body.current_password, current.password_hash):
+        raise HTTPException(status_code=403, detail="current password is incorrect.")
+    _reject_breached(body.new_password)
+    _set_password(current, body.new_password)
+    session.add(current)
+    session.commit()
+    session.refresh(current)
+    return _issue_session(current, response)
+
+
+@app.post("/auth/verify-email", status_code=204)
+def verify_email(body: VerifyEmailIn, session: Session = Depends(get_session)) -> None:
+    interviewer = interviewer_from_action_token(body.token, "verify", session)
+    if interviewer is None:
+        raise HTTPException(status_code=400, detail="invalid or expired verification link.")
+    if interviewer.email_verified_at is None:
+        interviewer.email_verified_at = datetime.now(timezone.utc)
+        session.add(interviewer)
+        session.commit()
+
+
+@app.post("/auth/resend-verification", response_model=MessageOut, status_code=202)
+def resend_verification(
+    request: Request, current: Interviewer = Depends(get_current_interviewer)
+) -> MessageOut:
+    limiter.check(
+        "forgot", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
+    if current.email_verified_at is not None:
+        return MessageOut(detail="email already verified.")
+    _send_verification(current)
+    return MessageOut(detail="verification email sent.")
+
+
+@app.delete("/auth/me", status_code=204)
+def delete_me(
+    body: DeleteAccountIn,
+    response: Response,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> None:
+    """Delete the caller's account and everything it owns (see
+    `_purge_interviewer`). Irreversible; the password is required again."""
+    if not verify_password(body.password, current.password_hash):
+        raise HTTPException(status_code=403, detail="password is incorrect.")
+    _purge_interviewer(_require_id(current.id), session)
+    session.commit()
+    clear_refresh_cookie(response)
 
 
 @app.get("/auth/me", response_model=InterviewerOut)

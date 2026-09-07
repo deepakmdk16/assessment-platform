@@ -361,30 +361,30 @@ the tag "single-audit claim". Priorities: **P0** blocks taking money or endanger
 customers · **P1** first paying customers hit it · **P2** fix before scale · **P3** polish.
 Effort: XS minutes · S self-contained · M multi-file · L data + API + UI.
 
-Platform backend (P), web (W) and cross-repo/SaaS (X) items (56: P0: 5, P1: 8, P2: 35, P3: 8).
+Platform backend (P), web (W) and cross-repo/SaaS (X) items (55: P0: 4, P1: 9, P2: 35, P3: 7).
 Agent-only items (A) live in `../AssesmentAgent/STATUS.md`.
 
 **Suggested sequence** (the cheap P0/P1 blockers — P01, P02, P04, A01, A03, P09, P19,
-A32, W01, W02 — and the grading-durability epic — A04 + P05 + P10 + P15 — landed
-2026-09-07): (1) accounts → organisation → billing (P13 → X01 → X02); (2) privacy
+A32, W01, W02 — the grading-durability epic — A04 + P05 + P10 + P15 — and the
+account-lifecycle backend — P13 — landed 2026-09-07): (1) organisation → billing
+(X01 → X02), with the P13 web pages alongside; (2) privacy
 (X03, X04) and email/notifications (X06, X07); (3) deploy + ops (X05, X08, A06, A07,
 P26, X11); (4) everything else by priority. Close each item by deleting it here in
 the same commit (checkpoint #5).
 
-- **P13 · P0 · M — Account lifecycle is not SaaS-grade: password min_length=1, no
-reset/verification/change/deletion, 12 h JWT with no revocation, case-sensitive
-email matching.**
-  Evidence: schemas.py:414 RegisterIn.password min_length=1; route map has no
-  reset/verify/change/delete; auth.py:37-44 HS256 12 h (config.py:99
-  JWT_EXPIRE_MIN=720), no jti/refresh/token_version; token in localStorage
-  (web/src/api.ts:38-47); api.py:441-445 and 464-466 compare email exactly so
-  Jane@x.io ≠ jane@x.io (duplicate accounts; mixed-case sign-ups can't log in). Why:
-  first support tickets are "forgot password" and "can't log in"; departed employees
-  can't be logged out; XSS exfiltrates a 12 h session. Fix: min-12 password + breach
-  check; email verification + reset via the mailer; normalise emails (lower()) on
-  register/login with a one-off backfill; short-lived access + refresh in httpOnly
-  cookie; token_version checked in get_current_interviewer.
-  _Verified: cited lines read in this audit; source: backend,saas._
+- **P13 · P1 (was P0) · S — Account-lifecycle web pages (backend landed 2026-09-07).**
+  The API side is done: min-12/≤72-byte passwords + HIBP breach check, lower-cased
+  emails (backfilled by migration `e3b9a7c1d052`), 15-min access token held in
+  memory + 30-day httpOnly refresh cookie on `/auth`, `token_version` revocation,
+  and `/auth/{refresh,logout,forgot-password,reset-password,change-password,
+  verify-email,resend-verification}` + `DELETE /auth/me` (purges everything the
+  account owns). The SPA resumes sessions via the cookie. Still missing: the
+  pages that use the new routes — forgot/reset-password, verify-email landing,
+  "Forgot password?" on login, a Security section in Settings (change password,
+  delete account), and an unverified-email banner with resend. Mockup-first rule
+  applies (CLAUDE.md); nothing is gated on verification yet.
+  _Follow-up opened 2026-09-07 while closing the original P13._
+
 - **X01 · P0 · L — No organisation/team model — one login per company.**
   Evidence: only Interviewer rows (platform models.py:43-55); every resource is
   owner_id-scoped (api.py:504-521); "workspace" means one interviewer's default

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+from typing import Literal, cast
 
 from dotenv import load_dotenv
 
@@ -108,7 +109,33 @@ if not JWT_SECRET:
         "survive a restart). Set JWT_SECRET in production."
     )
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "720"))
+# Access-token lifetime. Short on purpose: it is the token an XSS could lift from
+# the page, so it must be worthless within minutes. Sessions outlive it through
+# the refresh cookie below, which script on the page can't read.
+JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "15"))
+# Refresh-token lifetime (an httpOnly cookie scoped to /auth): how long a browser
+# stays signed in without re-entering the password. Sliding — every refresh
+# re-issues it.
+REFRESH_EXPIRE_DAYS = int(os.getenv("REFRESH_EXPIRE_DAYS", "30"))
+# Cookie attributes. Secure defaults to ON whenever the API is served over https
+# (from PLATFORM_BASE_URL) and off for plain-http dev — a browser drops a Secure
+# cookie set over http, which would make sign-in silently not stick. SameSite
+# `lax` covers the SPA and the API on one site (127.0.0.1:5173 → :9000, or
+# app./api. subdomains of one domain); set `none` (Secure required) only when
+# they live on unrelated domains.
+COOKIE_SECURE = (
+    os.getenv("COOKIE_SECURE", str(PLATFORM_BASE_URL.startswith("https://"))).lower() == "true"
+)
+_samesite = os.getenv("COOKIE_SAMESITE", "lax").lower()
+if _samesite not in ("lax", "strict", "none"):
+    raise RuntimeError(f"COOKIE_SAMESITE must be lax, strict or none (got {_samesite!r})")
+COOKIE_SAMESITE = cast(Literal["lax", "strict", "none"], _samesite)
+# Check every new password against Have I Been Pwned (k-anonymity range API —
+# only a 5-char hash prefix leaves the machine; fails open when the service is
+# unreachable). Off under test so the suite never touches the network.
+PASSWORD_BREACH_CHECK = (
+    False if TESTING else os.getenv("PASSWORD_BREACH_CHECK", "true").lower() == "true"
+)
 
 # Base URL of the interviewer/candidate frontend, used to build candidate invite
 # links (f"{FRONTEND_BASE_URL}/t/{token}").
