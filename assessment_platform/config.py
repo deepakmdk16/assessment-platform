@@ -36,6 +36,18 @@ TESTING = os.getenv("PLATFORM_TESTING", "").lower() in {"1", "true"}
 # locally (LOG_PII=true) to get the copy-pasteable invite link when SMTP is unset.
 LOG_PII = os.getenv("LOG_PII", "").lower() in {"1", "true"}
 
+# Root log level for the server process (see api.configure_logging). Uvicorn only
+# configures its own loggers, so this is what makes the package's INFO
+# breadcrumbs (callback correlation, the stale-running reaper) actually print.
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# Hard ceiling on any request body, enforced from Content-Length before the JSON
+# is parsed. The per-field caps in schemas.py bound what we STORE; this bounds
+# what we are willing to READ, so an unauthenticated candidate route can't make
+# the server buffer a multi-megabyte blob just to 422 it. Generous enough for a
+# variant set of eight hand-authored questions with many test cases.
+MAX_BODY_BYTES = int(os.getenv("MAX_BODY_BYTES", str(4 * 1024 * 1024)))
+
 # Create tables on startup via SQLModel.metadata.create_all. OFF by default:
 # production runs the Alembic migrations, and an unconditional create_all silently
 # masks a missing migration (a model change works in dev without one, then a fresh

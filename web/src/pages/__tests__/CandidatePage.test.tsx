@@ -279,6 +279,28 @@ describe('CandidatePage', () => {
     expect(api.submitCandidate).not.toHaveBeenCalled()
   })
 
+  it('lands on a terminal notice when time runs out with an empty editor (single question)', async () => {
+    // Before: the auto-submit fired unconditionally, the server 422'd the empty
+    // code, and the candidate sat on a locked IDE reading "submitting…" forever.
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue({
+      ...startResponse,
+      deadline: new Date(Date.now() - 1000).toISOString(), // already expired
+    })
+
+    renderCandidatePage()
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    expect(await screen.findByRole('heading', { name: /time.s up/i })).toBeInTheDocument()
+    expect(screen.getByText(/nothing was submitted/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/code editor/i)).not.toBeInTheDocument()
+    expect(api.submitCandidate).not.toHaveBeenCalled()
+  })
+
   it('does not reveal the question until the gate is passed', async () => {
     vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
     vi.mocked(api.startInvite).mockResolvedValue(startResponse)

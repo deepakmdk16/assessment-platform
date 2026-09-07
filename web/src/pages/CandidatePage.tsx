@@ -28,6 +28,7 @@ type Stage =
   | 'editor'
   | 'submitted'
   | 'already_submitted'
+  | 'timed_out'
 
 // Autosave the in-progress solution to localStorage, keyed by the invite token,
 // so a reload (or the ErrorBoundary catching a render throw) doesn't lose the
@@ -266,6 +267,15 @@ export function CandidatePage() {
 
   async function doSubmit() {
     if (!token || !language) return
+    if (timeUp && !code.trim()) {
+      // Time ran out with nothing to record. The server rejects an empty
+      // submission (422), which used to leave the candidate on a locked IDE
+      // reading "submitting…" forever. Land on a terminal notice instead, as
+      // the multi-question flow already does.
+      integrity.flush()
+      setStage('timed_out')
+      return
+    }
     setSubmitError(null)
     setSubmitting(true)
     try {
@@ -343,6 +353,13 @@ export function CandidatePage() {
       <CandidateNotice
         title="Submitted ✓"
         body={`Thanks, ${candidateName}! Your solution has been submitted and is being graded.`}
+      />
+    )
+  if (stage === 'timed_out')
+    return (
+      <CandidateNotice
+        title="Time’s up"
+        body="The time limit passed before any code was entered, so nothing was submitted. Contact your interviewer if you think this is a mistake."
       />
     )
 

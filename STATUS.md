@@ -360,27 +360,17 @@ the tag "single-audit claim". Priorities: **P0** blocks taking money or endanger
 customers · **P1** first paying customers hit it · **P2** fix before scale · **P3** polish.
 Effort: XS minutes · S self-contained · M multi-file · L data + API + UI.
 
-Platform backend (P), web (W) and cross-repo/SaaS (X) items (66: P0: 6, P1: 16, P2: 36, P3: 8).
+Platform backend (P), web (W) and cross-repo/SaaS (X) items (59: P0: 5, P1: 10, P2: 36, P3: 8).
 Agent-only items (A) live in `../AssesmentAgent/STATUS.md`.
 
-**Suggested sequence.** (1) the cheap P0/P1 correctness + deploy blockers (P01, P02, P04,
-A01, A03, P09, P19, A32, W01, W02); (2) the grading-durability epic as one change
+**Suggested sequence** (the cheap P0/P1 blockers — P01, P02, P04, A01, A03, P09, P19,
+A32, W01, W02 — landed 2026-09-07): (1) the grading-durability epic as one change
 (A04 + P05 + P10 + P15: platform-owned job table, id minted before trigger, background
-reaper with auto-retry); (3) accounts → organisation → billing (P13 → X01 → X02);
-(4) privacy (X03, X04) and email/notifications (X06, X07); (5) deploy + ops (X05, X08,
-A06, A07, P26, X11); (6) everything else by priority. Close each item by deleting it
+reaper with auto-retry); (2) accounts → organisation → billing (P13 → X01 → X02);
+(3) privacy (X03, X04) and email/notifications (X06, X07); (4) deploy + ops (X05, X08,
+A06, A07, P26, X11); (5) everything else by priority. Close each item by deleting it
 here in the same commit (checkpoint #5).
 
-- **P01 · P0 · XS — No Postgres driver is a dependency — "Postgres-ready via
-DATABASE_URL" cannot work out of the box.**
-  Evidence: pyproject.toml dependencies and uv.lock contain no
-  psycopg/psycopg2/asyncpg; live: `alembic upgrade head` against Postgres 16
-  succeeded only with an ephemeral `uv run --with 'psycopg[binary]'`; all 19
-  migrations then applied cleanly (single head a4f8c2d6e9b1) and the full API flow
-  passed on Postgres. Why: first Postgres deploy fails at import; nothing in CI or
-  tests ever runs the chain on Postgres. Fix: `uv add "psycopg[binary]"`; add a CI
-  job running alembic upgrade head + a smoke against a Postgres service container.
-  _Verified: live run in this audit; source: live._
 - **P13 · P0 · M — Account lifecycle is not SaaS-grade: password min_length=1, no
 reset/verification/change/deletion, 12 h JWT with no revocation, case-sensitive
 email matching.**
@@ -433,17 +423,6 @@ proctoring.**
   customer-blocking. Fix: explicit consent checkbox stored on CandidateAttempt;
   privacy-policy + terms links; a DPA template (legal review).
   _Verified: cited lines read in this audit; source: saas._
-- **P02 · P1 · XS — Settings-only PUT /assessments/{id} 500s on a variant-set
-assessment once any candidate has started.**
-  Evidence: api.py:1303-1305 unconditionally `a.questions.clear(); session.flush()`;
-  CandidateSlotVariant.assessment_question_id FKs those rows (models.py:315); live
-  on Postgres: 500 `ForeignKeyViolation …
-  candidateslotvariant_assessment_question_id_fkey` on an identical-slots edit after
-  four candidates started; the A9 409 for a changed slot set works. Why: the
-  2026-08-03 edit dialog is broken for exactly the feature it was built alongside;
-  without FK enforcement it would silently orphan assignments and re-roll variants.
-  Fix: leave membership untouched when new_sig == current_sig.
-  _Verified: live run in this audit; source: backend,live._
 - **P03 · P1 · S — Assessment and variant-set invites cannot be revoked (no route,
 no UI); archiving does not stop links.**
   Evidence: the only revoke route requires Invite.question_id == question_id
@@ -456,15 +435,6 @@ no UI); archiving does not stop links.**
   /assessments/{id}/invites/{token}/revoke (+ variant-set) and UI revoke/expiry
   controls on both surfaces.
   _Verified: live run in this audit; source: backend,frontend,live._
-- **P04 · P1 · XS — Deleting a question that is a fixed slot of an assessment
-(pre-invite) 500s; same for an assigned variant.**
-  Evidence: delete_question (api.py:1056-1113) never checks
-  AssessmentQuestion.question_id (FK, no cascade, models.py:209) or
-  CandidateSlotVariant.question_id (models.py:316); live on Postgres: DELETE → 500
-  ForeignKeyViolation; the "deleted variant falls through to a fresh assignment"
-  branch (api.py:2088-2091) is unreachable. Why: a plain 500 on a normal interviewer
-  action. Fix: 409 naming the assessments (mirror the submission guard).
-  _Verified: live run in this audit; source: backend,live._
 - **P05 · P1 · S — Callback-before-commit race strands submissions in "running".**
   Evidence: api.py:2686-2701 awaits trigger_assessment before committing
   agent_job_id; a fast agent can hit /assessments/callback first; lookup miss
@@ -474,15 +444,6 @@ no UI); archiving does not stop links.**
   (send it to the agent), or return 404 for unknown job ids so the agent's retry
   loop covers it.
   _Verified: cited lines read in this audit; source: backend._
-- **P09 · P1 · XS — Unbounded request bodies on candidate code/stdin routes; no ASGI
-body limit.**
-  Evidence: schemas.py:352 SubmissionCreate.code, :586 CandidateSubmitIn.code
-  (min_length=1, no max), :627-628 CandidateRunIn code/stdin, :648 RunTests have no
-  max_length; only CandidateDraftIn is capped (100 KB, schemas.py:604); the agent
-  caps at 200 KB (agent api.py:182). Why: an unauthenticated candidate can push
-  multi-MB blobs into Submission.code before the agent 422s. Fix: max_length=200_000
-  to match the agent + a body-size middleware.
-  _Verified: cited lines read in this audit; source: backend,saas._
 - **P10 · P1 · S — Stale "running" submissions are healed lazily, only to error,
 only on interviewer reads, scanning every tenant.**
   Evidence: _reap_stale_running (api.py:2708-2739) runs when an interviewer loads a
@@ -492,36 +453,6 @@ only on interviewer reads, scanning every tenant.**
   cross-tenant scan on every list. Fix: background reaper task (or cron endpoint)
   that auto-retries once then alerts; owner-scope the scan; index status.
   _Verified: cited lines read in this audit; source: backend,saas._
-- **P19 · P1 · XS — The platform never configures logging, so its INFO correlation
-breadcrumbs are dropped in production.**
-  Evidence: api.py:3185-3196 main() calls uvicorn.run with no logging.basicConfig
-  (the agent does, agent api.py:672-675); grep basicConfig|dictConfig in the
-  package: none; logger.info at api.py:2704, 3179 etc. never print; only WARNING+
-  reach stderr via lastResort without timestamps; test_logging_redaction.py uses
-  caplog so can't detect this. Why: the agent→callback path is designed to be
-  debuggable by logs and isn't. Fix: logging.basicConfig(level=LOG_LEVEL, format=…)
-  in main() (JSON formatter for prod).
-  _Verified: cited lines read in this audit; source: saas,quality._
-- **W01 · P1 · XS — Single-question timeout with an empty editor is a dead end.**
-  Evidence: pages/CandidatePage.tsx:312-319 calls doSubmit() unconditionally at
-  time-up; with code === '' the server 422s (min_length=1), :285 sets submitError,
-  stage stays editor, timeUp keeps every button disabled (:603,611,618) and shows
-  "Time's up — submitting…" forever (:447-453); AssessmentFlow.tsx:181,197 handles
-  the blank case. Why: candidate stuck on a locked IDE with a raw validation error.
-  Fix: skip the submit when !code.trim() and show a terminal notice, mirroring
-  AssessmentFlow.
-  _Verified: cited lines read in this audit; source: frontend._
-- **W02 · P1 · S — The candidate IDE loads Monaco from a third-party CDN at
-runtime.**
-  Evidence: package.json has @monaco-editor/react but monaco-editor is only a peer
-  dep (package-lock.json:813/3056 "peer": true); no loader.config in src/;
-  @monaco-editor/loader therefore defaults to
-  https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs; dist is a single 410 KB
-  chunk with no lazy route. Why: a timed, proctored sitting breaks if jsdelivr is
-  blocked/slow or under a CSP; supply-chain pin lives outside the lockfile. Fix: npm
-  i monaco-editor + loader.config({ monaco }) (or vite-plugin-monaco-editor);
-  React.lazy the editor route.
-  _Verified: cited lines read in this audit; source: frontend,quality._
 - **W03 · P1 · S — Every list row is mouse-only.**
   Evidence: <tr className="clickable-row" onClick=navigate> with no link/focusable
   target inside at pages/DashboardPage.tsx:170-174, AssessmentsListPage.tsx:113-117,

@@ -27,6 +27,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
@@ -154,6 +155,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _limit_body_size(request: Request, call_next: Any) -> Any:
+    """Refuse oversized bodies before parsing them (413).
+
+    The per-field `max_length` caps in schemas.py bound what gets stored; this
+    bounds what gets read at all. Without it an unauthenticated candidate route
+    would buffer and JSON-parse a multi-megabyte blob just to 422 it. Checked on
+    Content-Length (every JSON client sends it); a chunked body without one still
+    hits the field caps.
+    """
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > config.MAX_BODY_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": f"request body exceeds {config.MAX_BODY_BYTES} bytes."},
+        )
+    return await call_next(request)
 
 
 # --------------------------------------------------------------------------- #
@@ -1067,6 +1087,39 @@ def delete_question(
                 "are recorded against it. Revoke its invites instead."
             ),
         )
+    # A question that is a fixed slot of an assessment, or a variant already
+    # frozen onto a candidate's sitting, is referenced by an FK with no cascade —
+    # deleting it used to 500 on the constraint. Refuse with the same shape as
+    # the other guards, naming what holds the reference.
+    slot_assessments = list(
+        session.exec(
+            select(AssessmentQuestion.assessment_id).where(
+                AssessmentQuestion.question_id == question_id
+            )
+        ).all()
+    )
+    if slot_assessments:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot delete question {question_id!r}: it is a slot in assessment(s) "
+                f"{', '.join(sorted(set(slot_assessments)))}. Remove it from the "
+                "assessment first."
+            ),
+        )
+    assigned = session.exec(
+        select(func.count())
+        .select_from(CandidateSlotVariant)
+        .where(CandidateSlotVariant.question_id == question_id)
+    ).one()
+    if assigned:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot delete question {question_id!r}: it is a variant already "
+                f"assigned to {assigned} candidate sitting(s)."
+            ),
+        )
     # A sitting is a record even before (or without) a submission: an attempt is
     # someone having sat down, and integrity events are evidence — cascading
     # either away would destroy exactly what they exist to keep (deleting
@@ -1296,13 +1349,20 @@ def update_assessment(
     a.logo_url = body.logo_url
     a.proctored = body.proctored
     a.updated_at = datetime.now(timezone.utc)
-    # Full replace of the membership set (PUT). Clear via the relationship and
-    # flush FIRST (delete-orphan removes the old rows), so a question kept across
-    # the update doesn't collide with its own old row on the
-    # (assessment_id, question_id) unique key during a single flush.
-    a.questions.clear()
-    session.flush()
-    a.questions.extend(_membership_rows(new_slots, current, session))
+    # Full replace of the membership set (PUT) — but ONLY when it actually
+    # changed. A settings-only edit (title / timer / branding / monitoring, the
+    # edit dialog's whole job) must leave the AssessmentQuestion rows alone: once
+    # a candidate has started, CandidateSlotVariant rows FK those rows, so
+    # clearing and re-inserting them is an FK violation (a 500) on every VS2
+    # assessment in flight — and without FK enforcement it would silently orphan
+    # the frozen assignments and re-roll every candidate's variant.
+    if new_sig != current_sig:
+        # Clear via the relationship and flush FIRST (delete-orphan removes the
+        # old rows), so a question kept across the update doesn't collide with
+        # its own old row on the (assessment_id, question_id) unique key.
+        a.questions.clear()
+        session.flush()
+        a.questions.extend(_membership_rows(new_slots, current, session))
     session.add(a)
     session.commit()
     session.refresh(a)
@@ -3182,12 +3242,28 @@ def assessments_callback(
     return {"status": "ok", "submission_id": sub.id}
 
 
+def configure_logging() -> None:
+    """Root logger for the server process.
+
+    Uvicorn configures only its own loggers, so without this every `logger.info`
+    in this package — the correlation breadcrumbs the agent→callback path is
+    meant to be debugged with, the reaper's notices — was silently dropped in
+    production (only WARNING+ reached stderr via the last-resort handler, with
+    no timestamps). Level comes from LOG_LEVEL (default INFO).
+    """
+    logging.basicConfig(
+        level=config.LOG_LEVEL,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    )
+
+
 def main() -> None:
     """Entry point for `uv run platform-api` — serve on port 9000 by default."""
     import os
 
     import uvicorn
 
+    configure_logging()
     uvicorn.run(
         "assessment_platform.api:app",
         host=os.getenv("HOST", "127.0.0.1"),

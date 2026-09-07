@@ -345,11 +345,21 @@ class VariantSetSummaryOut(BaseModel):
     updated_at: datetime
 
 
+# Size caps on candidate-supplied text. `code` matches the agent's own 200 KB cap
+# on submissions, so the platform never stores something the grader would 422;
+# the Run button's `stdin` is bounded well under the agent's 2 MB. Every route a
+# candidate can hit unauthenticated carries one of these — before them a
+# multi-megabyte paste was accepted, stored in Submission.code, and only then
+# rejected by the agent.
+MAX_CODE_CHARS = 200_000
+MAX_STDIN_CHARS = 1_000_000
+
+
 class SubmissionCreate(BaseModel):
     question_id: str
     candidate: str
     language: str
-    code: str = Field(min_length=1)
+    code: str = Field(min_length=1, max_length=MAX_CODE_CHARS)
 
 
 class ResultOut(BaseModel):
@@ -583,7 +593,7 @@ class CandidateSubmitIn(BaseModel):
     candidate_name: str
     candidate_email: EmailStr
     language: str
-    code: str = Field(min_length=1)
+    code: str = Field(min_length=1, max_length=MAX_CODE_CHARS)
     # Which question this submits. None (or omitted) targets the invite's single
     # question; required for a multi-question assessment invite.
     question_id: str | None = None
@@ -624,8 +634,8 @@ class CandidateRunIn(BaseModel):
 
     candidate_email: EmailStr
     language: str
-    code: str = Field(min_length=1)
-    stdin: str = ""
+    code: str = Field(min_length=1, max_length=MAX_CODE_CHARS)
+    stdin: str = Field(default="", max_length=MAX_STDIN_CHARS)
     # The question being worked on (None = the invite's single question); used only
     # for the live/invited/not-already-submitted gate — run itself is generic.
     question_id: str | None = None
@@ -645,7 +655,7 @@ class CandidateRunOut(BaseModel):
 class CandidateRunTestsIn(BaseModel):
     candidate_email: EmailStr
     language: str
-    code: str = Field(min_length=1)
+    code: str = Field(min_length=1, max_length=MAX_CODE_CHARS)
     # Which question's tests to run. None = the invite's single question; required
     # for a multi-question assessment invite.
     question_id: str | None = None
