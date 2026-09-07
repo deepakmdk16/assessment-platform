@@ -3,6 +3,7 @@ LLM, or network is required."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,7 @@ from conftest import async_raise, async_return, patch_async_post
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import Session
 
-from assessment_platform import agent_client, config, signing
+from assessment_platform import agent_client, api, config, signing
 from assessment_platform import db as db_module
 from assessment_platform.models import Submission
 
@@ -370,7 +371,7 @@ def test_submission_unknown_question_404(client, monkeypatch) -> None:
     assert resp.status_code == 404
 
 
-def test_agent_call_failure_marks_error(client, monkeypatch) -> None:
+def test_agent_call_failure_leaves_submission_pending(client, monkeypatch) -> None:
     client.post("/questions", json=_sample_question())
 
     monkeypatch.setattr(
@@ -380,10 +381,11 @@ def test_agent_call_failure_marks_error(client, monkeypatch) -> None:
         "/submissions",
         json={"question_id": "sum_of_n", "candidate": "X", "language": "python", "code": "x"},
     )
-    assert resp.status_code == 502
-    # The submission row still exists, flipped to error.
+    # Never a 502: the row is persisted and the background reaper re-triggers it.
+    assert resp.status_code == 201
+    assert resp.json()["status"] == "pending"
     subs = client.get("/submissions").json()["items"]
-    assert len(subs) == 1 and subs[0]["status"] == "error"
+    assert len(subs) == 1 and subs[0]["status"] == "pending"
 
 
 def _callback_payload(job_id: str, verdict: str = "PASS") -> dict[str, Any]:
@@ -449,8 +451,26 @@ def test_callback_error_verdict_marks_error(client, monkeypatch) -> None:
     assert sub["result"]["verdict"] == "ERROR"
 
 
-def test_callback_agent_error_payload(client, monkeypatch) -> None:
-    # The agent's failure path sends {job_id, status: error, error: ...} with no verdict.
+def test_callback_agent_error_payload_requeues(client, monkeypatch) -> None:
+    # The agent's failure path sends {job_id, status: error, error: ...} with no
+    # verdict: the job never ran to completion. That's infrastructure, not the
+    # candidate's code — re-queued for the reaper, no result stored.
+    sub_id = _create_running_submission(client, monkeypatch, "job-boom")
+    resp = client.post(
+        "/assessments/callback",
+        json={"job_id": "job-boom", "status": "error", "error": "kaboom"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "requeued"
+    sub = client.get(f"/submissions/{sub_id}").json()
+    assert sub["status"] == "pending"
+    assert sub["result"] is None
+
+
+def test_callback_agent_error_payload_stores_error_once_attempts_exhausted(
+    client, monkeypatch
+) -> None:
+    monkeypatch.setattr(config, "MAX_TRIGGER_ATTEMPTS", 1)
     sub_id = _create_running_submission(client, monkeypatch, "job-boom")
     resp = client.post(
         "/assessments/callback",
@@ -464,8 +484,13 @@ def test_callback_agent_error_payload(client, monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Reaper: submissions stranded in "running" (callback never arrived)            #
+# Reaper: submissions stranded in "pending"/"running" (background task)         #
 # --------------------------------------------------------------------------- #
+
+
+def _tick() -> list[str]:
+    """One reaper pass, the way the background loop runs it (loop is off under test)."""
+    return asyncio.run(api._reap_tick())
 
 
 def _age_submission(sub_id: str, seconds: float) -> None:
@@ -481,27 +506,42 @@ def _age_submission(sub_id: str, seconds: float) -> None:
         s.commit()
 
 
-def test_reaper_flips_stale_running_to_error(client, monkeypatch) -> None:
+def test_reaper_flips_stale_running_to_error_once_attempts_exhausted(client, monkeypatch) -> None:
+    monkeypatch.setattr(config, "MAX_TRIGGER_ATTEMPTS", 1)
     sub_id = _create_running_submission(client, monkeypatch, "job-stale")
     _age_submission(sub_id, config.REAP_RUNNING_AFTER_S + 60)
 
-    # Viewing the submission reaps it.
+    assert _tick() == [sub_id]
     sub = client.get(f"/submissions/{sub_id}").json()
     assert sub["status"] == "error"
     # agent_job_id is preserved so a late callback can still match and land.
     assert sub["agent_job_id"] == "job-stale"
 
 
+def test_reaper_retriggers_stale_running_while_attempts_remain(client, monkeypatch) -> None:
+    sub_id = _create_running_submission(client, monkeypatch, "job-stale")
+    _age_submission(sub_id, config.REAP_RUNNING_AFTER_S + 60)
+
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-again"))
+    assert _tick() == [sub_id]
+    sub = client.get(f"/submissions/{sub_id}").json()
+    assert sub["status"] == "running"
+    assert sub["agent_job_id"] == "job-again"
+    assert _tick() == []  # freshly re-triggered: nothing to do
+
+
 def test_reaper_leaves_fresh_running_alone(client, monkeypatch) -> None:
     sub_id = _create_running_submission(client, monkeypatch, "job-fresh")
+    assert _tick() == []
     sub = client.get(f"/submissions/{sub_id}").json()
     assert sub["status"] == "running"
 
 
 def test_reaped_submission_becomes_retryable(client, monkeypatch) -> None:
+    monkeypatch.setattr(config, "MAX_TRIGGER_ATTEMPTS", 1)
     sub_id = _create_running_submission(client, monkeypatch, "job-old")
     _age_submission(sub_id, config.REAP_RUNNING_AFTER_S + 60)
-    client.get("/submissions")  # reap on the dashboard read
+    _tick()  # gave up -> error
 
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-new"))
     resp = client.post(f"/submissions/{sub_id}/retry")
@@ -514,14 +554,16 @@ def test_reaper_disabled_when_grace_non_positive(client, monkeypatch) -> None:
     sub_id = _create_running_submission(client, monkeypatch, "job-keep")
     _age_submission(sub_id, 100_000)
     monkeypatch.setattr(config, "REAP_RUNNING_AFTER_S", 0)
+    assert _tick() == []
     sub = client.get(f"/submissions/{sub_id}").json()
     assert sub["status"] == "running"
 
 
 def test_late_callback_lands_even_after_reap(client, monkeypatch) -> None:
+    monkeypatch.setattr(config, "MAX_TRIGGER_ATTEMPTS", 1)
     sub_id = _create_running_submission(client, monkeypatch, "job-late")
     _age_submission(sub_id, config.REAP_RUNNING_AFTER_S + 60)
-    client.get("/submissions")  # reap -> error
+    _tick()  # gave up -> error
 
     # The job wasn't dead, just slow: its callback still matches on agent_job_id.
     resp = client.post("/assessments/callback", json=_callback_payload("job-late"))
@@ -544,7 +586,8 @@ def test_callback_missing_job_id_400(client) -> None:
 def test_retry_from_error_reruns(client, monkeypatch) -> None:
     client.post("/questions", json=_sample_question())
 
-    # First trigger fails -> submission lands in "error".
+    # First trigger fails -> the row waits in "pending"; once its attempts are
+    # spent the reaper gives up on it -> "error", the state the retry route accepts.
     monkeypatch.setattr(
         agent_client, "trigger_assessment", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))
     )
@@ -552,10 +595,14 @@ def test_retry_from_error_reruns(client, monkeypatch) -> None:
         "/submissions",
         json={"question_id": "sum_of_n", "candidate": "Jane", "language": "python", "code": "x"},
     )
-    assert resp.status_code == 502
-    sub_id = client.get("/submissions").json()["items"][0]["id"]
+    assert resp.status_code == 201
+    sub_id = resp.json()["id"]
+    monkeypatch.setattr(config, "MAX_TRIGGER_ATTEMPTS", 1)
+    _age_submission(sub_id, config.TRIGGER_RETRY_AFTER_S + 1)
+    assert _tick() == [sub_id]
+    assert client.get(f"/submissions/{sub_id}").json()["status"] == "error"
 
-    # Agent recovers; retry succeeds with a fresh job_id.
+    # Agent recovers; retry succeeds.
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-retry-1"))
     resp = client.post(f"/submissions/{sub_id}/retry")
     assert resp.status_code == 200

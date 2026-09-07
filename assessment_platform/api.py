@@ -13,6 +13,7 @@ platform<->agent link (see README).
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
@@ -20,19 +21,20 @@ import re
 import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, or_, text
+from sqlalchemy import func, or_, text, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from . import agent_client, analytics, config, email_client, integrity, signing
+from . import agent_client, analytics, config, db, email_client, integrity, signing
 from .auth import (
     create_access_token,
     get_current_interviewer,
@@ -134,7 +136,16 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # (dev/E2E) so a missing migration surfaces instead of being papered over.
     if config.AUTO_CREATE_TABLES:
         init_db()
-    yield
+    # The grading reaper (`_reap_tick`): one loop per worker process, made safe
+    # by the compare-and-swap claim in `_trigger_agent`. Off under test.
+    reaper = asyncio.create_task(_reaper_loop()) if config.REAP_INTERVAL_S > 0 else None
+    try:
+        yield
+    finally:
+        if reaper is not None:
+            reaper.cancel()
+            with suppress(asyncio.CancelledError):
+                await reaper
 
 
 app = FastAPI(
@@ -1829,7 +1840,6 @@ def analytics_overview(
     overall pass rate / average score, and a daily submission trend. `days`
     windows the submission-derived stats (counts/rate/score/trend) to the last N
     days; the question count is the current library size, not time-scoped."""
-    _reap_stale_running(session)
     question_count = session.exec(
         select(func.count())
         .select_from(Question)
@@ -1891,7 +1901,6 @@ def analytics_questions(
     (they're hidden from the library, VS1). `days` windows the stats to the last N
     days (the question rows themselves are the whole library). Paginated like
     `/submissions`."""
-    _reap_stale_running(session)
     where = (
         Question.owner_id == current.id,
         Question.status == "active",
@@ -2735,68 +2744,186 @@ def candidate_get_drafts(
 # --------------------------------------------------------------------------- #
 
 
-async def _trigger_agent(session: Session, question: Question, sub: Submission) -> Submission:
-    """Trigger an agent job for `sub` and persist the outcome.
+def _cas(
+    session: Session,
+    sub: Submission,
+    *,
+    expect_status: str,
+    expect_attempts: int,
+    **values: Any,
+) -> bool:
+    """Compare-and-swap on a submission row: apply `values` only if the row still
+    carries the (status, attempts) the caller loaded; return whether it did.
 
-    Shared by the initial submit and the manual retry: on success sets the new
-    agent_job_id and flips status to "running"; on failure flips to "error" and
-    raises 502 (submission left in "error"). The caller must have already looked
-    up the question.
+    `attempts` changes on every claim, so the pair is a real version token: a
+    request and a reaper tick (or two workers' reapers) that both loaded the same
+    row cannot both win. Plain conditional UPDATE + rowcount — portable across
+    SQLite and Postgres, the same pattern as the rate-limit counter. Commits, then
+    refreshes `sub` so the caller sees the database's truth either way (the ORM
+    is told not to guess: synchronize_session=False).
     """
+    stmt = (
+        update(Submission)
+        .where(
+            col(Submission.id) == sub.id,
+            col(Submission.status) == expect_status,
+            col(Submission.attempts) == expect_attempts,
+        )
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    won = bool(cast(CursorResult[object], session.execute(stmt)).rowcount)
+    session.commit()
+    session.refresh(sub)
+    return won
+
+
+async def _trigger_agent(session: Session, question: Question, sub: Submission) -> Submission:
+    """Claim `sub` for one more agent trigger and make it. Never raises for the agent.
+
+    Shared by submit, the manual retry and the reaper. The order is what makes
+    grading durable:
+      1. claim  — CAS the row to "pending" with `agent_job_id` = its own id and
+                  `attempts` + 1, COMMITTED before the agent hears anything, so a
+                  callback can never arrive for an id we haven't stored;
+      2. trigger — `agent_client.trigger_assessment` (with transport retries);
+      3. accept — CAS "pending" -> "running". A callback that beat us here has
+                  already moved the row to done/error; the CAS is then a no-op,
+                  never a regression.
+    A trigger that still fails after its retries leaves the row "pending" for the
+    reaper (re-triggered after TRIGGER_RETRY_AFTER_S), so the caller never 502s
+    the candidate and the attempt is never burned. A lost claim (another worker
+    got there first) returns the row as that worker left it.
+    """
+    attempt = sub.attempts + 1
+    if not _cas(
+        session,
+        sub,
+        expect_status=sub.status,
+        expect_attempts=sub.attempts,
+        status="pending",
+        agent_job_id=sub.id,
+        attempts=attempt,
+    ):
+        logger.info(
+            "submission %s: trigger claim lost to another worker (status=%s)", sub.id, sub.status
+        )
+        return sub
+
     callback_url = f"{PLATFORM_BASE_URL}/assessments/callback"
     try:
         job_id = await agent_client.trigger_assessment(question, sub, callback_url)
-    except Exception as exc:  # agent unreachable / rejected the job
-        sub.status = "error"
-        session.add(sub)
-        session.commit()
-        session.refresh(sub)
-        logger.warning("submission %s: agent trigger failed: %s", sub.id, exc)
-        raise HTTPException(status_code=502, detail=f"agent call failed: {exc}") from exc
+    except Exception as exc:  # agent unreachable / rejected the job, after retries
+        logger.warning(
+            "submission %s: agent trigger failed (attempt %d/%d); left pending for the reaper: %s",
+            sub.id,
+            attempt,
+            config.MAX_TRIGGER_ATTEMPTS,
+            exc,
+        )
+        return sub
 
-    sub.agent_job_id = job_id
-    sub.status = "running"
-    session.add(sub)
-    session.commit()
-    session.refresh(sub)
-    # Correlation breadcrumb: ties this submission to the agent job so a later
-    # callback (or a reap) can be traced back through the logs by either id.
-    logger.info("submission %s triggered agent job %s (status=running)", sub.id, job_id)
+    if job_id != sub.id:
+        # An agent predating the platform-minted id contract minted its own. Store
+        # what it will call back with so the result still lands; only for such an
+        # agent does the callback-before-commit race stay open.
+        logger.warning(
+            "submission %s: agent answered with its own job id %r — deploy the agent "
+            "first for the full durability fix",
+            sub.id,
+            job_id,
+        )
+    if _cas(
+        session,
+        sub,
+        expect_status="pending",
+        expect_attempts=attempt,
+        status="running",
+        agent_job_id=job_id,
+    ):
+        # Correlation breadcrumb: ties this submission to the agent job so a later
+        # callback (or a reap) can be traced back through the logs by either id.
+        logger.info(
+            "submission %s triggered agent job %s (attempt %d, status=running)",
+            sub.id,
+            job_id,
+            attempt,
+        )
+    else:
+        logger.info(
+            "submission %s: callback landed before the 202 was recorded (status=%s)",
+            sub.id,
+            sub.status,
+        )
     return sub
 
 
-def _reap_stale_running(session: Session) -> list[str]:
-    """Flip submissions stuck in "running" past the grace window to "error".
+async def _reap_tick() -> list[str]:
+    """One pass of the grading reaper; returns the submission ids it acted on.
 
-    A submission is "running" from the agent's 202 until its callback lands; if the
-    callback never arrives the row is stranded and retry (error-only) can't recover
-    it. Called on the interviewer read paths, so viewing the dashboard heals
-    stranded attempts. Only `status` changes — `agent_job_id` is left intact, so a
-    late callback still matches and can still land its result. Returns the reaped
-    submission ids. Reaping is disabled when REAP_RUNNING_AFTER_S <= 0.
+    Finds rows stranded in "pending" (trigger never accepted, or re-queued by the
+    agent's worker-error callback) longer than TRIGGER_RETRY_AFTER_S and in
+    "running" (accepted, callback never arrived) longer than REAP_RUNNING_AFTER_S.
+    Each is re-triggered through `_trigger_agent` while it has attempts left, else
+    flipped to "error" with an ERROR log — the alert that a human must retry.
+    Runs in the background (`_reaper_loop`), never on an interviewer's read path,
+    so no request pays for a cross-tenant scan (and `status` is indexed).
+    `agent_job_id` is kept on give-up so a late callback can still land its result.
     """
-    if config.REAP_RUNNING_AFTER_S <= 0:
-        return []
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(seconds=config.REAP_RUNNING_AFTER_S)
-    running = session.exec(
-        select(Submission).where(Submission.status == "running")
-    ).all()
-    reaped: list[str] = []
-    for sub in running:
-        if as_utc(sub.updated_at) < cutoff:
-            sub.status = "error"
-            session.add(sub)
-            reaped.append(sub.id)
-            logger.warning(
-                "reaped stale submission %s (agent_job_id=%s): no callback within %ss",
-                sub.id,
-                sub.agent_job_id,
-                config.REAP_RUNNING_AFTER_S,
+    acted: list[str] = []
+    # Engine resolved at call time (not imported at module load): tests swap
+    # `db.engine` for an in-memory database.
+    with Session(db.engine) as session:
+        stranded = session.exec(
+            select(Submission).where(col(Submission.status).in_(("pending", "running")))
+        ).all()
+        for sub in stranded:
+            grace = (
+                config.TRIGGER_RETRY_AFTER_S
+                if sub.status == "pending"
+                else config.REAP_RUNNING_AFTER_S
             )
-    if reaped:
-        session.commit()
-    return reaped
+            if grace <= 0 or as_utc(sub.updated_at) >= now - timedelta(seconds=grace):
+                continue
+            if sub.attempts < config.MAX_TRIGGER_ATTEMPTS:
+                question = session.get(Question, sub.question_id)
+                if question is not None:
+                    logger.warning(
+                        "submission %s stranded in %s for >%ss (agent_job_id=%s); "
+                        "re-triggering (attempt %d/%d)",
+                        sub.id,
+                        sub.status,
+                        grace,
+                        sub.agent_job_id,
+                        sub.attempts + 1,
+                        config.MAX_TRIGGER_ATTEMPTS,
+                    )
+                    await _trigger_agent(session, question, sub)
+                    acted.append(sub.id)
+                    continue
+            if _cas(
+                session, sub, expect_status=sub.status, expect_attempts=sub.attempts, status="error"
+            ):
+                logger.error(
+                    "submission %s gave up after %d agent trigger(s) (agent_job_id=%s): "
+                    "needs a manual retry",
+                    sub.id,
+                    sub.attempts,
+                    sub.agent_job_id,
+                )
+                acted.append(sub.id)
+    return acted
+
+
+async def _reaper_loop() -> None:
+    """Background task (started by the lifespan): `_reap_tick` every REAP_INTERVAL_S."""
+    while True:
+        await asyncio.sleep(config.REAP_INTERVAL_S)
+        try:
+            await _reap_tick()
+        except Exception:  # keep the loop alive; the next tick retries
+            logger.exception("grading reaper tick failed")
 
 
 @app.post("/submissions", response_model=SubmissionOut, status_code=201)
@@ -2829,10 +2956,12 @@ async def retry_submission(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> SubmissionOut:
-    """Re-trigger the agent for a submission stuck in "error" (its prior trigger failed).
+    """Re-trigger the agent for a submission in "error" (the reaper gave up on it,
+    or the agent reported it could not be graded).
 
     Submissions are immutable; this only re-runs the SAME submission — it does not
-    create a new one. Only allowed from "error"; other states are a 409.
+    create a new one. Only allowed from "error"; other states are a 409 (pending
+    and running rows are the reaper's to re-trigger).
     """
     sub = _owned_submission(submission_id, current, session)  # 404/403 guard
     if sub.status != "error":
@@ -2847,8 +2976,6 @@ async def retry_submission(
             status_code=404, detail=f"no question with id {sub.question_id!r}."
         )
 
-    # Clear the prior failed attempt before re-triggering.
-    sub.agent_job_id = None
     sub = await _trigger_agent(session, question, sub)
     return _submission_out(sub, None)
 
@@ -2860,7 +2987,6 @@ def list_submissions(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> Page[SubmissionSummaryOut]:
-    _reap_stale_running(session)  # heal submissions stranded in "running" on view
     # Only submissions for the caller's own questions. Lean rows: the full `code`
     # and `full_result` blobs are fetched per-id via GET /submissions/{id}, so a
     # page here stays small even at hundreds of rows.
@@ -2902,7 +3028,6 @@ def export_submissions(
     Declared BEFORE `/submissions/{submission_id}` so "export" isn't swallowed as
     an id by the path-param route.
     """
-    _reap_stale_running(session)
     subs = session.exec(
         select(Submission)
         .join(Question)
@@ -2955,7 +3080,6 @@ def get_submission(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> SubmissionOut:
-    _reap_stale_running(session)  # heal a submission stranded in "running" on view
     sub = _owned_submission(submission_id, current, session)  # 404/403 guard
     result = session.exec(
         select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
@@ -3101,7 +3225,6 @@ def question_submissions(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> Page[DashboardSubmissionOut]:
-    _reap_stale_running(session)  # heal submissions stranded in "running" on view
     _owned_question(question_id, current, session)  # 404/403 guard
     total = session.exec(
         select(func.count())
@@ -3209,6 +3332,33 @@ def assessments_callback(
 
     verdict = str(payload.get("verdict") or "ERROR")
     is_error = _is_error_payload(payload, verdict)
+    if is_error and payload.get("verdict") is None:
+        # The worker's exception path ({job_id, status: "error", error}) — the job
+        # never ran to completion (a crash, or the agent's shutdown hook flushing
+        # in-flight jobs on a deploy) — as opposed to a graded ERROR verdict. That
+        # is infrastructure, not the candidate's code: re-queue it for the reaper
+        # while attempts remain, and never let it overwrite a grade that landed.
+        if sub.status == "done":
+            logger.info(
+                "callback for agent job %s: worker error after submission %s was graded; ignored",
+                job_id,
+                sub.id,
+            )
+            return {"status": "ignored", "reason": "already graded"}
+        if sub.status in ("pending", "running") and sub.attempts < config.MAX_TRIGGER_ATTEMPTS:
+            sub.status = "pending"
+            session.add(sub)
+            session.commit()
+            logger.warning(
+                "callback for agent job %s: worker error (%s); submission %s re-queued "
+                "for the reaper (%d/%d attempts used)",
+                job_id,
+                payload.get("error"),
+                sub.id,
+                sub.attempts,
+                config.MAX_TRIGGER_ATTEMPTS,
+            )
+            return {"status": "requeued", "submission_id": sub.id}
     reason = str(payload.get("reason") or payload.get("error") or "")
     score_pct = float(payload.get("score_pct") or 0.0)
 

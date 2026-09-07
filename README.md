@@ -21,10 +21,13 @@ client ──POST /submissions──▶ platform ──POST /assessments──�
 
 `POST /submissions` stores the submission, builds the agent request (the stored
 question inline + the candidate code + a `callback_url` pointing back at this
-platform), POSTs it to the agent, records the returned `job_id`, and flips the
-submission to `running`. The agent grades asynchronously and POSTs the full
-result to `/assessments/callback`, which the platform persists (verbatim in
-`full_result`) and uses to flip the submission to `done` / `error`.
+platform + a `job_id` the platform mints and commits **before** the call), POSTs
+it to the agent, and flips the submission to `running` once the agent accepts.
+The agent grades asynchronously and POSTs the full result to
+`/assessments/callback`, which the platform persists (verbatim in `full_result`)
+and uses to flip the submission to `done` / `error`. If the agent can't be
+reached the submission stays `pending` — never a 502 — and a background reaper
+re-triggers it (giving up, loudly, after a few attempts).
 
 ## Stack
 

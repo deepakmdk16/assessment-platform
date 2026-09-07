@@ -178,14 +178,32 @@ DRAFT_SAVE_RATE_LIMIT_MAX = int(os.getenv("DRAFT_SAVE_RATE_LIMIT_MAX", "60"))
 # someone reverse-engineer the test suite one guess at a time.
 RUN_RATE_LIMIT_MAX = int(os.getenv("RUN_RATE_LIMIT_MAX", "60"))
 
-# A submission sits in "running" from the agent's 202 until its callback lands.
-# If that callback never arrives (agent crash, dropped network, lost job) the row
-# would be stranded forever — and retry only accepts "error", so nothing could
-# recover it. When an interviewer reads their submissions, any that have been
-# "running" longer than this are reaped to "error" so the existing retry path
-# works. Generous by default so a merely-slow job isn't reaped mid-grade; set to
-# 0 to disable reaping.
+# Grading durability. A submission is "pending" from its insert until the agent
+# 202s the trigger, then "running" until the agent's callback lands. A background
+# reaper (one task per worker process, see `api._reaper_loop`) re-triggers rows
+# that sit too long in either state — a trigger that failed because the agent was
+# down at submit, a job the agent lost to a crash or deploy, a callback that never
+# arrived — and once MAX_TRIGGER_ATTEMPTS triggers have been made gives up with an
+# ERROR log, leaving the row in "error" for the interviewer's manual retry.
+#
+# How often the reaper runs. <= 0 disables the background task entirely; forced
+# off under test, where the suite drives `api._reap_tick` directly.
+REAP_INTERVAL_S = 0 if TESTING else int(os.getenv("REAP_INTERVAL_S", "60"))
+# A "running" row (accepted, no callback yet) older than this is re-triggered.
+# Generous so a merely-slow grade isn't re-run mid-job; <= 0 leaves running rows
+# alone.
 REAP_RUNNING_AFTER_S = int(os.getenv("REAP_RUNNING_AFTER_S", "900"))
+# A "pending" row (trigger never accepted, or re-queued by the agent's shutdown
+# callback) older than this is re-triggered. Must exceed the longest possible
+# in-flight trigger so a second worker's reaper can't double-trigger a row whose
+# first trigger is still on the wire: AGENT_TRIGGER_TRANSPORT_ATTEMPTS (3) × up to
+# ~3 × AGENT_TIMEOUT_S (httpx applies the timeout per phase — connect, write,
+# read) + the linear backoff between attempts (1 s + 2 s) ≈ 93 s.
+TRIGGER_RETRY_AFTER_S = int(os.getenv("TRIGGER_RETRY_AFTER_S", "120"))
+# Total agent triggers per submission (the first one included) before the reaper
+# gives up. 3 = the original plus two automatic retries, ~4 minutes of agent
+# outage tolerated before a human is needed.
+MAX_TRIGGER_ATTEMPTS = int(os.getenv("MAX_TRIGGER_ATTEMPTS", "3"))
 
 # Grace window past a timed assessment's deadline within which a submit is still
 # accepted. Covers clock skew, network latency, and the round-trip of the client's

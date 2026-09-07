@@ -416,14 +416,25 @@ class Submission(SQLModel, table=True):
     candidate_email: str | None = None
     language: str
     code: str
-    status: str = "pending"  # "pending" | "running" | "done" | "error"
+    # "pending" (inserted; agent not yet accepted) | "running" (agent 202'd; awaiting
+    # its callback) | "done" | "error". Indexed: the background reaper scans by it.
+    status: str = Field(default="pending", index=True)
     # True when this submission arrived after the timed sitting's window closed
     # (past deadline + grace). A candidate's work is recorded and graded either
     # way — the timer no longer discards it — but a late submit is flagged so the
     # interviewer can see it came in after time and weigh it accordingly. Always
     # False for an untimed sitting or a submit within the window.
     late: bool = False
+    # The id the agent's callback carries. Minted HERE (it is this row's own `id`)
+    # and committed before the agent is triggered, so a callback can never arrive
+    # for an id the platform hasn't stored yet; an older agent that mints its own
+    # id is tolerated (whatever it echoed back is stored so the result still lands).
     agent_job_id: str | None = Field(default=None, index=True)
+    # How many times the platform has asked the agent to grade this submission (the
+    # first trigger counts). Bumped on every claim, which also makes (status,
+    # attempts) the version token for the compare-and-swap in `api._cas`; bounds
+    # the reaper's automatic re-triggers (config.MAX_TRIGGER_ATTEMPTS).
+    attempts: int = 0
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 

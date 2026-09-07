@@ -139,6 +139,7 @@ Several are "the single-question flow had it, the assessment flow doesn't yet."
   small per-request queries there run on the event loop. Fine at this scale (indexed
   single-row ops, SQLite); if a slow Postgres query shows up on these paths, wrap the
   DB work in `run_in_threadpool` or move to an async engine. Not worth doing pre-emptively.
+  The background grading reaper's tick (`api._reap_tick`) is on the same footing.
 - **Claude Code tooling follow-ups (global, deferred — not platform code).** From the
   2026-07-17 setup audit, outside this repo: `~/.claude/CLAUDE.md` §8 and the "Use
   PROACTIVELY" agent descriptions contradict the harness's don't-auto-spawn rule;
@@ -360,16 +361,15 @@ the tag "single-audit claim". Priorities: **P0** blocks taking money or endanger
 customers · **P1** first paying customers hit it · **P2** fix before scale · **P3** polish.
 Effort: XS minutes · S self-contained · M multi-file · L data + API + UI.
 
-Platform backend (P), web (W) and cross-repo/SaaS (X) items (59: P0: 5, P1: 10, P2: 36, P3: 8).
+Platform backend (P), web (W) and cross-repo/SaaS (X) items (56: P0: 5, P1: 8, P2: 35, P3: 8).
 Agent-only items (A) live in `../AssesmentAgent/STATUS.md`.
 
 **Suggested sequence** (the cheap P0/P1 blockers — P01, P02, P04, A01, A03, P09, P19,
-A32, W01, W02 — landed 2026-09-07): (1) the grading-durability epic as one change
-(A04 + P05 + P10 + P15: platform-owned job table, id minted before trigger, background
-reaper with auto-retry); (2) accounts → organisation → billing (P13 → X01 → X02);
-(3) privacy (X03, X04) and email/notifications (X06, X07); (4) deploy + ops (X05, X08,
-A06, A07, P26, X11); (5) everything else by priority. Close each item by deleting it
-here in the same commit (checkpoint #5).
+A32, W01, W02 — and the grading-durability epic — A04 + P05 + P10 + P15 — landed
+2026-09-07): (1) accounts → organisation → billing (P13 → X01 → X02); (2) privacy
+(X03, X04) and email/notifications (X06, X07); (3) deploy + ops (X05, X08, A06, A07,
+P26, X11); (4) everything else by priority. Close each item by deleting it here in
+the same commit (checkpoint #5).
 
 - **P13 · P0 · M — Account lifecycle is not SaaS-grade: password min_length=1, no
 reset/verification/change/deletion, 12 h JWT with no revocation, case-sensitive
@@ -435,24 +435,6 @@ no UI); archiving does not stop links.**
   /assessments/{id}/invites/{token}/revoke (+ variant-set) and UI revoke/expiry
   controls on both surfaces.
   _Verified: live run in this audit; source: backend,frontend,live._
-- **P05 · P1 · S — Callback-before-commit race strands submissions in "running".**
-  Evidence: api.py:2686-2701 awaits trigger_assessment before committing
-  agent_job_id; a fast agent can hit /assessments/callback first; lookup miss
-  (api.py:3141-3148) returns 200 "ignored" so the agent never retries; row sits
-  running until the 15-min reaper and a manual retry. Why: lost grades under normal
-  latency variance. Fix: mint the correlation id platform-side before triggering
-  (send it to the agent), or return 404 for unknown job ids so the agent's retry
-  loop covers it.
-  _Verified: cited lines read in this audit; source: backend._
-- **P10 · P1 · S — Stale "running" submissions are healed lazily, only to error,
-only on interviewer reads, scanning every tenant.**
-  Evidence: _reap_stale_running (api.py:2708-2739) runs when an interviewer loads a
-  list, has no owner filter, no index on Submission.status, marks error after
-  REAP_RUNNING_AFTER_S=900 (config.py:176) and requires a manual Retry (re-executes
-  and re-judges = double LLM cost). Why: a lost callback needs a human to notice;
-  cross-tenant scan on every list. Fix: background reaper task (or cron endpoint)
-  that auto-retries once then alerts; owner-scope the scan; index status.
-  _Verified: cited lines read in this audit; source: backend,saas._
 - **W03 · P1 · S — Every list row is mouse-only.**
   Evidence: <tr className="clickable-row" onClick=navigate> with no link/focusable
   target inside at pages/DashboardPage.tsx:170-174, AssessmentsListPage.tsx:113-117,
@@ -555,15 +537,6 @@ depends on the session time zone.**
   UTC. Fix: `SET TIME ZONE 'UTC'` on connect for Postgres (or migrate to
   DateTime(timezone=True)); emit offsets in CSV.
   _Verified: cited lines read in this audit; source: backend._
-- **P15 · P2 · XS — An agent outage at submit burns the candidate's only attempt.**
-  Evidence: api.py:2514-2523 commits the Submission, then trigger failure → status
-  error + 502 to the candidate (api.py:2689-2695); resubmit 409s (api.py:2492);
-  trigger has no retry (agent_client.py:247-264) although draft calls retry 3×
-  (agent_client.py:93-104); only an interviewer can retry. Why: a transient agent
-  blip costs the candidate their sitting. Fix: retry the trigger with backoff;
-  always 201 (row is persisted) and let the background reaper re-trigger; allow
-  candidate retry from error.
-  _Verified: cited lines read in this audit; source: backend,saas._
 - **P16 · P2 · XS — AssessmentUpdate.proctored defaults True on PUT.**
   Evidence: schemas.py:176; a client omitting the field on a settings edit silently
   turns monitoring on for future invites. Why: silent behaviour change on a
@@ -876,8 +849,8 @@ explicit id collisions 500 instead of 409.**
   _Verified: single-audit claim, not independently re-verified; source: quality._
 - **P25 · P3 · S — Missing indexes and free-text enum columns; CandidateDraft
 timestamps wrong.**
-  Evidence: no index on Submission.status (used by _reap_stale_running and
-  dashboards), Submission.created_at (ordering, analytics cutoffs), Invite.status,
+  Evidence: no index on Submission.created_at (ordering, analytics cutoffs;
+  Submission.status got its index with the grading-durability change), Invite.status,
   AssessmentResult.verdict; IntegrityEvent has only single-column indexes for
   (invite_id, candidate_email) reads; status/verdict/category/kind are bare str with
   comments (models.py:89, 141, 249, 419, 434) hence `# type: ignore[arg-type]` at
