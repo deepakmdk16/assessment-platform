@@ -75,13 +75,13 @@ def _quick_screen_token(client: TestClient) -> str:
 
 def test_candidate_submit_rejects_oversize_code(client: TestClient) -> None:
     tok = _quick_screen_token(client)
-    body = {"candidate_name": "C", "candidate_email": "c@x.io", "language": "python", "code": BIG_CODE}
+    body = {"candidate_name": "C", "candidate_email": "c@x.io", "consent": True, "language": "python", "code": BIG_CODE}
     assert client.post(f"/invite/{tok}/submit", json=body).status_code == 422
 
 
 def test_candidate_run_rejects_oversize_stdin_and_code(client: TestClient) -> None:
     tok = _quick_screen_token(client)
-    base = {"candidate_email": "c@x.io", "language": "python"}
+    base = {"candidate_email": "c@x.io", "consent": True, "language": "python"}
     assert (
         client.post(f"/invite/{tok}/run", json={**base, "code": "print(1)", "stdin": BIG_STDIN}).status_code
         == 422
@@ -105,7 +105,7 @@ def test_oversize_body_is_refused_before_parsing(client: TestClient, monkeypatch
     assert resp.status_code == 413
     assert "exceeds" in resp.json()["detail"]
     # Under the ceiling the request reaches the route (404: unknown invite).
-    small = client.post("/invite/nope/submit", json={"candidate_name": "C", "candidate_email": "c@x.io",
+    small = client.post("/invite/nope/submit", json={"candidate_name": "C", "candidate_email": "c@x.io", "consent": True,
                                                      "language": "python", "code": "x"})
     assert small.status_code == 404
 

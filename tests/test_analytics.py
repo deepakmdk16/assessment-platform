@@ -114,16 +114,16 @@ def _seed_assessment(client: TestClient, monkeypatch) -> None:
         resp = client.post(
             f"/invite/{tok}/submit",
             json={
-                "candidate_name": name, "candidate_email": email,
+                "candidate_name": name, "candidate_email": email, "consent": True,
                 "language": "python", "code": "x", "question_id": qid,
             },
         )
         assert resp.status_code == 201
 
-    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand1@x.io", "candidate_name": "One"})
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand1@x.io", "consent": True, "candidate_name": "One"})
     submit("cand1@x.io", "One", "q1", "job-1a")
     submit("cand1@x.io", "One", "q2", "job-1b")
-    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand2@x.io", "candidate_name": "Two"})
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand2@x.io", "consent": True, "candidate_name": "Two"})
     submit("cand2@x.io", "Two", "q1", "job-2a")
 
     client.post("/assessments/callback", json=_callback("job-1a", "PASS", 100.0))

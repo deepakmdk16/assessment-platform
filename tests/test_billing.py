@@ -206,7 +206,7 @@ def test_a_lapsed_subscription_falls_back_to_free_limits() -> None:
 def test_a_candidate_starting_counts_one_sitting(client) -> None:
     token = _invite(client)
     assert client.post(
-        f"/invite/{token}/start", json={"candidate_email": "cand@x.io"}
+        f"/invite/{token}/start", json={"candidate_email": "cand@x.io", "consent": True}
     ).status_code == 200
 
     assert _usage().sittings == 1
@@ -217,7 +217,7 @@ def test_reopening_the_link_does_not_bill_twice(client) -> None:
     switches device or double-clicks Start is one sitting."""
     token = _invite(client)
     for _ in range(3):
-        client.post(f"/invite/{token}/start", json={"candidate_email": "cand@x.io"})
+        client.post(f"/invite/{token}/start", json={"candidate_email": "cand@x.io", "consent": True})
 
     assert _usage().sittings == 1
 
@@ -228,8 +228,8 @@ def test_a_second_candidate_is_a_second_sitting(client) -> None:
         "/questions/q1/invites", json={"recipients": ["a@x.io", "b@x.io"]}
     )
     token = resp.json()["token"]
-    client.post(f"/invite/{token}/start", json={"candidate_email": "a@x.io"})
-    client.post(f"/invite/{token}/start", json={"candidate_email": "b@x.io"})
+    client.post(f"/invite/{token}/start", json={"candidate_email": "a@x.io", "consent": True})
+    client.post(f"/invite/{token}/start", json={"candidate_email": "b@x.io", "consent": True})
 
     assert _usage().sittings == 2
 
@@ -240,7 +240,7 @@ def test_an_exhausted_plan_turns_a_new_candidate_away_neutrally(client, enforced
     token = _invite(client)
     _set_usage(sittings=billing.PLANS["free"].sittings)
 
-    resp = client.post(f"/invite/{token}/start", json={"candidate_email": "cand@x.io"})
+    resp = client.post(f"/invite/{token}/start", json={"candidate_email": "cand@x.io", "consent": True})
     # 503, not 403: every 403 on this route means "you are not one of the invited
     # addresses", and the candidate gate says exactly that — so a quota refusal
     # sent as 403 would tell someone to fix an email address that was never wrong.
@@ -254,14 +254,14 @@ def test_a_candidate_already_sitting_is_never_turned_away(client, enforced) -> N
     running out mid-assessment must not take away someone's work."""
     token = _invite(client)
     assert client.post(
-        f"/invite/{token}/start", json={"candidate_email": "cand@x.io"}
+        f"/invite/{token}/start", json={"candidate_email": "cand@x.io", "consent": True}
     ).status_code == 200
 
     _set_usage(sittings=billing.PLANS["free"].sittings * 10)
 
     # Re-entry, and the submit path that also anchors an attempt, both still work.
     assert client.post(
-        f"/invite/{token}/start", json={"candidate_email": "cand@x.io"}
+        f"/invite/{token}/start", json={"candidate_email": "cand@x.io", "consent": True}
     ).status_code == 200
 
 
@@ -885,7 +885,7 @@ def test_deleting_the_last_account_leaves_no_row_behind(client, monkeypatch) -> 
     """
     monkeypatch.setattr(agent_client, "draft_question", async_return(_draft_payload()))
     token = _invite(client)
-    client.post(f"/invite/{token}/start", json={"candidate_email": "cand@x.io"})
+    client.post(f"/invite/{token}/start", json={"candidate_email": "cand@x.io", "consent": True})
     client.post("/questions/draft", json={"brief": "b", "language": "python"})
     assert _usage().sittings == 1  # there is something to orphan
 
@@ -960,7 +960,7 @@ def _start_a_sitting(client: TestClient, email: str = "cand@x.io", qid: str = "q
     """The metered event: a candidate beginning. Creating an invite only CHECKS
     the allowance, so it is not what settles a period."""
     token = _invite(client, qid=qid, email=email)
-    return client.post(f"/invite/{token}/start", json={"candidate_email": email})
+    return client.post(f"/invite/{token}/start", json={"candidate_email": email, "consent": True})
 
 
 def test_last_month_over_the_allowance_is_deducted_from_this_one(client, enforced) -> None:
@@ -983,7 +983,7 @@ def test_the_carried_debt_is_what_the_month_can_no_longer_use(client, enforced) 
     token = _invite(client, qid="q2", email="other@x.io")
     _set_usage(sittings=7)  # 10 - 3 carried, fully used
 
-    refused = client.post(f"/invite/{token}/start", json={"candidate_email": "other@x.io"})
+    refused = client.post(f"/invite/{token}/start", json={"candidate_email": "other@x.io", "consent": True})
     assert refused.status_code == 503  # the candidate-facing refusal, not a 402
 
 

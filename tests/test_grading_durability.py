@@ -175,6 +175,7 @@ def test_candidate_submit_never_502s_when_the_agent_is_down(client, monkeypatch)
         json={
             "candidate_name": "Cand",
             "candidate_email": "cand@test.io",
+            "consent": True,
             "language": "python",
             "code": "print(1)",
         },

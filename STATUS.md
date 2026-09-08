@@ -97,6 +97,35 @@ compose; the agent needs a privileged host.**
   notifications, import, re-invite after the P0s. (Team and self-serve org
   onboarding shipped with X01.)
   _Verified: cited lines read in this audit; source: saas._
+- **X19 · P1 · S — The privacy notice, terms and DPA are unreviewed templates.**
+  Evidence: docs/PRIVACY.md, docs/TERMS.md and docs/DPA.md were written from the
+  system's real data flows (X04) and are accurate about what is collected, but
+  carry `[BRACKETED]` placeholders and a DRAFT banner; the liability section of
+  the terms and the SCC/UK-addendum attachment of the DPA are explicitly left
+  blank. Why: a customer's legal review reads the DPA most closely, and shipping
+  a template as if it were reviewed is worse than having none. Fix: legal review;
+  replace the placeholders; attach the official SCC texts; bump
+  `PRIVACY_POLICY_VERSION` and re-consent when the wording changes.
+  _Verified: opened by this change; source: saas._
+- **X20 · P1 · M — No backups exist; only a specification for them.**
+  Evidence: docs/BACKUPS.md (written for X03) states the target RPO 5 min / RTO
+  4 h and says plainly that nothing implements it — the platform runs from a
+  single database with whatever durability the host gives it, and the restore
+  drill table is empty. Why: the agent is stateless, so this database is the
+  entire product record; losing it is unrecoverable by any other means. Fix:
+  managed Postgres with PITR at 30 days, an independent weekly dump to separate
+  storage, alerting on backup failure (ties to X08), and one actual restore
+  drill recorded in the table.
+  _Verified: opened by this change; source: saas._
+- **X21 · P2 · S — Erasures are not recorded anywhere that survives a restore.**
+  Evidence: `privacy.erase_candidate` logs and returns counts, but the only
+  durable trace is the erased rows themselves; restoring a backup from before a
+  request silently resurrects the data (docs/BACKUPS.md "Restoring", step 4).
+  Why: a restore that undoes an erasure re-creates the breach the request
+  closed, and nothing would flag it. Fix: an append-only erasure log (org, hashed
+  address, timestamp, counts) kept outside the primary tables, and a restore step
+  that replays it.
+  _Verified: opened by this change; source: saas._
 - **P06 · P2 · XS — POST /invite/{token}/events accepts any question_id.**
   Evidence: api.py:2572-2584; live: unknown id → 500 ForeignKeyViolation; another
   organisation's valid id is stored and then blocks that organisation's DELETE

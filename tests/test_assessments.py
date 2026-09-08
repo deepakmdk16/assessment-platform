@@ -208,7 +208,7 @@ def test_assessment_invite_creation(client) -> None:
 
 def _sub(tok: str, email: str, qid: str | None) -> dict[str, Any]:
     body: dict[str, Any] = {
-        "candidate_name": "C", "candidate_email": email, "language": "python", "code": "print(1)",
+        "candidate_name": "C", "candidate_email": email, "consent": True, "language": "python", "code": "print(1)",
     }
     if qid is not None:
         body["question_id"] = qid
@@ -224,7 +224,7 @@ def test_candidate_multi_question_flow(client, monkeypatch) -> None:
     tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
 
     # /start hands back BOTH questions (ordered), a shared deadline, and no key.
-    data = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io"}).json()
+    data = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io", "consent": True}).json()
     assert [q["id"] for q in data["questions"]] == ["q1", "q2"]
     assert all(q["submitted"] is False for q in data["questions"])
     assert data["deadline"] is not None
@@ -233,7 +233,7 @@ def test_candidate_multi_question_flow(client, monkeypatch) -> None:
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     # Submit q1; re-entering shows it done and q2 still open (no all-or-nothing block).
     assert client.post(f"/invite/{tok}/submit", json=_sub(tok, "cand@x.io", "q1")).status_code == 201
-    again = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io"}).json()
+    again = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io", "consent": True}).json()
     assert {q["id"]: q["submitted"] for q in again["questions"]} == {"q1": True, "q2": False}
 
     # One attempt PER QUESTION: re-submitting q1 is 409, submitting q2 is fine.
@@ -253,14 +253,14 @@ def test_candidate_name_anchored_at_start_not_reforked_per_submit(client, monkey
     tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
 
     client.post(
-        f"/invite/{tok}/start", json={"candidate_email": "cand@x.io", "candidate_name": "Jane Doe"}
+        f"/invite/{tok}/start", json={"candidate_email": "cand@x.io", "consent": True, "candidate_name": "Jane Doe"}
     )
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     assert client.post(
         f"/invite/{tok}/submit",
         json={
             "candidate_name": "jane d",  # differs from the /start name
-            "candidate_email": "cand@x.io", "language": "python", "code": "print(1)",
+            "candidate_email": "cand@x.io", "consent": True, "language": "python", "code": "print(1)",
             "question_id": "q1",
         },
     ).status_code == 201
@@ -268,7 +268,7 @@ def test_candidate_name_anchored_at_start_not_reforked_per_submit(client, monkey
         f"/invite/{tok}/submit",
         json={
             "candidate_name": "Janee Doee",  # a different typo again
-            "candidate_email": "cand@x.io", "language": "python", "code": "print(2)",
+            "candidate_email": "cand@x.io", "consent": True, "language": "python", "code": "print(2)",
             "question_id": "q2",
         },
     ).status_code == 201
@@ -285,13 +285,13 @@ def test_candidate_name_anchored_at_first_submit_when_start_had_none(client, mon
     client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1", "q2"]})
     tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
 
-    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io"})  # no name
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io", "consent": True})  # no name
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job"))
     assert client.post(
         f"/invite/{tok}/submit",
         json={
             "candidate_name": "Jane Doe",
-            "candidate_email": "cand@x.io", "language": "python", "code": "print(1)",
+            "candidate_email": "cand@x.io", "consent": True, "language": "python", "code": "print(1)",
             "question_id": "q1",
         },
     ).status_code == 201
@@ -299,7 +299,7 @@ def test_candidate_name_anchored_at_first_submit_when_start_had_none(client, mon
         f"/invite/{tok}/submit",
         json={
             "candidate_name": "Someone Else",  # must not override the anchored name
-            "candidate_email": "cand@x.io", "language": "python", "code": "print(2)",
+            "candidate_email": "cand@x.io", "consent": True, "language": "python", "code": "print(2)",
             "question_id": "q2",
         },
     ).status_code == 201
@@ -327,17 +327,17 @@ def test_assessment_attempts_composite(client, monkeypatch) -> None:
         resp = client.post(
             f"/invite/{tok}/submit",
             json={
-                "candidate_name": name, "candidate_email": email,
+                "candidate_name": name, "candidate_email": email, "consent": True,
                 "language": "python", "code": "x", "question_id": qid,
             },
         )
         assert resp.status_code == 201
 
     # cand1 starts and submits both questions; cand2 starts but only submits q1.
-    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand1@x.io", "candidate_name": "Cand One"})
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand1@x.io", "consent": True, "candidate_name": "Cand One"})
     submit("cand1@x.io", "Cand One", "q1", "job-1a")
     submit("cand1@x.io", "Cand One", "q2", "job-1b")
-    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand2@x.io", "candidate_name": "Cand Two"})
+    client.post(f"/invite/{tok}/start", json={"candidate_email": "cand2@x.io", "consent": True, "candidate_name": "Cand Two"})
     submit("cand2@x.io", "Cand Two", "q1", "job-2a")
 
     client.post("/assessments/callback", json=_callback("job-1a", "PASS", 100.0))
@@ -436,7 +436,7 @@ def test_candidate_view_carries_assessment_branding(client, monkeypatch) -> None
         },
     )
     tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
-    data = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io"}).json()
+    data = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io", "consent": True}).json()
     assert data["assessment_title"] == "Backend Screen"
     assert data["org_name"] == "Acme Corp"
     assert data["logo_url"] == "https://cdn.example.com/acme.png"
@@ -446,7 +446,7 @@ def test_candidate_view_carries_assessment_branding(client, monkeypatch) -> None
         "/questions/q1/invites", json={"recipients": ["legacy@x.io"]}
     ).json()["token"]
     legacy_data = client.post(
-        f"/invite/{legacy_tok}/start", json={"candidate_email": "legacy@x.io"}
+        f"/invite/{legacy_tok}/start", json={"candidate_email": "legacy@x.io", "consent": True}
     ).json()
     assert legacy_data["assessment_title"] is None
     assert legacy_data["org_name"] is None

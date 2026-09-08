@@ -108,7 +108,7 @@ def test_a_save_racing_the_submit_is_still_accepted(client, monkeypatch) -> None
     # it would be noise. The submission is already the durable record by then.
     token = _single_invite(client)
     client.post(
-        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io"}
+        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io", "consent": True}
     )
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-1"))
     assert (
@@ -117,6 +117,7 @@ def test_a_save_racing_the_submit_is_still_accepted(client, monkeypatch) -> None
             json={
                 "candidate_name": "C",
                 "candidate_email": "cand@x.io",
+                "consent": True,
                 "language": "python",
                 "code": "print(1)",
             },
@@ -139,7 +140,7 @@ def test_a_cold_start_reads_an_empty_list_not_an_error(client) -> None:
 def test_delete_refuses_a_question_with_a_started_sitting(client) -> None:
     token = _single_invite(client)
     client.post(
-        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io"}
+        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io", "consent": True}
     )
     resp = client.delete("/questions/q1")
     assert resp.status_code == 409  # was a raw FK 500

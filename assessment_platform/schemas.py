@@ -602,11 +602,35 @@ class InviteStatusOut(BaseModel):
 
 class CandidateStartIn(BaseModel):
     candidate_email: EmailStr
+    # Explicit agreement to be assessed and — when the sitting is monitored — to
+    # the proctoring signals being recorded (X04). Defaulted to False rather than
+    # made a required field so that a client which omits it is refused by the
+    # route with a sentence a candidate can act on, instead of by a 422 whose
+    # body is a validator dump. The route is what enforces it; this only carries
+    # the answer.
+    consent: bool = False
     # Anchored on the CandidateAttempt at first /start (A10) and reused for
     # every submission in the sitting. Optional so an old client that only
     # ever sent it at /submit keeps working; a fresh attempt just starts
     # nameless until the first submit's body backfills it.
     candidate_name: str | None = None
+
+
+class CandidateErasureOut(BaseModel):
+    """What a data-subject erasure actually touched (X03). Specific counts rather
+    than a bare 204, because the interviewer answering the request has to be able
+    to say what was done, and because a silent zero would otherwise look
+    identical to success."""
+
+    candidate_email: EmailStr
+    erased: bool
+    submissions: int
+    results: int
+    attempts: int
+    slot_variants: int
+    integrity_events: int
+    drafts_deleted: int
+    invites_amended: int
 
 
 class InvitePublicOut(BaseModel):
@@ -641,6 +665,11 @@ class CandidateSubmitIn(BaseModel):
     # Which question this submits. None (or omitted) targets the invite's single
     # question; required for a multi-question assessment invite.
     question_id: str | None = None
+    # Only consulted when this submit is what *begins* the sitting — a caller
+    # that skipped /start. Once an attempt exists with consent recorded, the
+    # sitting is consented and this is ignored, so the normal flow never asks
+    # twice. See `api._get_or_start_attempt`.
+    consent: bool = False
 
 
 class CandidateSubmitOut(BaseModel):
@@ -937,6 +966,10 @@ class OrganizationOut(BaseModel):
     # "you are an admin of Acme, 3 people".
     role: str
     member_count: int
+    # The organisation's retention window in days, or null for "no policy set"
+    # (X03). Null is the default and is not the same as 0 — see
+    # `privacy.purge_expired`.
+    retention_days: int | None = None
 
 
 # Stripped before the length check, so "   " is rejected as the blank name it is
@@ -945,8 +978,21 @@ class OrganizationOut(BaseModel):
 OrgName = Annotated[str, AfterValidator(lambda v: v.strip()), Field(min_length=1, max_length=120)]
 
 
+# A retention window a customer can actually mean. The floor of 1 day keeps 0
+# from being read as "delete everything immediately" by a mis-typed form, and
+# the ceiling of ~10 years is past any hiring-record obligation while still
+# refusing a value that is really a paste accident. Null (the default) is
+# separate from both: no policy configured, nothing is erased on a schedule.
+RetentionDays = Annotated[int, Field(ge=1, le=3650)]
+
+
 class OrganizationUpdate(BaseModel):
-    name: OrgName
+    """Both fields optional: the Privacy panel changes the retention window
+    without resending the name, and the route distinguishes an omitted field
+    from an explicit null via `model_fields_set`."""
+
+    name: OrgName | None = None
+    retention_days: RetentionDays | None = None
 
 
 class OrganizationCreate(BaseModel):

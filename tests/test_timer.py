@@ -76,7 +76,7 @@ def test_untimed_question_has_no_deadline(anon_client: TestClient) -> None:
     anon_client.post("/questions", json=_question("q_untimed", None), headers=_auth(tok))
     inv = _invite(anon_client, tok, "q_untimed", "c@x.io")
 
-    started = anon_client.post(f"/invite/{inv['token']}/start", json={"candidate_email": "c@x.io"})
+    started = anon_client.post(f"/invite/{inv['token']}/start", json={"candidate_email": "c@x.io", "consent": True})
     assert started.status_code == 200
     assert started.json()["deadline"] is None
 
@@ -86,7 +86,7 @@ def test_timed_start_returns_stable_deadline(anon_client: TestClient) -> None:
     anon_client.post("/questions", json=_question("q_timed", 30), headers=_auth(tok))
     inv = _invite(anon_client, tok, "q_timed", "c@x.io")
 
-    first = anon_client.post(f"/invite/{inv['token']}/start", json={"candidate_email": "c@x.io"})
+    first = anon_client.post(f"/invite/{inv['token']}/start", json={"candidate_email": "c@x.io", "consent": True})
     assert first.status_code == 200
     deadline = first.json()["deadline"]
     assert deadline is not None
@@ -94,7 +94,7 @@ def test_timed_start_returns_stable_deadline(anon_client: TestClient) -> None:
     assert abs((datetime.fromisoformat(deadline) - expected).total_seconds()) < 60
 
     # Re-opening the link must NOT reset the clock: same deadline back.
-    again = anon_client.post(f"/invite/{inv['token']}/start", json={"candidate_email": "c@x.io"})
+    again = anon_client.post(f"/invite/{inv['token']}/start", json={"candidate_email": "c@x.io", "consent": True})
     assert again.json()["deadline"] == deadline
 
 
@@ -102,7 +102,7 @@ def test_submit_within_grace_is_accepted(anon_client: TestClient, monkeypatch) -
     tok = register_interviewer(anon_client, "t-grace@x.io")
     anon_client.post("/questions", json=_question("q_grace", 30), headers=_auth(tok))
     inv = _invite(anon_client, tok, "q_grace", "c@x.io")
-    anon_client.post(f"/invite/{inv['token']}/start", json={"candidate_email": "c@x.io"})
+    anon_client.post(f"/invite/{inv['token']}/start", json={"candidate_email": "c@x.io", "consent": True})
     # 5s past a 30-minute deadline — inside the 15s grace, so an on-time auto-submit
     # that arrives slightly late still counts.
     _age_attempt_started_at(tok, 30 * 60 + 5)
@@ -110,7 +110,7 @@ def test_submit_within_grace_is_accepted(anon_client: TestClient, monkeypatch) -
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-g"))
     resp = anon_client.post(
         f"/invite/{inv['token']}/submit",
-        json={"candidate_name": "C", "candidate_email": "c@x.io", "language": "python", "code": "print(7)"},
+        json={"candidate_name": "C", "candidate_email": "c@x.io", "consent": True, "language": "python", "code": "print(7)"},
     )
     assert resp.status_code == 201
     # Inside grace = on-time, not flagged late.
@@ -126,14 +126,14 @@ def test_submit_past_deadline_is_recorded_and_flagged_late(
     tok = register_interviewer(anon_client, "t-late@x.io")
     anon_client.post("/questions", json=_question("q_late", 30), headers=_auth(tok))
     inv = _invite(anon_client, tok, "q_late", "c@x.io")
-    anon_client.post(f"/invite/{inv['token']}/start", json={"candidate_email": "c@x.io"})
+    anon_client.post(f"/invite/{inv['token']}/start", json={"candidate_email": "c@x.io", "consent": True})
     # 60s past the deadline — well beyond the 15s grace.
     _age_attempt_started_at(tok, 30 * 60 + 60)
 
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-l"))
     resp = anon_client.post(
         f"/invite/{inv['token']}/submit",
-        json={"candidate_name": "C", "candidate_email": "c@x.io", "language": "python", "code": "print(7)"},
+        json={"candidate_name": "C", "candidate_email": "c@x.io", "consent": True, "language": "python", "code": "print(7)"},
     )
     assert resp.status_code == 201
     sid = resp.json()["submission_id"]

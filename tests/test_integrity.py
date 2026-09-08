@@ -46,7 +46,7 @@ def _invited(client: TestClient, qid: str = "q1", email: str = "cand@x.io") -> s
     assert resp.status_code == 201
     token = resp.json()["token"]
     started = client.post(
-        f"/invite/{token}/start", json={"candidate_name": "Cand", "candidate_email": email}
+        f"/invite/{token}/start", json={"candidate_name": "Cand", "candidate_email": email, "consent": True}
     )
     assert started.status_code == 200
     return token
@@ -76,6 +76,7 @@ def _submit(client: TestClient, token: str, monkeypatch, email: str = "cand@x.io
         json={
             "candidate_name": "Cand",
             "candidate_email": email,
+            "consent": True,
             "language": "python",
             "code": "print(1)",
         },
@@ -298,7 +299,7 @@ def test_candidate_view_carries_the_sittings_monitoring_state(client) -> None:
     invite = client.post(f"/assessments/{aid}/invites", json={"recipients": ["cand@x.io"]})
     token = invite.json()["token"]
     started = client.post(
-        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io"}
+        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io", "consent": True}
     )
     assert started.json()["proctored"] is False
 
@@ -306,7 +307,7 @@ def test_candidate_view_carries_the_sittings_monitoring_state(client) -> None:
     # the toggle from and is always monitored.
     quick = _invited(client, qid="q2", email="cand2@x.io")
     view = client.post(
-        f"/invite/{quick}/start", json={"candidate_name": "C", "candidate_email": "cand2@x.io"}
+        f"/invite/{quick}/start", json={"candidate_name": "C", "candidate_email": "cand2@x.io", "consent": True}
     )
     assert view.json()["proctored"] is True
 
@@ -321,7 +322,7 @@ def test_report_reports_an_unmonitored_sitting_as_such(client, monkeypatch) -> N
         f"/assessments/{aid}/invites", json={"recipients": ["cand@x.io"]}
     ).json()["token"]
     client.post(
-        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io"}
+        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io", "consent": True}
     )
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-1"))
     sub_id = client.post(
@@ -329,6 +330,7 @@ def test_report_reports_an_unmonitored_sitting_as_such(client, monkeypatch) -> N
         json={
             "candidate_name": "C",
             "candidate_email": "cand@x.io",
+            "consent": True,
             "language": "python",
             "code": "print(1)",
             "question_id": "q1",
@@ -348,12 +350,13 @@ def test_signals_are_shared_across_a_sittings_submissions(client, monkeypatch) -
         f"/assessments/{aid}/invites", json={"recipients": ["cand@x.io"]}
     ).json()["token"]
     client.post(
-        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io"}
+        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io", "consent": True}
     )
     client.post(
         f"/invite/{token}/events",
         json={
             "candidate_email": "cand@x.io",
+            "consent": True,
             "question_id": "q2",
             "events": [_events(kind="devtools", duration_ms=None)],
         },
@@ -367,6 +370,7 @@ def test_signals_are_shared_across_a_sittings_submissions(client, monkeypatch) -
                 json={
                     "candidate_name": "C",
                     "candidate_email": "cand@x.io",
+                    "consent": True,
                     "language": "python",
                     "code": "print(1)",
                     "question_id": qid,
@@ -388,11 +392,11 @@ def test_events_of_one_candidate_do_not_leak_into_anothers_report(client, monkey
     token = invite["token"]
     for email in ("a@x.io", "b@x.io"):
         client.post(
-            f"/invite/{token}/start", json={"candidate_name": email, "candidate_email": email}
+            f"/invite/{token}/start", json={"candidate_name": email, "candidate_email": email, "consent": True}
         )
     client.post(
         f"/invite/{token}/events",
-        json={"candidate_email": "a@x.io", "events": [_events(kind="focus_loss")]},
+        json={"candidate_email": "a@x.io", "consent": True, "events": [_events(kind="focus_loss")]},
     )
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-1"))
     b_sub = client.post(
@@ -400,6 +404,7 @@ def test_events_of_one_candidate_do_not_leak_into_anothers_report(client, monkey
         json={
             "candidate_name": "B",
             "candidate_email": "b@x.io",
+            "consent": True,
             "language": "python",
             "code": "print(1)",
         },
@@ -435,7 +440,7 @@ def _assessment_sitting(client: TestClient, *, proctored: bool, qid: str = "q1")
         f"/assessments/{aid}/invites", json={"recipients": ["cand@x.io"]}
     ).json()["token"]
     client.post(
-        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io"}
+        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "cand@x.io", "consent": True}
     )
     return aid, token
 
@@ -447,6 +452,7 @@ def _submit_assessment(client: TestClient, token: str, monkeypatch, qid: str = "
         json={
             "candidate_name": "C",
             "candidate_email": "cand@x.io",
+            "consent": True,
             "language": "python",
             "code": "print(1)",
             "question_id": qid,

@@ -248,7 +248,7 @@ def test_candidate_view_hides_test_cases(anon_client: TestClient) -> None:
 
     # PUBLIC — no bearer, but must identify as an invited recipient.
     resp = anon_client.post(
-        f"/invite/{inv['token']}/start", json={"candidate_email": "cand@x.io"}
+        f"/invite/{inv['token']}/start", json={"candidate_email": "cand@x.io", "consent": True}
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -286,6 +286,7 @@ def test_candidate_submit_triggers_agent(anon_client: TestClient, monkeypatch) -
         json={
             "candidate_name": "Jane Doe",
             "candidate_email": "jane@x.io",
+            "consent": True,
             "language": "python",
             "code": "print(7)",
         },
@@ -321,7 +322,7 @@ def test_expired_invite_410(anon_client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-x"))
     resp = anon_client.post(
         f"/invite/{inv['token']}/submit",
-        json={"candidate_name": "X", "candidate_email": "x@x.io", "language": "python", "code": "x"},
+        json={"candidate_name": "X", "candidate_email": "x@x.io", "consent": True, "language": "python", "code": "x"},
     )
     assert resp.status_code == 410
 
@@ -346,7 +347,7 @@ def test_dashboard_submissions_owner_scoped(anon_client: TestClient, monkeypatch
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-d"))
     anon_client.post(
         f"/invite/{inv['token']}/submit",
-        json={"candidate_name": "Cand", "candidate_email": "c@x.io", "language": "python", "code": "x"},
+        json={"candidate_name": "Cand", "candidate_email": "c@x.io", "consent": True, "language": "python", "code": "x"},
     )
 
     # Owner A sees the candidate's submission.

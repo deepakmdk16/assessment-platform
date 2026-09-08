@@ -43,12 +43,12 @@ TESTS_OK = {
 
 
 def _run(client: TestClient, token: str, email: str = "cand@x.io", **extra: Any) -> Any:
-    body = {"candidate_email": email, "language": "python", "code": "print(7)", **extra}
+    body = {"candidate_email": email, "consent": True, "language": "python", "code": "print(7)", **extra}
     return client.post(f"/invite/{token}/run", json=body)
 
 
 def _run_tests(client: TestClient, token: str, email: str = "cand@x.io") -> Any:
-    body = {"candidate_email": email, "language": "python", "code": "print(7)"}
+    body = {"candidate_email": email, "consent": True, "language": "python", "code": "print(7)"}
     return client.post(f"/invite/{token}/run-tests", json=body)
 
 
@@ -92,7 +92,7 @@ def test_run_does_not_create_a_submission(
         assert s.exec(select(Submission)).all() == []
     # And they can still start + submit afterwards.
     assert anon_client.post(
-        f"/invite/{invite['token']}/start", json={"candidate_email": "cand@x.io"}
+        f"/invite/{invite['token']}/start", json={"candidate_email": "cand@x.io", "consent": True}
     ).status_code == 200
 
 
@@ -114,6 +114,7 @@ def test_run_rejects_a_candidate_who_already_submitted(
         json={
             "candidate_name": "C",
             "candidate_email": "cand@x.io",
+            "consent": True,
             "language": "python",
             "code": "x",
         },

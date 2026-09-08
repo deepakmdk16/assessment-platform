@@ -132,7 +132,7 @@ def test_variant_set_slot_owner_scoped(anon_client: TestClient) -> None:
 
 
 def _start(client: TestClient, tok: str, email: str) -> list[str]:
-    data = client.post(f"/invite/{tok}/start", json={"candidate_email": email}).json()
+    data = client.post(f"/invite/{tok}/start", json={"candidate_email": email, "consent": True}).json()
     return [q["id"] for q in data["questions"]]
 
 

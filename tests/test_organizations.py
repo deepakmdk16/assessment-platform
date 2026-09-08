@@ -637,7 +637,7 @@ def test_an_integrity_timeline_never_echoes_another_orgs_question_title(
         "/questions/sum_n/invites", json={"recipients": ["c@x.io"]}, headers=auth(owner)
     ).json()["token"]
     anon_client.post(
-        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "c@x.io"}
+        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "c@x.io", "consent": True}
     )
     # The candidate reports an event naming the OTHER organisation's question.
     assert (
@@ -645,6 +645,7 @@ def test_an_integrity_timeline_never_echoes_another_orgs_question_title(
             f"/invite/{token}/events",
             json={
                 "candidate_email": "c@x.io",
+                "consent": True,
                 "question_id": "beta_secret",
                 "events": [{"kind": "focus_loss", "offset_ms": 10, "duration_ms": 500}],
             },
@@ -657,6 +658,7 @@ def test_an_integrity_timeline_never_echoes_another_orgs_question_title(
         json={
             "candidate_name": "C",
             "candidate_email": "c@x.io",
+            "consent": True,
             "language": "python",
             "code": "print(1)",
         },
