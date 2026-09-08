@@ -437,8 +437,6 @@ class RegisterIn(BaseModel):
     # invite is addressed to one email and is itself the proof of admission, so
     # it stands in for the registration code rather than being asked for on top.
     org_invite_token: str | None = None
-    # Names the organisation this sign-up founds. Ignored when joining one.
-    org_name: str | None = None
 
 
 class InterviewerOut(BaseModel):
@@ -941,12 +939,18 @@ class OrganizationOut(BaseModel):
     member_count: int
 
 
+# Stripped before the length check, so "   " is rejected as the blank name it is
+# rather than stored as one — an organisation with an empty name renders as an
+# empty heading, and as "You've been invited to " in the invitation subject.
+OrgName = Annotated[str, AfterValidator(lambda v: v.strip()), Field(min_length=1, max_length=120)]
+
+
 class OrganizationUpdate(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
+    name: OrgName
 
 
 class OrganizationCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
+    name: OrgName
 
 
 class MemberOut(BaseModel):
@@ -973,9 +977,10 @@ class OrgInviteOut(BaseModel):
     url: str
     expires_at: datetime | None = None
     accepted_at: datetime | None = None
-    # Whether the invite mail actually went out, captured at creation like the
-    # per-recipient outcome on a candidate invite (A4) — an admin who is never
-    # told the mail bounced sits waiting for someone who was never written to.
+    # Whether the invite mail actually went out, and why not. Stored on the row
+    # (like the per-recipient outcome on a candidate invite, A4) rather than only
+    # returned here, so the warning survives a page reload — an admin who stops
+    # being told the mail bounced waits for someone who was never written to.
     sent: bool = True
     error: str | None = None
 

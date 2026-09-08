@@ -130,6 +130,12 @@ class OrgInvite(SQLModel, table=True):
     invited_by: int | None = Field(default=None, foreign_key="interviewer.id", index=True)
     expires_at: datetime | None = None
     accepted_at: datetime | None = None
+    # Whether the invitation mail actually went out, and why not. Stored rather
+    # than only returned from the create call: a delivery warning that vanishes
+    # on the next page load is a warning nobody acts on, and the admin is then
+    # waiting on someone who was never written to.
+    sent: bool = True
+    send_error: str | None = None
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 

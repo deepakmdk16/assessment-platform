@@ -111,8 +111,9 @@ deterministic grade.
   outputs. There is a test that asserts their absence; keep it.
 - **Auth enforced when configured.** Bearer/shared-secret checks activate only
   when their env var is set (dev/tests run without). Interviewer routes are
-  bearer-guarded **and owner-scoped**; candidate routes are public but
-  token-gated; the agent callback is shared-secret-guarded.
+  bearer-guarded **and organisation-scoped** (see the next bullet); candidate
+  routes are public but token-gated; the agent callback is
+  shared-secret-guarded.
 - **The organisation is the scope; the person is the provenance.** Every
   interviewer-facing query filters on `org_id` via `get_current_membership`,
   never on `owner_id` — `owner_id`/`created_by` only record who authored a row

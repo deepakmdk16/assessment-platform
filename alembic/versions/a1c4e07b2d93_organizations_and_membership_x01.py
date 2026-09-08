@@ -87,9 +87,14 @@ def upgrade() -> None:
         sa.Column('token', sa.String(), nullable=False),
         sa.Column('email', sa.String(), nullable=False),
         sa.Column('role', sa.String(), nullable=False),
-        sa.Column('invited_by', sa.Integer(), nullable=False),
+        # Nullable like every other authorship column here: the admin who sent
+        # the invitation can delete their account while the organisation lives on
+        # (see `_disown`), and this row is kept as the audit trail.
+        sa.Column('invited_by', sa.Integer(), nullable=True),
         sa.Column('expires_at', sa.DateTime(), nullable=True),
         sa.Column('accepted_at', sa.DateTime(), nullable=True),
+        sa.Column('sent', sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column('send_error', sa.String(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.Column('updated_at', sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(['org_id'], ['organization.id']),
@@ -99,6 +104,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_orginvite_org_id'), 'orginvite', ['org_id'])
     op.create_index(op.f('ix_orginvite_email'), 'orginvite', ['email'])
     op.create_index(op.f('ix_orginvite_token'), 'orginvite', ['token'], unique=True)
+    op.create_index(op.f('ix_orginvite_invited_by'), 'orginvite', ['invited_by'])
 
     conn = op.get_bind()
     conn.execute(
@@ -157,13 +163,17 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """`owner_id` was never dropped, so ownership survives the reversal intact —
-    the organisations and the roster are what is lost."""
-    with op.batch_alter_table('invite', schema=None) as batch_op:
-        batch_op.alter_column('created_by', existing_type=sa.Integer(), nullable=False)
+    the organisations and the roster are what is lost.
 
+    The NOT NULL on `owner_id` / `created_by` is deliberately NOT restored. Once
+    an account has been deleted out of a surviving organisation those columns
+    hold NULL by design (see `_disown`), and re-imposing the constraint would
+    either abort the downgrade or require inventing an owner for someone else's
+    question. A column that is nullable and never null is a harmless difference
+    from the pre-X01 schema; losing or misattributing a row is not.
+    """
     for table in OWNED:
         with op.batch_alter_table(table, schema=None) as batch_op:
-            batch_op.alter_column('owner_id', existing_type=sa.Integer(), nullable=False)
             batch_op.drop_index(op.f(f'ix_{table}_org_id'))
             batch_op.drop_column('org_id')
     op.drop_table('orginvite')

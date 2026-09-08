@@ -62,22 +62,6 @@ def test_register_founds_an_organisation_with_the_caller_as_admin(anon_client) -
     assert org["name"] == "Founder's organisation"
 
 
-def test_register_honours_an_explicit_org_name(anon_client) -> None:
-    anon_client.post(
-        "/auth/register",
-        json={
-            "email": "founder@acme.io",
-            "password": "pw-long-enough-12",
-            "name": "Founder",
-            "org_name": "Acme Corp",
-        },
-    )
-    token = anon_client.post(
-        "/auth/login", json={"email": "founder@acme.io", "password": "pw-long-enough-12"}
-    ).json()["access_token"]
-    assert anon_client.get("/orgs/current", headers=auth(token)).json()["name"] == "Acme Corp"
-
-
 def test_two_separate_signups_cannot_see_each_other(anon_client) -> None:
     """The isolation X01 must not weaken: separate sign-ups are separate tenants."""
     a = register_interviewer(anon_client, "a@one.io")
@@ -469,3 +453,146 @@ def test_the_last_member_deleting_their_account_still_purges_everything(anon_cli
     with Session(db_module.engine) as s:
         assert s.get(Question, "sum_n") is None
         assert s.exec(select(Membership)).all() == []
+
+
+# --------------------------------------------------------------------------- #
+# Regressions found by review of this branch                                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_only_admin_cannot_delete_their_way_out_of_a_team(anon_client, two_person_org) -> None:
+    """`DELETE /auth/me` was the one door that skipped the last-admin guard.
+    Through it, an organisation could be left with members, a roster nobody can
+    change, and no way to found another — recoverable only by editing the
+    database."""
+    admin, member, member_id = two_person_org
+    refused = anon_client.request(
+        "DELETE", "/auth/me", json={"password": "pw-long-enough-12"}, headers=auth(admin)
+    )
+    assert refused.status_code == 409
+    assert "only admin" in refused.json()["detail"]
+    assert anon_client.get("/orgs/current", headers=auth(admin)).status_code == 200
+
+    # Promoting someone else is a real way through, not a dead end.
+    anon_client.patch(
+        f"/orgs/current/members/{member_id}", json={"role": "admin"}, headers=auth(admin)
+    )
+    allowed = anon_client.request(
+        "DELETE", "/auth/me", json={"password": "pw-long-enough-12"}, headers=auth(admin)
+    )
+    assert allowed.status_code == 204
+    assert anon_client.get("/orgs/current", headers=auth(member)).json()["member_count"] == 1
+
+
+def test_an_account_that_changed_organisations_can_still_be_deleted(
+    anon_client, two_person_org
+) -> None:
+    """The purge-organisation branch skipped `_disown`, so rows authored in a
+    *previous* organisation stayed pointing at the account being deleted. Foreign
+    keys are enforced in both engines, so that was a 500 and an account nobody
+    could ever remove."""
+    admin, member, member_id = two_person_org
+    anon_client.post("/questions", json=question_payload(), headers=auth(member))
+    anon_client.delete(f"/orgs/current/members/{member_id}", headers=auth(admin))
+    assert (
+        anon_client.post("/orgs", json={"name": "Sam Consulting"}, headers=auth(member)).status_code
+        == 201
+    )
+
+    gone = anon_client.request(
+        "DELETE", "/auth/me", json={"password": "pw-long-enough-12"}, headers=auth(member)
+    )
+    assert gone.status_code == 204
+    # The old organisation kept the question, now authored by nobody.
+    with Session(db_module.engine) as s:
+        q = s.get(Question, "sum_n")
+        assert q is not None and q.owner_id is None
+
+
+def test_inviting_someone_already_on_the_roster_is_refused(anon_client, two_person_org) -> None:
+    """Nothing leaks — the admin can already see them in the roster — and an
+    invitation they cannot meaningfully accept is only a trap."""
+    admin, _member, _member_id = two_person_org
+    resp = anon_client.post(
+        "/orgs/current/invites", json={"email": "sam@acme.io"}, headers=auth(admin)
+    )
+    assert resp.status_code == 409
+    assert "already a member of this organisation" in resp.json()["detail"]
+
+
+def test_inviting_yourself_is_refused(anon_client) -> None:
+    """The form offered no resistance, and accepting was a 500: `_leave_empty_org`
+    purged the organisation — including the invitation row still being held — and
+    the membership was then written against an organisation that no longer
+    existed."""
+    admin = register_interviewer(anon_client, "admin@acme.io", name="Ada")
+    resp = anon_client.post(
+        "/orgs/current/invites", json={"email": "admin@acme.io"}, headers=auth(admin)
+    )
+    assert resp.status_code == 409
+    assert anon_client.get("/orgs/current", headers=auth(admin)).json()["member_count"] == 1
+
+
+def test_accepting_an_invitation_to_your_own_organisation_says_so(anon_client) -> None:
+    """Defence in depth behind the create-time refusal above: two invitations for
+    one address can only coexist across a race, and answering that with the
+    leave-first message would tell someone to leave the organisation they are
+    joining. Seeded directly, because the route no longer mints the second one."""
+    admin = register_interviewer(anon_client, "admin@acme.io", name="Ada")
+    join_token = invite_colleague(anon_client, admin, "sam@acme.io")
+    anon_client.post(
+        "/auth/register",
+        json={
+            "email": "sam@acme.io",
+            "password": "pw-long-enough-12",
+            "name": "Sam",
+            "org_invite_token": join_token,
+        },
+    )
+    sam = anon_client.post(
+        "/auth/login", json={"email": "sam@acme.io", "password": "pw-long-enough-12"}
+    ).json()["access_token"]
+
+    with Session(db_module.engine) as s:
+        accepted = s.exec(select(OrgInvite).where(OrgInvite.token == join_token)).one()
+        s.add(
+            OrgInvite(
+                org_id=accepted.org_id,
+                token="second-token",
+                email="sam@acme.io",
+                role="member",
+                invited_by=accepted.invited_by,
+            )
+        )
+        s.commit()
+
+    resp = anon_client.post("/org-invites/second-token/accept", headers=auth(sam))
+    assert resp.status_code == 409
+    assert "already a member of this organisation" in resp.json()["detail"]
+    # And the organisation is intact — nothing was purged on the way to the error.
+    assert anon_client.get("/orgs/current", headers=auth(sam)).json()["member_count"] == 2
+
+
+def test_a_failed_delivery_survives_a_reload(anon_client) -> None:
+    """The outcome was only ever in the create response, so the warning vanished
+    on the next page load and the admin waited for someone who was never written
+    to. (SMTP is unconfigured under test, so every send here fails.)"""
+    admin = register_interviewer(anon_client, "admin@acme.io", name="Ada")
+    created = anon_client.post(
+        "/orgs/current/invites", json={"email": "priya@acme.io"}, headers=auth(admin)
+    ).json()
+    assert created["sent"] is False and created["error"]
+
+    listed = anon_client.get("/orgs/current/invites", headers=auth(admin)).json()
+    assert listed[0]["sent"] is False
+    assert listed[0]["error"] == created["error"]
+
+
+def test_a_whitespace_only_organisation_name_is_refused(anon_client) -> None:
+    admin = register_interviewer(anon_client, "admin@acme.io", name="Ada")
+    assert (
+        anon_client.patch("/orgs/current", json={"name": "   "}, headers=auth(admin)).status_code
+        == 422
+    )
+    renamed = anon_client.patch("/orgs/current", json={"name": "  Acme  "}, headers=auth(admin))
+    assert renamed.json()["name"] == "Acme"

@@ -643,6 +643,12 @@ def _purge_account(interviewer_id: int, session: Session) -> None:
     colleagues' work and other people's submissions on one person's say-so. What
     leaves is the person: their login, their seat, and their name against the
     rows they authored.
+
+    Raises 409 if the caller is the last admin of an organisation other people
+    are still in: leaving would strand them with a roster nobody can change and
+    no way to found another organisation. Promoting someone else first makes the
+    deletion go through, so this delays a data-subject request by one click
+    rather than refusing it.
     """
     membership = session.exec(
         select(Membership).where(Membership.interviewer_id == interviewer_id)
@@ -657,13 +663,20 @@ def _purge_account(interviewer_id: int, session: Session) -> None:
         if membership is not None
         else None
     )
+    if membership is not None and others is not None:
+        _last_admin_guard(membership.org_id, interviewer_id, session)
     if membership is not None and others is None:
         _purge_org(membership.org_id, session)
     else:
-        _disown(interviewer_id, session)
         session.execute(
             delete(Membership).where(col(Membership.interviewer_id) == interviewer_id)
         )
+    # Unconditional, and after the purge: an account can have authored rows in an
+    # organisation it no longer belongs to (removed from one, founded another),
+    # and those references outlive whichever branch ran above. Skipping this on
+    # the purge branch left the account permanently undeletable behind a foreign
+    # key — enforced in both engines, so a 500, not a silent orphan.
+    _disown(interviewer_id, session)
     session.execute(delete(Interviewer).where(col(Interviewer.id) == interviewer_id))
 
 
@@ -717,7 +730,7 @@ def register(
     if org_invite is not None:
         _join_org(interviewer, org_invite, session)
     else:
-        _found_org(interviewer, body.org_name, session)
+        _found_org(interviewer, None, session)
     session.commit()
     session.refresh(interviewer)
     # Best-effort, like invite mail: a mailer outage must not block sign-up. The
@@ -865,7 +878,8 @@ def delete_me(
     """Delete the caller's account. If they are the last member of their
     organisation this takes the organisation and everything in it with them;
     otherwise the organisation keeps its work and only the person leaves (see
-    `_purge_account`). Irreversible; the password is required again."""
+    `_purge_account`, which 409s if that would leave colleagues with no admin).
+    Irreversible; the password is required again."""
     if not verify_password(body.password, current.password_hash):
         raise HTTPException(status_code=403, detail="password is incorrect.")
     _purge_account(_require_id(current.id), session)
@@ -966,7 +980,7 @@ def _last_admin_guard(org_id: int, interviewer_id: int, session: Session) -> Non
         )
 
 
-def _org_invite_out(invite: OrgInvite, sent: bool = True, error: str | None = None) -> OrgInviteOut:
+def _org_invite_out(invite: OrgInvite) -> OrgInviteOut:
     return OrgInviteOut(
         id=_require_id(invite.id),
         email=invite.email,
@@ -974,8 +988,8 @@ def _org_invite_out(invite: OrgInvite, sent: bool = True, error: str | None = No
         url=_org_invite_url(invite.token),
         expires_at=invite.expires_at,
         accepted_at=invite.accepted_at,
-        sent=sent,
-        error=error,
+        sent=invite.sent,
+        error=invite.send_error,
     )
 
 
@@ -1016,8 +1030,11 @@ def _found_org(interviewer: Interviewer, name: str | None, session: Session) -> 
     pre-existing account its own. That is what keeps "the caller's organisation"
     a total function rather than a special case at 40 call sites.
     """
-    display = (name or "").strip() or f"{interviewer.name.strip()}'s organisation".strip()
-    organization = Organization(name=display if display != "'s organisation" else "My organisation")
+    chosen = (name or "").strip()
+    who = interviewer.name.strip()
+    organization = Organization(
+        name=chosen or (f"{who}'s organisation" if who else "My organisation")
+    )
     session.add(organization)
     session.flush()  # need the id for the membership below
     membership = Membership(
@@ -1218,11 +1235,24 @@ def create_org_invite(
     """
     _require_admin(org)
     email = _normalize_email(body.email)
-    # Whether that address already has an account is deliberately not checked
-    # here: the answer would leak, and an existing account can accept anyway
-    # (see `accept_org_invite`). A pending invite for the same address is
-    # replaced rather than added to, so "resend" doesn't leave two live keys
-    # for one seat.
+    # Whether that address has an account *elsewhere* is deliberately not checked
+    # here: the answer would leak, and an existing account can accept anyway (see
+    # `accept_org_invite`). Someone already on this roster is different — the
+    # admin can see them in it, so nothing leaks, and an invitation they cannot
+    # meaningfully accept is only a trap.
+    if any(
+        member.email == email
+        for member in session.exec(
+            select(Interviewer)
+            .join(Membership, col(Membership.interviewer_id) == col(Interviewer.id))
+            .where(Membership.org_id == org.org_id)
+        ).all()
+    ):
+        raise HTTPException(
+            status_code=409, detail=f"{email!r} is already a member of this organisation."
+        )
+    # A pending invite for the same address is replaced rather than added to, so
+    # "resend" doesn't leave two live keys for one seat.
     session.execute(
         delete(OrgInvite).where(
             col(OrgInvite.org_id) == org.org_id,
@@ -1245,7 +1275,8 @@ def create_org_invite(
     url = _org_invite_url(invite.token)
     # Sent inline, not in the background, so the response can say whether it
     # actually went — an admin who is never told the mail bounced waits for
-    # someone who was never written to.
+    # someone who was never written to. Recorded on the row for the same reason:
+    # a warning that vanishes on the next page load is a warning nobody acts on.
     delivery = email_client.send_account_email(
         email,
         f"You've been invited to {organization.name if organization else 'an organisation'}",
@@ -1256,7 +1287,12 @@ def create_org_invite(
         "The link is valid for 7 days. If you weren't expecting this, ignore it.",
         url,
     )
-    return _org_invite_out(invite, sent=delivery.sent, error=delivery.error)
+    invite.sent = delivery.sent
+    invite.send_error = delivery.error
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    return _org_invite_out(invite)
 
 
 @app.delete("/orgs/current/invites/{invite_id}", status_code=204)
@@ -1316,6 +1352,13 @@ def accept_org_invite(
             detail=f"this invitation was sent to {invite.email!r}; sign in as that address.",
         )
     existing = membership_for(current, session)
+    if existing is not None and existing.org_id == invite.org_id:
+        # Already in. Reached by re-inviting a colleague, or by opening the same
+        # link twice; answering 409 here would tell someone to leave the
+        # organisation they are being invited to join.
+        raise HTTPException(
+            status_code=409, detail="you are already a member of this organisation."
+        )
     if existing is not None:
         _leave_empty_org(existing, session)
     membership = _join_org(current, invite, session)
@@ -2599,7 +2642,7 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
 
 
 # --------------------------------------------------------------------------- #
-# Analytics (AR1) — aggregate stats over the caller's own questions/results.   #
+# Analytics (AR1) — aggregate stats over the organisation's questions/results.   #
 # Read-only rollups; the maths lives in `analytics.py` (DB-free, unit-tested). #
 # --------------------------------------------------------------------------- #
 
@@ -2646,7 +2689,7 @@ def analytics_overview(
     org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> OverviewAnalyticsOut:
-    """Workspace rollup across all of the caller's questions: headline counts,
+    """Workspace rollup across all of the organisation's questions: headline counts,
     overall pass rate / average score, and a daily submission trend. `days`
     windows the submission-derived stats (counts/rate/score/trend) to the last N
     days; the question count is the current library size, not time-scoped."""
@@ -3797,7 +3840,7 @@ def list_submissions(
     org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> Page[SubmissionSummaryOut]:
-    # Only submissions for the caller's own questions. Lean rows: the full `code`
+    # Only submissions for the organisation's questions. Lean rows: the full `code`
     # and `full_result` blobs are fetched per-id via GET /submissions/{id}, so a
     # page here stays small even at hundreds of rows.
     total = session.exec(
@@ -3831,7 +3874,7 @@ def export_submissions(
     org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> Response:
-    """Owner-scoped CSV of every submission across the caller's questions.
+    """Org-scoped CSV of every submission across the organisation's questions.
 
     A full export (not paginated) for spreadsheets / ATS import — the lean summary
     columns plus the question title, so a row is readable without a second lookup.
