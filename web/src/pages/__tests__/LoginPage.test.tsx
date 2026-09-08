@@ -28,6 +28,7 @@ vi.mock('../../api', () => {
     setToken: vi.fn(),
     clearToken: vi.fn(),
     setUnauthorizedHandler: vi.fn(),
+    setNoOrganizationHandler: vi.fn(),
     // No live session on boot: the provider's refresh attempt resolves false.
     tryRefresh: vi.fn(async () => false),
   }

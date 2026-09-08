@@ -1,6 +1,13 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, clearToken, setToken, setUnauthorizedHandler, tryRefresh } from '../api'
+import {
+  api,
+  clearToken,
+  setNoOrganizationHandler,
+  setToken,
+  setUnauthorizedHandler,
+  tryRefresh,
+} from '../api'
 import type { User } from '../types'
 
 interface AuthContextValue {
@@ -29,7 +36,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setUnauthorizedHandler(logout)
-    return () => setUnauthorizedHandler(null)
+    // An account an admin removed is signed in and legitimate, so signing it out
+    // would be wrong — but every data route refuses it. Send it to /team, the one
+    // page that renders the state and offers the way out of it.
+    setNoOrganizationHandler(() => {
+      if (window.location.pathname !== '/team') navigate('/team')
+    })
+    return () => {
+      setUnauthorizedHandler(null)
+      setNoOrganizationHandler(null)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

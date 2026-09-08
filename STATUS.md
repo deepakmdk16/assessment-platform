@@ -106,17 +106,38 @@ compose; the agent needs a privileged host.**
   Evidence: no question import/bulk upload (only hand-form or AI
   draft, api.py:554); no candidate-facing feedback or score (CandidatePage.tsx:345);
   no re-invite/extend-deadline (STATUS.md:118-121); no custom domain/white-label
-  beyond logo/org text (models.py:165-166); no ATS/webhook (STATUS.md:337); no
-  self-serve org onboarding. Why: procurement and onboarding stall on table-stakes
-  features. Fix: prioritise team, notifications, import, re-invite after the P0s.
+  beyond logo/org text (models.py:165-166); no ATS/webhook (STATUS.md:337).
+  Why: procurement and onboarding stall on table-stakes features. Fix: prioritise
+  notifications, import, re-invite after the P0s. (Team and self-serve org
+  onboarding shipped with X01.)
   _Verified: cited lines read in this audit; source: saas._
 - **P06 · P2 · XS — POST /invite/{token}/events accepts any question_id.**
   Evidence: api.py:2572-2584; live: unknown id → 500 ForeignKeyViolation; another
-  tenant's valid id is stored and then blocks that tenant's DELETE /questions/{id}
-  via the IntegrityEvent guard (api.py:1087-1093). Why: unauthenticated route can
-  500 and cross-tenant-pollute. Fix: resolve through _resolve_question (must belong
-  to the invite) or null it.
+  organisation's valid id is stored and then blocks that organisation's DELETE
+  /questions/{id} via the IntegrityEvent guard. Why: an unauthenticated route can
+  500 and write across a real tenant boundary — the boundary is genuine since X01,
+  so this is no longer only a nuisance. The *title* echo it enabled is closed
+  (`_integrity_report` resolves titles only within the caller's organisation); the
+  unvalidated write is not. Fix: resolve through _resolve_question (must belong to
+  the invite) or null it.
   _Verified: live run in this audit; source: backend,live._
+- **P29 · P3 · S — X01 leftovers an integration check surfaced.**
+  Evidence: `GET /orgs/current/invites` filters `accepted_at IS NULL`, so
+  `OrgInviteOut.accepted_at` can never be non-null on any response and
+  `Membership.invited_by` is written by `_join_org` and read by nothing — the
+  audit trail the OrgInvite docstring says the rows are kept for has no reader.
+  `Interviewer.default_org_name`/`default_logo_url` are still per-person
+  ("workspace"-level) in a product where the workspace is now a shared
+  `Organization` with its own name, so two admins keep separate branding
+  defaults. `GET /auth/me` carries no organisation, so its name appears in
+  exactly one place in the SPA. Question/assessment/variant-set ids remain one
+  global slug namespace, so an explicit-id create is an existence oracle across
+  organisations. Several open items above still cite `api.py:NNNN` line numbers
+  that X01 moved by ~800-1000 lines. Why: none of these is user-visible today;
+  together they are the tail of the org migration. Fix: a read surface for
+  accepted invitations, decide whether branding defaults move to the org, and
+  re-anchor the stale citations.
+
 - **P07 · P2 · XS — CSV export is vulnerable to formula injection.**
   Evidence: api.py:2872-2884 writes candidate-supplied candidate, candidate_email
   and titles raw. Why: a candidate name starting with = + - @ executes in Excel on
@@ -135,7 +156,7 @@ draft GET query string.**
   reference solutions (api.py:194-204, 954); list_variant_sets per-row count
   (896-898); list_assessments per-slot VariantSet get + count + lazy aq.question
   (1134-1150); _assessment_attempt_rows per-invite session.get(Invite) (1621-1625);
-  analytics_overview loads every owner Submission including code (1783-1788);
+  analytics_overview loads every Submission in the ORGANISATION including code;
   analytics_assessment re-queries rows it already has (1938-1946). Why: latency
   grows linearly with library size; analytics pulls every candidate's source. Fix:
   selectinload, aggregate queries, defer(code), slim list schemas.
@@ -378,9 +399,10 @@ only.**
   _Verified: cited lines read in this audit; source: quality._
 - **P17 · P3 · XS — _owned_variant_set returns 404 for foreign resources while
 CONVENTIONS mandates 403.**
-  Evidence: api.py:699-705 vs CONVENTIONS.md:32; deliberate per
-  test_slice_vs2.py:126-128. Why: inconsistent with every other owner helper. Fix:
-  align to 403 or document the exception in CONVENTIONS.
+  Evidence: `_owned_variant_set` vs `_owned_question` / `_owned_assessment`, which
+  both 403; deliberate per test_slice_vs2.py:126-128. Why: inconsistent with every
+  other org-scope helper. Fix: align to 403 or document the exception in
+  CONVENTIONS.
   _Verified: cited lines read in this audit; source: backend._
 - **P24 · P3 · XS — Round-robin assignment and id generation are check-then-insert;
 explicit id collisions 500 instead of 409.**

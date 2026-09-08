@@ -596,3 +596,76 @@ def test_a_whitespace_only_organisation_name_is_refused(anon_client) -> None:
     )
     renamed = anon_client.patch("/orgs/current", json={"name": "  Acme  "}, headers=auth(admin))
     assert renamed.json()["name"] == "Acme"
+
+
+def test_a_removed_account_cannot_keep_spending_on_drafts(anon_client, two_person_org) -> None:
+    """The two drafting routes store nothing, which is why they were left
+    unscoped — but they are the ones that spend real money, and a bearer token
+    outlives being removed from an organisation."""
+    admin, member, member_id = two_person_org
+    anon_client.delete(f"/orgs/current/members/{member_id}", headers=auth(admin))
+    for path, body in (
+        ("/questions/draft", {"brief": "sum of n", "language": "python"}),
+        ("/variant-sets/draft", {"brief": "sum of n", "language": "python", "count": 2}),
+    ):
+        resp = anon_client.post(path, json=body, headers=auth(member))
+        assert resp.status_code == 403, path
+        assert "no organisation" in resp.json()["detail"]
+
+
+def test_an_integrity_timeline_never_echoes_another_orgs_question_title(
+    anon_client, monkeypatch
+) -> None:
+    """`question_id` on an event is whatever the candidate's browser reported and
+    is never validated on the way in (P06). Before the org boundary existed that
+    only risked a 500; now an id from another organisation would render that
+    organisation's question *title* into this one's timeline."""
+    from conftest import async_return
+
+    from assessment_platform import agent_client
+
+    other = register_interviewer(anon_client, "other@beta.io", name="Other")
+    anon_client.post(
+        "/questions",
+        json=question_payload("beta_secret", "Beta Corp confidential screen"),
+        headers=auth(other),
+    )
+
+    owner = register_interviewer(anon_client, "owner@acme.io", name="Ada")
+    anon_client.post("/questions", json=question_payload(), headers=auth(owner))
+    token = anon_client.post(
+        "/questions/sum_n/invites", json={"recipients": ["c@x.io"]}, headers=auth(owner)
+    ).json()["token"]
+    anon_client.post(
+        f"/invite/{token}/start", json={"candidate_name": "C", "candidate_email": "c@x.io"}
+    )
+    # The candidate reports an event naming the OTHER organisation's question.
+    assert (
+        anon_client.post(
+            f"/invite/{token}/events",
+            json={
+                "candidate_email": "c@x.io",
+                "question_id": "beta_secret",
+                "events": [{"kind": "focus_loss", "offset_ms": 10, "duration_ms": 500}],
+            },
+        ).status_code
+        == 204
+    )
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-1"))
+    sub_id = anon_client.post(
+        f"/invite/{token}/submit",
+        json={
+            "candidate_name": "C",
+            "candidate_email": "c@x.io",
+            "language": "python",
+            "code": "print(1)",
+        },
+    ).json()["submission_id"]
+
+    report = anon_client.get(f"/submissions/{sub_id}/integrity", headers=auth(owner)).json()
+    assert report["events"], "the event should still be recorded"
+    for event in report["events"]:
+        assert event["question_title"] is None
+    assert "Beta Corp confidential screen" not in anon_client.get(
+        f"/submissions/{sub_id}/integrity", headers=auth(owner)
+    ).text

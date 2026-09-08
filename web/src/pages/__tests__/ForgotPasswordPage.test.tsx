@@ -20,6 +20,7 @@ vi.mock('../../api', () => {
     setToken: vi.fn(),
     clearToken: vi.fn(),
     setUnauthorizedHandler: vi.fn(),
+    setNoOrganizationHandler: vi.fn(),
     tryRefresh: vi.fn(async () => false),
   }
 })

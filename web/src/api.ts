@@ -74,6 +74,25 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler
 }
 
+let noOrganizationHandler: (() => void) | null = null
+
+/** Called when the API refuses because the account belongs to no organisation
+ *  (X01). Reachable whenever an admin removes someone: every data route then
+ *  403s, so without a central handler that person sees the same bare error on
+ *  every page and no sign that `/team` is where they can start again — the same
+ *  reason a 401 is handled here rather than by each caller. */
+export function setNoOrganizationHandler(handler: (() => void) | null): void {
+  noOrganizationHandler = handler
+}
+
+/** The API's own 403 for an account with no membership. Matched on the message
+ *  because the platform sends no error code; it is the only 403 phrased this
+ *  way, and misreading another 403 costs a redirect to a page that then loads
+ *  normally. Keep in step with `get_current_membership` in `auth.py`. */
+function isNoOrganization(status: number, detail: unknown): boolean {
+  return status === 403 && typeof detail === 'string' && detail.includes('no organisation')
+}
+
 interface RequestOptions {
   method?: string
   body?: unknown
@@ -137,6 +156,7 @@ async function request<T>(
 
   if (!res.ok) {
     let message = res.statusText
+    let noOrganization = false
     try {
       const data = await res.json()
       // A schema failure (422) carries pydantic's list of {loc, msg} objects; join
@@ -150,8 +170,14 @@ async function request<T>(
         : null
       // An empty join would blank the alert entirely, so keep the fallback.
       message = joined || (typeof detail === 'string' ? detail : null) || data.message || message
+      if (isNoOrganization(res.status, detail)) {
+        noOrganization = true
+      }
     } catch {
       // response had no JSON body
+    }
+    if (noOrganization) {
+      noOrganizationHandler?.()
     }
     throw new ApiError(res.status, message)
   }

@@ -1520,7 +1520,13 @@ def _question_create_from_agent(q: dict) -> QuestionCreate:
 async def draft_question(
     body: QuestionDraftIn,
     request: Request,
-    current: Interviewer = Depends(get_current_interviewer),
+    # Membership, not merely a login: these two routes store nothing, which is
+    # why they were left unscoped — but they are the ones that spend real money,
+    # and an account an admin has just removed still passes a bearer check. It
+    # would be refused by every route that touches data and keep unlimited access
+    # to the LLM. Requiring a seat also makes the spend attributable per
+    # organisation, which X02 billing and X09 per-tenant limits both need.
+    org: Membership = Depends(get_current_membership),
 ) -> QuestionDraftOut:
     """Draft a question from a brief via the agent. Stateless: stores NOTHING —
     the interviewer reviews/edits the returned draft and then saves it through the
@@ -1614,7 +1620,13 @@ def _set_variants(set_id: str, session: Session) -> list[Question]:
 async def draft_variant_set(
     body: VariantSetDraftIn,
     request: Request,
-    current: Interviewer = Depends(get_current_interviewer),
+    # Membership, not merely a login: these two routes store nothing, which is
+    # why they were left unscoped — but they are the ones that spend real money,
+    # and an account an admin has just removed still passes a bearer check. It
+    # would be refused by every route that touches data and keep unlimited access
+    # to the LLM. Requiring a seat also makes the spend attributable per
+    # organisation, which X02 billing and X09 per-tenant limits both need.
+    org: Membership = Depends(get_current_membership),
 ) -> VariantSetDraftOut:
     """Draft a SET of sibling variants from one brief via the agent. Stateless:
     stores NOTHING — the interviewer reviews the variants (and the parity warnings)
@@ -3956,7 +3968,7 @@ def get_submission_integrity(
     """
     sub = _owned_submission(submission_id, org, session)  # 404/403 guard
     if sub.invite_id is None or sub.candidate_email is None:
-        return _integrity_report(monitored=False, events=[], session=session)
+        return _integrity_report(monitored=False, events=[], org=org, session=session)
 
     invite = session.get(Invite, sub.invite_id)
     monitored = invite.proctored if invite is not None else True
@@ -3968,19 +3980,26 @@ def get_submission_integrity(
         )
         .order_by(col(IntegrityEvent.offset_ms), col(IntegrityEvent.id))
     ).all()
-    return _integrity_report(monitored=monitored, events=list(rows), session=session)
+    return _integrity_report(monitored=monitored, events=list(rows), org=org, session=session)
 
 
 def _integrity_report(
-    *, monitored: bool, events: list[IntegrityEvent], session: Session
+    *, monitored: bool, events: list[IntegrityEvent], org: Membership, session: Session
 ) -> IntegrityReportOut:
     """Shape stored signals into the interviewer's view: the summary counts first,
     then the timeline. The counts are derived here rather than stored so a new
-    signal kind can't leave a stale total behind."""
+    signal kind can't leave a stale total behind.
+
+    Titles are resolved only within the caller's organisation. `question_id` on an
+    event is whatever the candidate's browser reported and is never validated on
+    the way in (STATUS P06), so an id belonging to another organisation would
+    otherwise have its *title* rendered into this organisation's timeline — a
+    one-field cross-tenant echo. The id still shows; only the title is withheld.
+    """
     titles: dict[str, str] = {}
     for qid in {e.question_id for e in events if e.question_id}:
         question = session.get(Question, qid)
-        if question is not None:
+        if question is not None and question.org_id == org.org_id:
             titles[question.id] = question.title
     summary = IntegritySummaryOut(
         total=len(events),

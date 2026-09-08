@@ -31,8 +31,13 @@ behavior; this covers what a reviewer can verify in a diff.
 
 ## Auth & security
 
-- Interviewer routes: `Depends(get_current_interviewer)` **and** an ownership
-  check (403 if the resource isn't the caller's). 401 for missing/invalid token.
+- Interviewer routes: `Depends(get_current_membership)` **and** an organisation
+  check (403 if the resource isn't the caller's organisation's). 401 for
+  missing/invalid token; 403 for an account that belongs to no organisation.
+  A new owned table carries `org_id`, not an owner — `owner_id`/`created_by`
+  record who authored a row and are nullable, so deleting an account never takes
+  the organisation's work with it. Add `get_current_interviewer` alone only where
+  the route touches no organisation data at all (the account routes).
 - Candidate routes: public, but resolve the invite token (404 unknown / 410
   expired) before doing anything.
 - Secrets (`JWT_SECRET`, `ASSESS_API_TOKEN`, `CALLBACK_TOKEN`, SMTP) come from the
