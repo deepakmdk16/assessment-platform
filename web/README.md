@@ -11,6 +11,13 @@ npm install
 npm run dev
 ```
 
+The dev server binds **`http://127.0.0.1:5173`** (pinned in `vite.config.ts`). Browse
+that spelling, not `localhost:5173`. They are different *sites* to a browser, so
+browsing via `localhost` while the API is on `127.0.0.1` makes every request
+cross-site: the httpOnly `SameSite=lax` refresh cookie is then neither stored nor
+sent, login still looks like it worked, and the session quietly stops surviving a
+reload. To serve the app to another device, pass `--host` on the CLI explicitly.
+
 The app expects the API at `VITE_API_BASE_URL` (default `http://127.0.0.1:9000` if unset).
 To point at a different backend, create a `.env.local` file:
 

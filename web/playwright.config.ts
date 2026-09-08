@@ -68,8 +68,12 @@ export default defineConfig({
         // opt into startup table creation (production runs Alembic instead; OFF by
         // default).
         AUTO_CREATE_TABLES: 'true',
-        // Vite may report its Origin as either host; allow both.
-        CORS_ORIGINS: `${FRONTEND_URL},http://localhost:5173`,
+        // Exactly one spelling. vite.config.ts pins the dev server to 127.0.0.1,
+        // so the browser Origin can only be FRONTEND_URL. Allowing localhost too
+        // would re-hide the bug this suite now guards: if the bind ever drifts
+        // back to Vite's "localhost" default, the run must fail here rather than
+        // pass while the SameSite=lax refresh cookie is silently dropped.
+        CORS_ORIGINS: FRONTEND_URL,
         // Disable rate limits so a run of many logins/submits can't flake. Every
         // bucket must be listed by name: a limiter added later defaults to ON, and
         // an E2E run does in one window what a human would spread over a day.
@@ -84,7 +88,9 @@ export default defineConfig({
       },
     },
     {
-      command: 'npm run dev -- --host 127.0.0.1 --port 5173 --strictPort',
+      // No --host/--port override: vite.config.ts owns those now. Overriding
+      // here would keep hiding a regression in that file from this suite.
+      command: 'npm run dev',
       url: FRONTEND_URL,
       reuseExistingServer: !process.env.CI,
       stdout: 'pipe',

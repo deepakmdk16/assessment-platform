@@ -31,9 +31,13 @@ deterministic grade.
   missing column, and pins `DATABASE_URL` to `./dev.db`. Raw server (no migrate,
   default DB `./platform.db`): `uv run platform-api`.
 - Tests: `uv run pytest`. Lint/types: `uv run ruff check .`, `uv run mypy`.
-- Frontend: `cd web && npm install && npm run dev` (`VITE_API_BASE_URL` →
-  `http://127.0.0.1:9000`). Checks: `npm run build`, `npm run typecheck`,
-  `npm run lint`, `npm run test`.
+- Frontend: `cd web && npm install && npm run dev` → **http://127.0.0.1:5173**
+  (`VITE_API_BASE_URL` → `http://127.0.0.1:9000`). Checks: `npm run build`,
+  `npm run typecheck`, `npm run lint`, `npm run test`.
+- **Always browse `127.0.0.1`, never `localhost`.** They are different sites, so
+  the mixed pair breaks CORS and silently voids the `SameSite=lax` refresh
+  cookie. `localhost` can't be the canonical spelling either — the agent rejects
+  it in `callback_url` — so every host default is the IP literal.
 - The agent must be running (`../AssesmentAgent`: `uv run assess-api`, `:8000`)
   for submissions to actually grade end-to-end.
 - **serena needs activating before use.** The global `~/.claude/CLAUDE.md` §7

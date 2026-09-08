@@ -70,7 +70,7 @@ safe path for an evolving `dev.db`.
 | `COOKIE_SECURE`     | *(on iff `PLATFORM_BASE_URL` is https)* | `Secure` flag on the refresh cookie. Browsers drop a Secure cookie set over plain http, so leave the default. |
 | `COOKIE_SAMESITE`   | `lax`                          | `lax` when the SPA and API share a site (same host or subdomains of one domain); `none` (Secure required) only for unrelated domains. |
 | `PASSWORD_BREACH_CHECK` | `true`                     | Check new passwords against Have I Been Pwned (k-anonymity; only a 5-char hash prefix leaves the server; fails open). Off under test. |
-| `FRONTEND_BASE_URL` | `http://127.0.0.1:5173`        | Frontend origin; candidate invite links are `{FRONTEND_BASE_URL}/t/{token}`. |
+| `FRONTEND_BASE_URL` | `http://127.0.0.1:5173`        | Frontend origin; the candidate invite, verify-email and reset-password links are all built from it. Must be the **exact spelling** the dev server binds and you browse (`web/vite.config.ts` pins `127.0.0.1`) — `localhost` and `127.0.0.1` are different *sites*, so mixing them mints dead links and silently voids the refresh cookie. |
 | `RUN_RATE_LIMIT_MAX` | `60`                          | Candidate Run / Run-against-tests per `RATE_LIMIT_WINDOW_S`. These are free agent compute, and run-tests is a pass/fail oracle — don't disable in prod. `0` disables. |
 
 #### Where secrets live
@@ -85,20 +85,30 @@ cp .env.example .env   # then fill in — never commit .env
 
 #### Sending invite emails (SMTP)
 
-**With `SMTP_HOST` unset the platform does not send anything** — it logs the invite
-link instead, which is what you want in dev. The invite is still created and the
-link still works; you just have to deliver it yourself. Creating an invite returns
-a per-recipient `deliveries[]` saying whether each address was actually mailed, and
-the UI warns when a send failed, so a silent non-delivery isn't possible.
+**SMTP is required to start the API.** All five of `SMTP_HOST`, `SMTP_PORT`,
+`SMTP_USER`, `SMTP_PASSWORD` and `SMTP_FROM` must be set, and `SMTP_FROM` must be
+changed from the `no-reply@assessment.local` placeholder — that domain has no MX,
+so mail sent from it bounces. Otherwise the server refuses to boot and names the
+variables it is missing. Every invite, address confirmation and password reset
+leaves this way, so a half-configured mailer means accepting invites you then
+silently never deliver.
+
+For offline dev, start with `ALLOW_UNCONFIGURED_EMAIL=true`: the mailer logs the
+link instead of sending it (add `LOG_PII=true` to log it verbatim). Never set it
+in a deployment. Creating an invite returns a per-recipient `deliveries[]` saying
+whether each address was actually mailed, and the UI warns when a send failed.
 
 | Var             | Default                    | Purpose                                        |
 | --------------- | -------------------------- | ---------------------------------------------- |
-| `SMTP_HOST`     | *(unset — logs, no send)*  | SMTP server hostname. Set this to send for real. |
+| `SMTP_HOST`     | *(required)*               | SMTP server hostname.                          |
 | `SMTP_PORT`     | `587`                      | SMTP port (587 = STARTTLS).                    |
-| `SMTP_USER`     | *(unset)*                  | Username, if the server needs auth.            |
-| `SMTP_PASSWORD` | *(unset)*                  | Password / app password. **Never commit this.** |
-| `SMTP_FROM`     | `no-reply@assessment.local` | From address. Must be one your provider allows. |
+| `SMTP_USER`     | *(required)*               | Username the server authenticates.             |
+| `SMTP_PASSWORD` | *(required)*               | Password / app password. **Never commit this.** |
+| `SMTP_FROM`     | *(required)*               | From address. The `no-reply@assessment.local` placeholder counts as unset. |
 | `SMTP_USE_TLS`  | `true`                     | STARTTLS. `false` only for a local test relay. |
+| `SMTP_TIMEOUT_S` | `10`                      | Per socket operation (connect, TLS, login, send). |
+| `SMTP_DEADLINE_S` | `30`                     | Ceiling on one whole multi-recipient send.     |
+| `ALLOW_UNCONFIGURED_EMAIL` | `false`         | Offline dev only: boot without SMTP and log links instead. |
 
 Gmail works for testing: enable 2-Step Verification, then create an **app password**
 (Google Account → Security → App passwords) — your normal account password will not
