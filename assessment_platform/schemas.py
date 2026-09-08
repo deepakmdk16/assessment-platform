@@ -985,6 +985,79 @@ class OrgInviteOut(BaseModel):
     error: str | None = None
 
 
+class PlanOut(BaseModel):
+    """One plan's entitlements — the pricing table, served rather than hardcoded
+    in the SPA so limits and prices only ever change in one place."""
+
+    key: str
+    label: str
+    price_usd_month: int
+    sittings: int
+    drafts: int
+    seats: int
+
+
+class UsageOut(BaseModel):
+    """What the organisation has used in the current billing period.
+
+    `seats` is the odd one out: a standing headcount (memberships plus invites
+    still awaiting acceptance), not something consumed monthly — but it is a
+    plan limit, so it belongs next to the other two.
+    """
+
+    period: str
+    sittings: int
+    drafts: int
+    seats: int
+    # What the previous period overran by, charged against this one's allowance
+    # (X02). Zero almost always; non-zero after a mid-month downgrade, or after
+    # a spell of metering without enforcement. Sent so the page can say *why*
+    # the month started with less than the plan's headline number.
+    sittings_carried: int = 0
+    drafts_carried: int = 0
+    # What THIS period has gone past its allowance by, as recorded when it
+    # happened. Sent rather than left to the client to subtract, for the same
+    # reason the server stopped reconstructing it: usage measured against the
+    # plan in force *now* reads a mid-month downgrade as an overrun, and would
+    # tell a customer they are 300 over when nothing will be carried.
+    sittings_over: int = 0
+    drafts_over: int = 0
+    # The organisation's LLM spend this period, rolled up from what the agent
+    # priced: grading (judge) and question authoring (drafts).
+    judge_cost_usd: float
+    draft_cost_usd: float
+
+
+class BillingOut(BaseModel):
+    plan: PlanOut
+    # The Stripe subscription status verbatim ("active", "past_due", ...);
+    # "active" for an organisation that has never subscribed.
+    status: str
+    usage: UsageOut
+    current_period_end: datetime | None = None
+    # Whether limits actually refuse work right now, and whether a card can be
+    # entered at all (Stripe configured). Both are deployment facts, and the UI
+    # has to be honest about them: an upgrade button that can't reach a payment
+    # page is worse than no button.
+    enforced: bool
+    payments_enabled: bool
+    plans: list[PlanOut]
+
+
+class CheckoutIn(BaseModel):
+    """Which plan the admin is buying. Only the paid ones: moving back to free
+    is a cancellation, which happens in Stripe's portal, not here."""
+
+    plan: Literal["starter", "growth"]
+
+
+class CheckoutOut(BaseModel):
+    """Where to send the browser — Stripe's hosted page, so card details never
+    reach this server."""
+
+    url: str
+
+
 class OrgInvitePublicOut(BaseModel):
     """What the join page may read before anyone has signed in.
 

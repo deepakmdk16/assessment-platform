@@ -26,6 +26,9 @@ vi.mock('../../api', () => {
       resendVerification: vi.fn(),
       changePassword: vi.fn(),
       deleteAccount: vi.fn(),
+      // The page now renders BillingPanel, which loads both on mount.
+      getBilling: vi.fn(() => new Promise(() => {})),
+      getOrg: vi.fn(() => new Promise(() => {})),
     },
     ApiError,
     setToken: vi.fn(),

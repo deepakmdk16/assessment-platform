@@ -12,27 +12,13 @@ Priority: **P0** blocks taking money or endangers customers · **P1** first payi
 customers hit it · **P2** fix before scale · **P3** polish.
 Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data + API + UI.
 
-**Sequence:** (1) billing (X02, now unblocked — organisations exist) · (2) privacy
-(X03, X04) and email (X06, X07) · (3) deploy + ops (X05, X08, P26, X11) · (4) the
-rest by priority.
+**Sequence:** (1) privacy (X03, X04) and email (X06, X07) · (2) deploy + ops
+(X05, X08, P26, X11) · (3) the rest by priority.
 
 ---
 
 ## Launch audit — 2026-09-06
 
-- **X02 · P0 · L — No billing, plans, quotas or usage metering; LLM spend is not
-attributable per tenant.**
-  Evidence: grep Stripe|plan|quota|usage in both packages: none; limits are per-IP
-  buckets only (config.py:145-167); per-candidate judge cost is computed on the
-  agent (pricing.py:12-44, judge.py:287-294) and shipped as judge_cost_usd inside
-  the callback (agent.py:203) which the platform stores verbatim in
-  AssessmentResult.full_result JSON and never aggregates; draft cost surfaces per
-  draft only (api.py:686,770-792). Why: cannot take money; one interviewer can burn
-  unlimited Sonnet drafts and compute. Fix: Stripe Checkout + plan on the org;
-  monthly counters (assessments, drafts, candidates) enforced in draft/invite/submit
-  routes; denormalise judge_cost_usd/draft_cost_usd into columns with a per-org
-  rollup.
-  _Verified: cited lines read in this audit; source: saas._
 - **X03 · P0 · M — No PII erasure or retention path for candidate data.**
   Evidence: deletion is refused once activity exists (api.py:1062-1103); no
   candidate-scoped delete anywhere; PII stored in Submission (name/email/code),
@@ -337,6 +323,15 @@ gate.**
   build→invite→multi-question sitting→attempts grid; variant set → set-slot;
   integrity gate).
   _Verified: cited lines read in this audit; source: frontend._
+- **X18 · P2 · S — Nobody is warned before an allowance runs out.**
+  Evidence: the only signal is the refusal itself — 402 at invite/draft
+  (api.py `_check_invite_capacity`, `billing.consume`), 403 to the candidate at
+  `_require_sitting_quota`; no threshold email, and no mail of our own when Stripe
+  reports `past_due` (the banner is only visible to someone who opens Settings).
+  Why: the first time an interviewer learns the plan is exhausted is while trying
+  to invite a candidate they have already scheduled. Fix: an email at ~80% of any
+  allowance and one on `past_due`, both once per period per organisation.
+  _Verified: read in the X02 branch; source: X02 follow-up._
 - **X11 · P2 · XS — No dependency vulnerability scanning, Dependabot, security
 headers or HTTPS enforcement docs.**
   Evidence: .github/ in both repos has only workflows/; checkpoints.sh secret scan

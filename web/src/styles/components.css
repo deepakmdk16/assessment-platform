@@ -2885,3 +2885,198 @@ button.tab:hover {
   gap: 0.5rem;
   padding: 1.6rem 1rem;
 }
+
+/* ------------------------------------------------------------ billing (X02)
+   Plan, monthly allowances and spend, in the Settings page's card column.
+   Reuses the meter fills from the analytics table and .form-warning for the
+   dunning notice; only the layout below is new. */
+
+.plan-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.plan-name {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.plan-name strong {
+  font-size: 1.25rem;
+  color: var(--color-heading);
+  letter-spacing: -0.01em;
+}
+
+.plan-price {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted);
+  font-size: 0.88rem;
+  margin-top: 0.15rem;
+}
+
+.plan-renewal {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  margin-top: 0.7rem;
+}
+
+.usage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
+}
+
+/* Label, meter, count. The label column is fixed so every meter starts on the
+   same line and the three read as one object. */
+.usage-row {
+  display: grid;
+  grid-template-columns: 12.5rem 1fr auto;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.usage-name {
+  font-size: 0.88rem;
+}
+
+.usage-name small {
+  display: block;
+  color: var(--color-faint);
+  font-size: 0.76rem;
+}
+
+.usage-meter {
+  height: 0.45rem;
+  width: 100%;
+  display: block;
+}
+
+.usage-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--color-heading);
+  font-size: 0.82rem;
+  min-width: 4.2rem;
+  text-align: right;
+}
+
+.usage-val em {
+  font-style: normal;
+  color: var(--color-faint);
+  font-weight: 500;
+}
+
+.cost {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.45rem 1rem;
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+.cost dt {
+  color: var(--color-muted);
+  margin: 0;
+}
+
+.cost dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-heading);
+}
+
+.cost .cost-total {
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.45rem;
+  color: var(--color-heading);
+  font-weight: 650;
+}
+
+.plans {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.9rem;
+}
+
+.plan-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 1rem 1.05rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+/* The plan in force gets the accent ring — the one card here that needs
+   lifting, rather than a shadow on all three. */
+.plan-card.current {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.plan-card h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--color-heading);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.plan-amount {
+  font-size: 1.35rem;
+  color: var(--color-heading);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.plan-amount small {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.plan-limits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.84rem;
+  color: var(--color-muted);
+}
+
+.plan-limits b {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+/* Pushes the button to a shared baseline whatever each card's list height. */
+.plan-card .btn {
+  margin-top: auto;
+}
+
+@media (max-width: 900px) {
+  .plans {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-row {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  .usage-val {
+    text-align: left;
+  }
+}

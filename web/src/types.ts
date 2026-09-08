@@ -634,6 +634,59 @@ export interface IntegrityReport {
 
 export type OrgRole = 'admin' | 'member'
 
+// --- Billing (X02) ----------------------------------------------------------
+
+export type PlanKey = 'free' | 'starter' | 'growth'
+/** The plans a card can actually be entered for. Moving back to free is a
+ *  cancellation, which happens in Stripe's portal. */
+export type PaidPlanKey = Exclude<PlanKey, 'free'>
+
+/** One plan's entitlements. Served by the API rather than hardcoded here, so
+ *  prices and limits only ever change in one place. */
+export interface Plan {
+  key: PlanKey
+  label: string
+  price_usd_month: number
+  sittings: number
+  drafts: number
+  seats: number
+}
+
+export interface BillingUsage {
+  /** The billing period, "YYYY-MM". */
+  period: string
+  sittings: number
+  drafts: number
+  /** A standing headcount (members plus open invitations), not a monthly count. */
+  seats: number
+  /** What the previous period overran by, charged against this one's allowance.
+   *  Zero almost always — non-zero after a mid-month downgrade, or a spell of
+   *  metering without enforcement. */
+  sittings_carried: number
+  drafts_carried: number
+  /** What this period has gone past its allowance by, as recorded when it
+   *  happened. Not derived from usage vs the current plan: that reads a
+   *  mid-month downgrade as an overrun nobody will be charged for. */
+  sittings_over: number
+  drafts_over: number
+  judge_cost_usd: number
+  draft_cost_usd: number
+}
+
+export interface Billing {
+  plan: Plan
+  /** The Stripe subscription status verbatim; "active" for a free organisation. */
+  status: string
+  usage: BillingUsage
+  current_period_end: string | null
+  /** Whether limits actually refuse work, and whether a card can be entered at
+   *  all. Both are deployment facts the UI has to be honest about: an upgrade
+   *  button that can't reach a payment page is worse than no button. */
+  enforced: boolean
+  payments_enabled: boolean
+  plans: Plan[]
+}
+
 /** The caller's organisation, plus their own standing in it — `role` decides
  *  which controls the team page offers at all, rather than offering them and
  *  letting the click come back 403. */

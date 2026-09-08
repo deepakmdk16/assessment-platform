@@ -22,6 +22,7 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -43,7 +44,17 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, col, select
 
-from . import agent_client, analytics, config, db, email_client, integrity, signing
+from . import (
+    agent_client,
+    analytics,
+    billing,
+    config,
+    db,
+    email_client,
+    integrity,
+    signing,
+    stripe_client,
+)
 from .auth import (
     REFRESH_COOKIE,
     clear_refresh_cookie,
@@ -76,6 +87,7 @@ from .models import (
     Membership,
     Organization,
     OrgInvite,
+    OrgUsage,
     Question,
     QuestionTestCase,
     Submission,
@@ -94,6 +106,7 @@ from .schemas import (
     AssessmentQuestionOut,
     AssessmentSlotIn,
     AssessmentUpdate,
+    BillingOut,
     CandidateDraftIn,
     CandidateDraftOut,
     CandidateDraftsOut,
@@ -108,6 +121,8 @@ from .schemas import (
     CandidateSubmitOut,
     CandidateTestOutcomeOut,
     ChangePasswordIn,
+    CheckoutIn,
+    CheckoutOut,
     DashboardSubmissionOut,
     DeleteAccountIn,
     ForgotPasswordIn,
@@ -136,6 +151,7 @@ from .schemas import (
     OrgInvitePublicOut,
     OverviewAnalyticsOut,
     Page,
+    PlanOut,
     QuestionAnalyticsOut,
     QuestionCreate,
     QuestionDraftIn,
@@ -153,6 +169,7 @@ from .schemas import (
     TestCaseOut,
     TokenOut,
     TrendPointOut,
+    UsageOut,
     VariantDraftOut,
     VariantOut,
     VariantSetCreate,
@@ -569,12 +586,17 @@ def _purge_org(org_id: int, session: Session) -> None:
     so no foreign key is ever left dangling: results → submissions → sitting rows
     (attempts, slot variants, integrity events, drafts) → invites → assessment
     slots → assessments → test cases → questions → variant sets → the roster and
-    its pending org invites → the organisation. This is the one path that removes
-    recorded submissions.
+    its pending org invites and its usage counters → the organisation. This is the
+    one path that removes recorded submissions.
 
     Invites are reached through the question or assessment they point at, not
     through `created_by`: an invite belongs to the organisation and may well have
     been sent by someone who has since left.
+
+    Every table with an `org_id` must appear in the list below. A missed one is
+    invisible in dev and in the test suite — SQLite does not enforce foreign keys
+    unless asked — and then aborts the delete on Postgres, which does. That is
+    this route's whole job (P13, and a data-subject request).
     """
     question_ids = select(Question.id).where(Question.org_id == org_id)
     assessment_ids = select(Assessment.id).where(Assessment.org_id == org_id)
@@ -604,9 +626,29 @@ def _purge_org(org_id: int, session: Session) -> None:
         (Question, col(Question.org_id) == org_id),
         (VariantSet, col(VariantSet.org_id) == org_id),
         (OrgInvite, col(OrgInvite.org_id) == org_id),
+        (OrgUsage, col(OrgUsage.org_id) == org_id),
         (Membership, col(Membership.org_id) == org_id),
         (Organization, col(Organization.id) == org_id),
     ]
+    # Stop billing a company that is being deleted. Best-effort and logged, never
+    # fatal: deleting an account is a data-subject right and must not be blocked
+    # by Stripe being unreachable. Done before the deletes because the ids are
+    # about to go — the risk that way round is a subscription cancelled for a
+    # deletion that then fails, which is recoverable in Stripe; the other way
+    # round bills a customer whose account no longer exists and who has no
+    # remaining way to stop it.
+    organization = session.get(Organization, org_id)
+    if organization is not None and organization.stripe_subscription_id:
+        try:
+            stripe_client.cancel_subscription(organization.stripe_subscription_id)
+        except Exception:  # noqa: BLE001 — any Stripe failure, never fatal here
+            logger.exception(
+                "could not cancel stripe subscription %s while deleting organisation %s; "
+                "cancel it by hand",
+                organization.stripe_subscription_id,
+                org_id,
+            )
+
     for table, condition in steps:
         session.execute(delete(table).where(condition))
 
@@ -943,16 +985,54 @@ def _member_count(org_id: int, session: Session) -> int:
     )
 
 
-def _organization_out(org: Membership, session: Session) -> OrganizationOut:
-    organization = session.get(Organization, org.org_id)
+def _organization(org_id: int, session: Session) -> Organization:
+    """The tenant row behind a membership — where the plan and Stripe ids live."""
+    organization = session.get(Organization, org_id)
     if organization is None:  # FK-enforced, so this is a corrupted database
         raise HTTPException(status_code=500, detail="organisation row is missing.")
+    return organization
+
+
+def _organization_out(org: Membership, session: Session) -> OrganizationOut:
+    organization = _organization(org.org_id, session)
     return OrganizationOut(
         id=org.org_id,
         name=organization.name,
         role=org.role,
         member_count=_member_count(org.org_id, session),
     )
+
+
+def _seats_used(org_id: int, session: Session) -> int:
+    """Seats the plan is being asked to cover: members plus open invitations.
+
+    A pending invitation counts, or a two-seat organisation could send ten and
+    let them all in. An expired one does not, and an accepted one is already
+    counted as a member (accepted invites are kept as the audit trail, never
+    deleted). Expiry is compared in Python via `as_utc` because the column is
+    timezone-naive on SQLite — the same rule the candidate invite path uses.
+    """
+    now = datetime.now(timezone.utc)
+    pending = [
+        inv
+        for inv in session.exec(
+            select(OrgInvite).where(
+                OrgInvite.org_id == org_id, col(OrgInvite.accepted_at).is_(None)
+            )
+        ).all()
+        if inv.expires_at is None or as_utc(inv.expires_at) > now
+    ]
+    return _member_count(org_id, session) + len(pending)
+
+
+def _check_seat_capacity(org: Membership, session: Session) -> None:
+    """Refuse an invitation the plan has no seat for (X02)."""
+    if not config.BILLING_ENFORCED:
+        return
+    organization = _organization(org.org_id, session)
+    used = _seats_used(org.org_id, session)
+    if billing.remaining(session, organization, "seats", used=used) <= 0:
+        raise billing.quota_error(organization, "seats")
 
 
 def _admin_count(org_id: int, session: Session) -> int:
@@ -1115,9 +1195,7 @@ def update_org(
     session: Session = Depends(get_session),
 ) -> OrganizationOut:
     _require_admin(org)
-    organization = session.get(Organization, org.org_id)
-    if organization is None:
-        raise HTTPException(status_code=500, detail="organisation row is missing.")
+    organization = _organization(org.org_id, session)
     organization.name = body.name.strip()
     session.add(organization)
     session.commit()
@@ -1260,7 +1338,8 @@ def create_org_invite(
             col(OrgInvite.accepted_at).is_(None),
         )
     )
-    organization = session.get(Organization, org.org_id)
+    _check_seat_capacity(org, session)
+    organization = _organization(org.org_id, session)
     invite = OrgInvite(
         org_id=org.org_id,
         token=secrets.token_urlsafe(32),
@@ -1359,12 +1438,308 @@ def accept_org_invite(
         raise HTTPException(
             status_code=409, detail="you are already a member of this organisation."
         )
+    # Re-checked here and not only at invite time: an invitation outlives a plan
+    # downgrade, and a seat that was free a week ago may not be now. The invitee
+    # is not the customer, so this is a 409 about the organisation's state rather
+    # than a 402 asking them to pay.
+    organization = _organization(invite.org_id, session)
+    if (
+        config.BILLING_ENFORCED
+        and billing.remaining(
+            session, organization, "seats", used=_member_count(invite.org_id, session)
+        )
+        <= 0
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this organisation has no seat available; "
+                "ask an admin to upgrade its plan and invite you again."
+            ),
+        )
     if existing is not None:
         _leave_empty_org(existing, session)
     membership = _join_org(current, invite, session)
     session.commit()
     session.refresh(membership)
     return _organization_out(membership, session)
+
+
+# --------------------------------------------------------------------------- #
+# Billing (plan, allowances, usage)                                             #
+# --------------------------------------------------------------------------- #
+
+
+def _plan_out(plan: billing.Plan) -> PlanOut:
+    return PlanOut(**asdict(plan))
+
+
+def _purchasable(plan: billing.Plan) -> bool:
+    """Whether this deployment could actually sell this plan.
+
+    `payments_enabled` says a card can be taken at all; this is the same honesty
+    one level down. A paid plan whose STRIPE_PRICE_* is unset would render a live
+    "Choose" button that 503s on click, so it is not offered.
+    """
+    return plan.price_usd_month == 0 or stripe_client.price_id(plan.key) is not None
+
+
+@app.get("/billing", response_model=BillingOut)
+def get_billing(
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> BillingOut:
+    """This organisation's plan, what it has used this period, and the plans it
+    could move to.
+
+    Readable by any member, not only an admin: usage is the explanation for a
+    refused invite or draft, and withholding it from the person who hit the
+    limit turns a clear 402 into a mystery. Changing the plan stays admin-only.
+
+    Costs are rounded for the response; the stored figures keep full precision.
+    """
+    organization = _organization(org.org_id, session)
+    row = billing.usage(session, org.org_id)
+    return BillingOut(
+        plan=_plan_out(billing.plan_for(organization)),
+        status=organization.plan_status,
+        usage=UsageOut(
+            period=row.period,
+            sittings=row.sittings,
+            drafts=row.drafts,
+            seats=_seats_used(org.org_id, session),
+            sittings_carried=row.sittings_carried,
+            drafts_carried=row.drafts_carried,
+            sittings_over=row.sittings_over,
+            drafts_over=row.drafts_over,
+            judge_cost_usd=round(row.judge_cost_usd, 4),
+            draft_cost_usd=round(row.draft_cost_usd, 4),
+        ),
+        current_period_end=organization.current_period_end,
+        enforced=config.BILLING_ENFORCED,
+        payments_enabled=config.billing_enabled(),
+        plans=[_plan_out(plan) for plan in billing.PLANS.values() if _purchasable(plan)],
+    )
+
+
+def _require_payments() -> None:
+    """Refuse the payment routes when Stripe isn't configured.
+
+    503, not a silent no-op: an upgrade button that appears to work and takes no
+    money is worse than one that says the service isn't available. `GET /billing`
+    reports `payments_enabled` so the UI never shows the button in the first place.
+    """
+    if not config.billing_enabled():
+        raise HTTPException(
+            status_code=503, detail="payments are not configured on this deployment."
+        )
+
+
+def _stripe_customer(organization: Organization, current: Interviewer, session: Session) -> str:
+    """The organisation's Stripe customer id, creating it on first use.
+
+    Stored on the organisation, not the person: the subscription belongs to the
+    company and must survive whoever happened to click Upgrade leaving.
+    """
+    if organization.stripe_customer_id:
+        return organization.stripe_customer_id
+    customer_id = stripe_client.create_customer(
+        _require_id(organization.id), organization.name, current.email
+    )
+    organization.stripe_customer_id = customer_id
+    session.add(organization)
+    session.commit()
+    return customer_id
+
+
+@app.post("/billing/checkout", response_model=CheckoutOut)
+def start_checkout(
+    body: CheckoutIn,
+    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> CheckoutOut:
+    """Begin a subscription: returns the URL of Stripe's hosted checkout page.
+
+    Admin-only — spending the organisation's money is exactly the kind of thing
+    the roster's two roles exist to separate.
+    """
+    _require_admin(org)
+    _require_payments()
+    if not stripe_client.price_id(body.plan):
+        raise HTTPException(
+            status_code=503, detail=f"the {body.plan} plan is not available on this deployment."
+        )
+    organization = _organization(org.org_id, session)
+    if (
+        organization.stripe_subscription_id
+        and organization.plan_status in billing.ENTITLED_STATUSES
+    ):
+        # A second checkout would mint a second subscription, and the webhook
+        # would overwrite the id of the first — which Stripe would keep billing
+        # with nothing here pointing at it. Reachable from a stale tab or a
+        # direct POST, since the UI hides the button once subscribed.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this organisation already has a subscription; "
+                "change the plan in the payment portal."
+            ),
+        )
+    try:
+        url = stripe_client.create_checkout_session(
+            customer_id=_stripe_customer(organization, current, session),
+            plan=body.plan,
+            org_id=org.org_id,
+            success_url=f"{config.FRONTEND_BASE_URL}/settings?billing=success",
+            cancel_url=f"{config.FRONTEND_BASE_URL}/settings?billing=cancelled",
+        )
+    except stripe_client.PaymentError as exc:
+        # Stripe's own words, to an admin: a deployment whose Stripe Tax is not
+        # activated fails right here, and "payments are unavailable" would send
+        # whoever is configuring it looking in entirely the wrong place.
+        raise HTTPException(status_code=502, detail=f"Stripe refused the request: {exc}") from exc
+    return CheckoutOut(url=url)
+
+
+@app.post("/billing/portal", response_model=CheckoutOut)
+def open_billing_portal(
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> CheckoutOut:
+    """Open Stripe's customer portal — change plan, update the card, cancel,
+    download invoices. All of that is a product Stripe gives away with the
+    payment; re-implementing any of it here would be building a worse one."""
+    _require_admin(org)
+    _require_payments()
+    organization = _organization(org.org_id, session)
+    if not organization.stripe_customer_id:
+        raise HTTPException(
+            status_code=409, detail="this organisation has no subscription to manage yet."
+        )
+    try:
+        url = stripe_client.create_portal_session(
+            customer_id=organization.stripe_customer_id,
+            return_url=f"{config.FRONTEND_BASE_URL}/settings",
+        )
+    except stripe_client.PaymentError as exc:
+        raise HTTPException(status_code=502, detail=f"Stripe refused the request: {exc}") from exc
+    return CheckoutOut(url=url)
+
+
+def _org_for_stripe(obj: dict[str, Any], session: Session) -> Organization | None:
+    """The organisation a webhook is about: by customer id, or by the org_id we
+    put in the object's metadata when we created it."""
+    customer = obj.get("customer")
+    if isinstance(customer, str):
+        found = session.exec(
+            select(Organization).where(Organization.stripe_customer_id == customer)
+        ).first()
+        if found is not None:
+            return found
+    # A subscription carries our org_id in its metadata; a checkout session
+    # carries it in client_reference_id (its own `metadata` is a different bag
+    # from the `subscription_data.metadata` we set). Read both, or the fallback
+    # silently never fires for the completion event and the webhook answers
+    # "ignored" — which Stripe does not retry.
+    raw_org_id = (obj.get("metadata") or {}).get("org_id") or obj.get("client_reference_id")
+    if isinstance(raw_org_id, str) and raw_org_id.isdigit():
+        return session.get(Organization, int(raw_org_id))
+    return None
+
+
+@app.post("/billing/webhook")
+async def stripe_webhook(request: Request, session: Session = Depends(get_session)) -> dict:
+    """Stripe's account of what happened to a subscription — the only thing that
+    moves an organisation onto or off a paid plan.
+
+    Never the checkout redirect: a browser landing on `?billing=success` proves
+    nothing (anyone can type that URL), while this body is signed. The signature
+    is the whole of the endpoint's authentication, so an unset webhook secret
+    means refusing to process anything rather than trusting the caller.
+
+    Always 200 once the signature verifies, including for events we ignore: a
+    non-2xx tells Stripe to retry, and retrying an event nobody handles is noise
+    that eventually disables the endpoint.
+    """
+    if not config.STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="webhooks are not configured.")
+    try:
+        event = stripe_client.parse_event(
+            await request.body(), request.headers.get("stripe-signature")
+        )
+    except stripe_client.WebhookError:
+        # Deliberately uninformative: the endpoint is public, and which half of
+        # the check failed is not something an unauthenticated caller may learn.
+        raise HTTPException(status_code=400, detail="invalid webhook.") from None
+
+    obj = dict(event.data.object)
+    organization = _org_for_stripe(obj, session)
+    if organization is None:
+        logger.warning("stripe webhook %s: no organisation for this customer", event.type)
+        return {"status": "ignored"}
+
+    if event.type == "checkout.session.completed":
+        # Links the subscription to the organisation. The plan and the period
+        # arrive with the subscription events below, which carry the price.
+        subscription_id = obj.get("subscription")
+        customer_id = obj.get("customer")
+        if isinstance(customer_id, str):
+            organization.stripe_customer_id = customer_id
+        if isinstance(subscription_id, str):
+            organization.stripe_subscription_id = subscription_id
+        session.add(organization)
+        session.commit()
+        logger.info("stripe: checkout completed for organisation %s", organization.id)
+        return {"status": "ok"}
+
+    if event.type in ("customer.subscription.created", "customer.subscription.updated"):
+        subscription = stripe_client.subscription_from(obj)
+        if subscription is None:
+            return {"status": "ignored"}
+        organization.stripe_subscription_id = subscription.id
+        organization.plan_status = subscription.status
+        organization.current_period_end = subscription.current_period_end
+        if subscription.plan is not None:
+            # An unrecognised price leaves the plan alone rather than guessing:
+            # dropping a paying customer to free because someone renamed a price
+            # in the dashboard is the worse of the two failures.
+            organization.plan = subscription.plan
+        session.add(organization)
+        session.commit()
+        logger.info(
+            "stripe: organisation %s is now %s/%s",
+            organization.id,
+            organization.plan,
+            organization.plan_status,
+        )
+        return {"status": "ok"}
+
+    if event.type == "customer.subscription.deleted":
+        subscription_id = obj.get("id")
+        if (
+            organization.stripe_subscription_id
+            and subscription_id != organization.stripe_subscription_id
+        ):
+            # A cancellation for a subscription that is no longer the current
+            # one — webhooks are not ordered, and this is the delete of an old
+            # subscription arriving after the customer has already resubscribed.
+            logger.info(
+                "stripe: stale cancellation for %s ignored (current is %s)",
+                subscription_id,
+                organization.stripe_subscription_id,
+            )
+            return {"status": "ignored"}
+        organization.plan = "free"
+        organization.plan_status = "canceled"
+        organization.stripe_subscription_id = None
+        organization.current_period_end = None
+        session.add(organization)
+        session.commit()
+        logger.info("stripe: subscription cancelled for organisation %s", organization.id)
+        return {"status": "ok"}
+
+    return {"status": "ignored"}
 
 
 # --------------------------------------------------------------------------- #
@@ -1527,6 +1902,7 @@ async def draft_question(
     # to the LLM. Requiring a seat also makes the spend attributable per
     # organisation, which X02 billing and X09 per-tenant limits both need.
     org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
 ) -> QuestionDraftOut:
     """Draft a question from a brief via the agent. Stateless: stores NOTHING —
     the interviewer reviews/edits the returned draft and then saves it through the
@@ -1541,6 +1917,12 @@ async def draft_question(
     limiter.check(
         "draft", client_ip(request), config.DRAFT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
+    # The rate limit bounds a burst; the plan bounds the month (X02). Claimed
+    # BEFORE the agent is called — an allowance checked and then spent is not a
+    # budget, because two parallel calls both pass the check — and handed back
+    # below if the draft never happened.
+    organization = _organization(org.org_id, session)
+    billing.consume(session, organization, "drafts", 1)
     try:
         payload = await agent_client.draft_question(
             brief=body.brief,
@@ -1551,11 +1933,15 @@ async def draft_question(
     except httpx.HTTPStatusError as exc:
         # Surface the agent's own status/reason (503 offline, 422 unusable draft,
         # 400 bad language) so the UI can show what actually went wrong.
+        billing.release(session, org.org_id, "drafts", 1)
         raise HTTPException(
             status_code=exc.response.status_code, detail=_agent_detail(exc)
         ) from exc
     except httpx.HTTPError as exc:
+        billing.release(session, org.org_id, "drafts", 1)
         raise HTTPException(status_code=502, detail=f"agent unreachable: {exc}") from exc
+
+    billing.record(session, org.org_id, draft_cost_usd=float(payload.get("cost_usd") or 0.0))
 
     question = _question_create_from_agent(payload.get("question") or {})
     return QuestionDraftOut(
@@ -1627,6 +2013,7 @@ async def draft_variant_set(
     # to the LLM. Requiring a seat also makes the spend attributable per
     # organisation, which X02 billing and X09 per-tenant limits both need.
     org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
 ) -> VariantSetDraftOut:
     """Draft a SET of sibling variants from one brief via the agent. Stateless:
     stores NOTHING — the interviewer reviews the variants (and the parity warnings)
@@ -1635,6 +2022,10 @@ async def draft_variant_set(
     limiter.check(
         "draft", client_ip(request), config.DRAFT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
+    # A set of N is N full drafts on the agent, so it costs N of the plan's
+    # allowance — the rate limiter, which counts calls, can't see that.
+    organization = _organization(org.org_id, session)
+    billing.consume(session, organization, "drafts", body.count)
     try:
         payload = await agent_client.draft_set(
             brief=body.brief,
@@ -1644,10 +2035,12 @@ async def draft_variant_set(
             target_complexity=body.target_complexity,
         )
     except httpx.HTTPStatusError as exc:
+        billing.release(session, org.org_id, "drafts", body.count)
         raise HTTPException(
             status_code=exc.response.status_code, detail=_agent_detail(exc)
         ) from exc
     except httpx.HTTPError as exc:
+        billing.release(session, org.org_id, "drafts", body.count)
         raise HTTPException(status_code=502, detail=f"agent unreachable: {exc}") from exc
 
     variants: list[VariantDraftOut] = []
@@ -1672,6 +2065,14 @@ async def draft_variant_set(
                 warnings=v.get("warnings", []),
             )
         )
+    billing.record(session, org.org_id, draft_cost_usd=total_cost)
+    undelivered = body.count - len(variants)
+    if undelivered > 0:
+        # The agent couldn't draft the whole set (it reports the shortfall as a
+        # set-level warning). Charging the allowance for variants that were never
+        # delivered is the same unfairness as charging for a draft it refused
+        # outright — the dollars it did spend are still recorded above.
+        billing.release(session, org.org_id, "drafts", undelivered)
     return VariantSetDraftOut(
         variants=variants,
         warnings=payload.get("warnings", []),
@@ -2304,6 +2705,30 @@ def delete_assessment(
 # --------------------------------------------------------------------------- #
 
 
+def _check_invite_capacity(org: Membership, session: Session, n: int) -> None:
+    """Refuse to hand out invites the plan has no sittings left for (X02).
+
+    `n` is the number of recipients, not of invite rows: one invite carries every
+    address on it and they share the link, so N addressed people can start N
+    sittings. (The schema requires at least one recipient.)
+
+    Checked, never consumed: the metered event is a candidate *starting*, and
+    plenty of invites are never opened. This is the interviewer-facing half of
+    the same limit — they find out while sending links, which they can act on,
+    instead of a candidate being turned away, which they cannot.
+    """
+    if not config.BILLING_ENFORCED:
+        return
+    organization = _organization(org.org_id, session)
+    row = billing.usage(session, org.org_id)
+    # The allowance actually given, which is the plan's less anything last
+    # period overran by — a refusal naming a limit they did not get is a
+    # support ticket.
+    limit = billing.allowance(organization, "sittings", row)
+    if limit - row.sittings < n:
+        raise billing.quota_error(organization, "sittings", limit)
+
+
 @app.post("/questions/{question_id}/invites", response_model=InviteOut, status_code=201)
 def create_invite(
     question_id: str,
@@ -2313,6 +2738,7 @@ def create_invite(
     session: Session = Depends(get_session),
 ) -> InviteOut:
     question = _owned_question(question_id, org, session)  # 404/403 guard
+    _check_invite_capacity(org, session, len(body.recipients))
     invite = Invite(
         token=secrets.token_urlsafe(32),
         question_id=question_id,
@@ -2369,6 +2795,7 @@ def create_assessment_invite(
         raise HTTPException(
             status_code=400, detail="cannot invite to an assessment with no questions."
         )
+    _check_invite_capacity(org, session, len(body.recipients))
     invite = Invite(
         token=secrets.token_urlsafe(32),
         assessment_id=assessment_id,
@@ -2424,6 +2851,8 @@ def create_variant_set_invites(
     variants = _set_variants(set_id, session)
     if not variants:
         raise HTTPException(status_code=400, detail="cannot invite to a variant set with no variants.")
+    # One invite per recipient here, so the whole batch has to fit the allowance.
+    _check_invite_capacity(org, session, len(body.recipients))
     by_id = {q.id: q for q in variants}
 
     # Continue the rotation across calls (count what this set already handed out).
@@ -3126,6 +3555,57 @@ def _deadline_for(started_at: datetime, duration_minutes: int | None) -> datetim
     return as_utc(started_at) + timedelta(minutes=duration_minutes)
 
 
+def _invite_org_id(invite: Invite, session: Session) -> int:
+    """The organisation a sitting on this invite is metered against (X02).
+
+    An invite points at exactly one of a question or an assessment, and both
+    carry `org_id` — the candidate routes have no membership to read it from.
+    """
+    if invite.assessment_id is not None:
+        assessment = session.get(Assessment, invite.assessment_id)
+        if assessment is not None:
+            return assessment.org_id
+    if invite.question_id is not None:
+        question = session.get(Question, invite.question_id)
+        if question is not None:
+            return question.org_id
+    # Both FK-enforced and one of them always set, so this is a corrupt row.
+    raise HTTPException(status_code=500, detail="invite belongs to no organisation.")
+
+
+def _claim_sitting(org_id: int, session: Session) -> None:
+    """Claim one sitting from the organisation's month, or turn the candidate away.
+
+    Atomic, like the draft allowance: two candidates opening the last sitting at
+    the same moment cannot both be let through, because the limit is checked
+    inside the UPDATE rather than read first.
+
+    Only the creation of a sitting is gated — a candidate who has already begun
+    is never re-checked — so an allowance running out mid-assessment can never
+    take away someone's work.
+
+    The 402 `billing.consume` raises names the plan and its limit, which is an
+    interviewer's error, so it is translated here into something that tells a
+    candidate nothing about someone else's billing. 503, deliberately, and not
+    403: every 403 on this route until now meant "you are not one of the invited
+    addresses", and the candidate gate says exactly that, so a quota refusal sent
+    as 403 would tell someone to fix an email address that was never wrong.
+    """
+    organization = _organization(org_id, session)
+    try:
+        billing.consume(session, organization, "sittings", 1)
+    except HTTPException as exc:
+        if exc.status_code != 402:
+            raise
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "this assessment link is not available right now; "
+                "please contact whoever invited you."
+            ),
+        ) from None
+
+
 def _get_or_start_attempt(
     invite: Invite, email: str, session: Session, *, candidate_name: str | None = None
 ) -> CandidateAttempt:
@@ -3153,6 +3633,12 @@ def _get_or_start_attempt(
             session.commit()
             session.refresh(existing)
         return existing
+    # A new sitting is the plan's metered unit (X02), and this is the one place
+    # a sitting begins — both /start and a client that POSTs straight to /submit
+    # come through here, and the row that loses the race below returns without
+    # being counted, so a double-clicked Start bills once.
+    org_id = _invite_org_id(invite, session)
+    _claim_sitting(org_id, session)
     attempt = CandidateAttempt(
         invite_id=_require_id(invite.id), candidate_email=email, candidate_name=candidate_name
     )
@@ -3169,6 +3655,9 @@ def _get_or_start_attempt(
         ).first()
         if raced is None:  # pragma: no cover — the constraint guarantees a row here
             raise
+        # The sitting was claimed above but this request didn't start one, so the
+        # claim goes back: a double-clicked Start bills once, not twice.
+        billing.release(session, org_id, "sittings", 1)
         return raced
     session.refresh(attempt)
     return attempt
@@ -3889,7 +4378,9 @@ def export_submissions(
     """Org-scoped CSV of every submission across the organisation's questions.
 
     A full export (not paginated) for spreadsheets / ATS import — the lean summary
-    columns plus the question title, so a row is readable without a second lookup.
+    columns plus the question title, so a row is readable without a second lookup,
+    and what the agent's judge cost to grade the row (X02) so cost-per-hire can be
+    worked out per question or per candidate rather than only per month.
     Declared BEFORE `/submissions/{submission_id}` so "export" isn't swallowed as
     an id by the path-param route.
     """
@@ -3913,7 +4404,7 @@ def export_submissions(
             "submission_id", "question_id", "question_title", "candidate",
             "candidate_email", "language", "status", "verdict", "score_pct", "late",
             "integrity_signals", "integrity_blocked_pastes", "integrity_risk",
-            "created_at",
+            "judge_cost_usd", "created_at",
         ]
     )
     for sub in subs:
@@ -3929,6 +4420,9 @@ def export_submissions(
                 signals if signals is not None else "",
                 blocked_pastes if signals is not None else "",
                 risk or "",
+                # Blank rather than 0 when the agent priced nothing (a local
+                # model, or a job that errored): an unknown cost is not zero cost.
+                "" if sub.judge_cost_usd is None else f"{sub.judge_cost_usd:.6f}",
                 sub.created_at.isoformat(),
             ]
         )
@@ -4255,9 +4749,24 @@ def assessments_callback(
             )
         )
 
+    # Per-tenant LLM spend (X02). The figure is inside `full_result` either way,
+    # but only as opaque JSON; a column makes per-question and per-candidate cost
+    # answerable and is the audit trail behind the organisation's monthly total.
+    # The DELTA is what is rolled up, so a re-delivered callback cannot bill the
+    # same grade twice.
+    reported_cost = payload.get("judge_cost_usd")
+    cost_delta = 0.0
+    if isinstance(reported_cost, (int, float)):
+        cost_delta = float(reported_cost) - (sub.judge_cost_usd or 0.0)
+        sub.judge_cost_usd = float(reported_cost)
+
     sub.status = "error" if is_error else "done"
     session.add(sub)
     session.commit()
+    if cost_delta:
+        question = session.get(Question, sub.question_id)
+        if question is not None:
+            billing.record(session, question.org_id, judge_cost_usd=cost_delta)
     logger.info(
         "callback for agent job %s matched submission %s -> %s", job_id, sub.id, sub.status
     )

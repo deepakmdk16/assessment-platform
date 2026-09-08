@@ -289,3 +289,52 @@ SUPPORTED_LANGUAGES = [
     "ruby",
     "rust",
 ]
+
+# --------------------------------------------------------------------------- #
+# Billing (X02)                                                                 #
+# --------------------------------------------------------------------------- #
+
+# Whether plan limits actually refuse work. OFF has one honest use: metering a
+# deployment for a month to see real usage before switching the charging on —
+# `billing.record` runs either way, so the counters and the per-tenant cost
+# rollup are collected whatever this says. Forced off under test, like
+# PASSWORD_BREACH_CHECK: the suite's fixtures create far more than a free plan's
+# ten sittings, and the tests that cover enforcement turn it on explicitly.
+BILLING_ENFORCED = (
+    False if TESTING else os.getenv("BILLING_ENFORCED", "true").lower() != "false"
+)
+
+# Stripe. Unset (the default) means the payment routes report themselves
+# unavailable rather than half-working: an organisation stays on the free plan,
+# every limit still applies, and nothing pretends a card was taken. The webhook
+# secret is what makes an inbound webhook trustworthy — without it any caller
+# could POST a "subscription active" event — so the webhook route refuses to
+# process anything while it is unset.
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY") or None
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET") or None
+
+# Charge VAT / sales tax on subscriptions via Stripe Tax (X17). ON by default:
+# selling into the EU/UK without charging and remitting it is a liability that
+# grows silently with revenue, and retro-fitting it means reissuing invoices.
+# Requires Stripe Tax to be ACTIVATED on the Stripe account and a registration
+# in each jurisdiction where a threshold is crossed — without that, checkout
+# fails at session creation, which is the loud failure rather than the silent
+# one. Turn off only for a deployment that genuinely sells in one untaxed place.
+STRIPE_AUTOMATIC_TAX = os.getenv("STRIPE_AUTOMATIC_TAX", "true").lower() != "false"
+
+# The Stripe Price id backing each paid plan key in `billing.PLANS`. Prices live
+# in Stripe (that is where they are versioned and where a currency lives); this
+# is only the mapping from our plan name to theirs.
+STRIPE_PRICE_IDS = {
+    "starter": os.getenv("STRIPE_PRICE_STARTER") or None,
+    "growth": os.getenv("STRIPE_PRICE_GROWTH") or None,
+}
+
+
+def billing_enabled() -> bool:
+    """Whether checkout/portal can actually be reached.
+
+    A function, not a constant, so a test (or a deploy that sets the key after
+    import) sees the current value rather than one frozen at import time.
+    """
+    return bool(STRIPE_SECRET_KEY)
