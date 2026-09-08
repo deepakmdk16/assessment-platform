@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError, exportSubmissionsCsv } from '../api'
 import { badgeClass } from '../badges'
 import { IntegrityCell } from '../components/IntegrityPanel'
@@ -19,6 +19,37 @@ export function SubmissionsPage() {
   const [titles, setTitles] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  // Keyed by submission id: two failed rows must not share one spinner or one
+  // error message.
+  const [retryingId, setRetryingId] = useState<string | null>(null)
+  const [retryErrors, setRetryErrors] = useState<Record<string, string>>({})
+
+  async function handleRetry(submissionId: string) {
+    setRetryingId(submissionId)
+    setRetryErrors((prev) => {
+      if (!(submissionId in prev)) return prev
+      const next = { ...prev }
+      delete next[submissionId]
+      return next
+    })
+    try {
+      const updated = await api.retrySubmission(submissionId)
+      // Swap the row in place rather than refetching the page — an offset reload
+      // would shuffle rows under the pointer while other retries are in flight.
+      setSubmissions((prev) =>
+        prev
+          ? prev.map((s) => (s.id === submissionId ? { ...s, status: updated.status } : s))
+          : prev,
+      )
+    } catch (err) {
+      setRetryErrors((prev) => ({
+        ...prev,
+        [submissionId]: err instanceof ApiError ? err.message : 'Failed to retry grading',
+      }))
+    } finally {
+      setRetryingId(null)
+    }
+  }
 
   async function handleExport() {
     setError(null)
@@ -111,6 +142,9 @@ export function SubmissionsPage() {
                   <th>Score</th>
                   <th>Integrity</th>
                   <th>Submitted</th>
+                  {/* Actions. Unlabelled: the column is empty for all but the
+                      handful of rows whose grading failed. */}
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -126,7 +160,15 @@ export function SubmissionsPage() {
                       {s.candidate_email && <div className="cellsub">{s.candidate_email}</div>}
                     </td>
                     <td>
-                      {s.assessment_title ? (
+                      {s.assessment_title && s.assessment_id ? (
+                        <Link
+                          to={`/assessments/${s.assessment_id}`}
+                          className="chip chip-neutral"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {s.assessment_title}
+                        </Link>
+                      ) : s.assessment_title ? (
                         <span className="chip chip-neutral">{s.assessment_title}</span>
                       ) : (
                         <span className="muted">Standalone</span>
@@ -161,6 +203,29 @@ export function SubmissionsPage() {
                       />
                     </td>
                     <td>{new Date(s.created_at).toLocaleDateString()}</td>
+                    <td>
+                      {s.status === 'error' && (
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="btn sec sm"
+                            // The row navigates on click; the action must not.
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void handleRetry(s.id)
+                            }}
+                            disabled={retryingId === s.id}
+                          >
+                            {retryingId === s.id ? 'Retrying…' : 'Retry'}
+                          </button>
+                          {retryErrors[s.id] && (
+                            <p role="alert" className="form-error">
+                              {retryErrors[s.id]}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

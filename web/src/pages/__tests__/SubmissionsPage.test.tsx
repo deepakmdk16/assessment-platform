@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SubmissionsPage } from '../SubmissionsPage'
@@ -13,7 +14,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
 })
 
 vi.mock('../../api', () => ({
-  api: { listAllSubmissions: vi.fn(), listQuestions: vi.fn() },
+  api: { listAllSubmissions: vi.fn(), listQuestions: vi.fn(), retrySubmission: vi.fn() },
   ApiError: class ApiError extends Error {},
   exportSubmissionsCsv: vi.fn(),
 }))
@@ -76,5 +77,66 @@ describe('SubmissionsPage — assessment linkage (A3)', () => {
     const flagged = await screen.findByTitle('3 signals, including 1 blocked paste')
     expect(flagged).toHaveTextContent('3')
     expect(screen.getByText('Not monitored')).toBeInTheDocument() // null ≠ 0
+  })
+})
+
+describe('SubmissionsPage — recovering a failed grading (UI-A)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.listQuestions).mockResolvedValue(page<QuestionOut>([]))
+  })
+
+  it('offers Retry only on the rows that failed, and updates that row in place', async () => {
+    vi.mocked(api.listAllSubmissions).mockResolvedValue(
+      page([
+        sub({ id: 'ok', candidate: 'Alice', status: 'done' }),
+        sub({ id: 'bad', candidate: 'Bo', status: 'error' }),
+      ]),
+    )
+    vi.mocked(api.retrySubmission).mockResolvedValue({
+      id: 'bad',
+      question_id: 'two-sum',
+      candidate: 'Bo',
+      language: 'python',
+      code: '',
+      status: 'pending',
+      agent_job_id: null,
+      created_at: '2026-07-24T00:00:00Z',
+      late: false,
+      result: null,
+    })
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <SubmissionsPage />
+      </MemoryRouter>,
+    )
+
+    // One failed row => exactly one Retry button.
+    const retry = await screen.findByRole('button', { name: /^retry$/i })
+    await user.click(retry)
+
+    expect(api.retrySubmission).toHaveBeenCalledWith('bad')
+    // Row swapped in place rather than refetching: a reload would shuffle rows
+    // under the pointer while another retry is still in flight.
+    expect(await screen.findByText('pending')).toBeInTheDocument()
+    expect(navigateMock).not.toHaveBeenCalled()
+  })
+
+  it('links the assessment chip to the assessment without navigating the row', async () => {
+    vi.mocked(api.listAllSubmissions).mockResolvedValue(
+      page([sub({ id: 's1', assessment_id: 'a1', assessment_title: 'Backend Screen' })]),
+    )
+    render(
+      <MemoryRouter>
+        <SubmissionsPage />
+      </MemoryRouter>,
+    )
+
+    // assessment_id was returned and discarded; the chip is now the link it could always have been.
+    expect(await screen.findByRole('link', { name: 'Backend Screen' })).toHaveAttribute(
+      'href',
+      '/assessments/a1',
+    )
   })
 })

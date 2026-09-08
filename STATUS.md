@@ -281,20 +281,6 @@ the server copy.**
   Fix: add || integrity.mustReturnToFullscreen to readOnly and focus the modal
   button on open.
   _Verified: single-audit claim, not independently re-verified; source: frontend._
-- **W06 · P2 · XS — The Integrity tab shows "Loading…" forever when the report fetch
-fails.**
-  Evidence: SubmissionDetailPage.tsx:92-97 swallows the error and leaves integrity
-  null, so :212-217 renders the loading text indefinitely. Why: interviewer can't
-  tell failed from slow. Fix: track a failed state and show an error line.
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
-- **W07 · P2 · XS — The header IntegrityChip hides recorded events for an
-unmonitored sitting, contradicting the panel and tab.**
-  Evidence: IntegrityPanel.tsx:172 `if (!report.monitored || report.summary.total
-  === 0) return null` while the panel deliberately shows those events (:102-105) and
-  the tab badge counts them (SubmissionDetailPage.tsx:206); STATUS principle:
-  recorded evidence is never suppressed. Why: header and tab disagree on the same
-  sitting. Fix: drop the !report.monitored guard in the chip.
-  _Verified: cited lines read in this audit; source: frontend._
 - **W09 · P2 · XS — A transient network failure on boot logs the interviewer out.**
   Evidence: auth/AuthContext.tsx:35-39 clears the token on any me() rejection, not
   just 401. Why: flaky Wi-Fi forces a re-login. Fix: clearToken() only on ApiError
