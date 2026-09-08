@@ -10,6 +10,11 @@ import type {
   InviteStartResponse,
   InviteStatusResponse,
   LoginResponse,
+  Member,
+  Organization,
+  OrgInvite,
+  OrgInvitePublic,
+  OrgRole,
   OverviewAnalytics,
   Page,
   QuestionAnalytics,
@@ -159,7 +164,14 @@ async function request<T>(
 }
 
 export const api = {
-  register: (data: { email: string; password: string; name: string }) =>
+  register: (data: {
+    email: string
+    password: string
+    name: string
+    // Present only when signing up from an invitation link: it admits the
+    // account to that organisation and stands in for the registration code.
+    org_invite_token?: string
+  }) =>
     request<{ id: string; email: string; name: string }>('/auth/register', {
       method: 'POST',
       body: data,
@@ -196,6 +208,46 @@ export const api = {
 
   deleteAccount: (password: string) =>
     request<void>('/auth/me', { method: 'DELETE', body: { password }, auth: true }),
+
+  // --- Organisations (X01) -------------------------------------------------
+
+  getOrg: () => request<Organization>('/orgs/current', { auth: true }),
+
+  createOrg: (name: string) =>
+    request<Organization>('/orgs', { method: 'POST', body: { name }, auth: true }),
+
+  renameOrg: (name: string) =>
+    request<Organization>('/orgs/current', { method: 'PATCH', body: { name }, auth: true }),
+
+  listMembers: () => request<Member[]>('/orgs/current/members', { auth: true }),
+
+  setMemberRole: (interviewerId: number, role: OrgRole) =>
+    request<Member>(`/orgs/current/members/${interviewerId}`, {
+      method: 'PATCH',
+      body: { role },
+      auth: true,
+    }),
+
+  removeMember: (interviewerId: number) =>
+    request<void>(`/orgs/current/members/${interviewerId}`, { method: 'DELETE', auth: true }),
+
+  listOrgInvites: () => request<OrgInvite[]>('/orgs/current/invites', { auth: true }),
+
+  createOrgInvite: (email: string, role: OrgRole) =>
+    request<OrgInvite>('/orgs/current/invites', {
+      method: 'POST',
+      body: { email, role },
+      auth: true,
+    }),
+
+  revokeOrgInvite: (inviteId: number) =>
+    request<void>(`/orgs/current/invites/${inviteId}`, { method: 'DELETE', auth: true }),
+
+  // Public: the join page reads this before anyone has signed in.
+  readOrgInvite: (token: string) => request<OrgInvitePublic>(`/org-invites/${token}`),
+
+  acceptOrgInvite: (token: string) =>
+    request<Organization>(`/org-invites/${token}/accept`, { method: 'POST', auth: true }),
 
   listQuestions: (includeArchived = false, offset = 0, limit = 100) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })

@@ -19,6 +19,8 @@ import { NewVariantSetPage } from './pages/NewVariantSetPage'
 import { VariantSetDetailPage } from './pages/VariantSetDetailPage'
 import { CandidatePage } from './pages/CandidatePage'
 import { SettingsPage } from './pages/SettingsPage'
+import { TeamPage } from './pages/TeamPage'
+import { JoinPage } from './pages/JoinPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { CandidateErrorFallback, ErrorBoundary } from './components/ErrorBoundary'
 
@@ -31,6 +33,10 @@ export function App() {
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/verify-email" element={<VerifyEmailPage />} />
+      {/* An organisation invitation link. Deliberately outside ProtectedRoute:
+          it is opened by people who have no account yet as often as by people
+          who do. */}
+      <Route path="/join" element={<JoinPage />} />
       <Route
         path="/t/:token"
         element={
@@ -159,6 +165,17 @@ export function App() {
         element={
           <ProtectedRoute>
             <SubmissionDetailPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/team"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <TeamPage />
+            </AppLayout>
           </ProtectedRoute>
         }
       />

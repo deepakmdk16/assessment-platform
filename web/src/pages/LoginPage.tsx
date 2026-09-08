@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { ApiError } from '../api'
 import { PRODUCT_NAME } from '../branding'
@@ -11,6 +11,13 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
   const { login } = useAuth()
   const navigate = useNavigate()
+  const [params] = useSearchParams()
+  // Where to land after signing in. Set by the join page so an existing account
+  // reaching sign-in from an invitation link comes back to it instead of being
+  // dropped on the dashboard with the token gone. Same-origin paths only — an
+  // absolute URL here would be an open redirect.
+  const next = params.get('next')
+  const destination = next && next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard'
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -18,7 +25,7 @@ export function LoginPage() {
     setSubmitting(true)
     try {
       await login(email, password)
-      navigate('/dashboard')
+      navigate(destination)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Login failed')
     } finally {

@@ -14,6 +14,7 @@ function crumbFor(pathname: string): string {
   if (pathname === '/variant-sets/new') return 'New variant set'
   if (pathname === '/variant-sets') return 'Variant sets'
   if (pathname.startsWith('/variant-sets/')) return 'Variant set'
+  if (pathname === '/team') return 'Team'
   return ''
 }
 

@@ -12,20 +12,14 @@ Priority: **P0** blocks taking money or endangers customers · **P1** first payi
 customers hit it · **P2** fix before scale · **P3** polish.
 Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data + API + UI.
 
-**Sequence:** (1) organisation → billing (X01 → X02) · (2) privacy (X03, X04) and
-email (X06, X07) · (3) deploy + ops (X05, X08, P26, X11) · (4) the rest by priority.
+**Sequence:** (1) billing (X02, now unblocked — organisations exist) · (2) privacy
+(X03, X04) and email (X06, X07) · (3) deploy + ops (X05, X08, P26, X11) · (4) the
+rest by priority.
 
 ---
 
 ## Launch audit — 2026-09-06
 
-- **X01 · P0 · M — The organisation model has no UI.**
-  Evidence: Organization/Membership/OrgInvite and the whole `/orgs/*` surface
-  landed, but `web/` never calls it — no /team route (App.tsx), no client methods
-  (api.ts). Why: an admin can only add a colleague by hand-calling the API, so the
-  team feature is unreachable for the customer it exists for. Fix: a team page
-  (roster, roles, pending invites), a /join page for an invitation link, and an
-  organisation name on the sign-up form.
 - **X02 · P0 · L — No billing, plans, quotas or usage metering; LLM spend is not
 attributable per tenant.**
   Evidence: grep Stripe|plan|quota|usage in both packages: none; limits are per-IP
@@ -109,7 +103,7 @@ compose; the agent needs a privileged host.**
   to the platform's DB backend.
   _Verified: cited lines read in this audit; source: saas._
 - **X10 · P1 · M — Interviewer-facing gaps a first paying customer hits.**
-  Evidence: team is now backend-complete (X01, UI pending); no question import/bulk upload (only hand-form or AI
+  Evidence: no question import/bulk upload (only hand-form or AI
   draft, api.py:554); no candidate-facing feedback or score (CandidatePage.tsx:345);
   no re-invite/extend-deadline (STATUS.md:118-121); no custom domain/white-label
   beyond logo/org text (models.py:165-166); no ATS/webhook (STATUS.md:337); no
@@ -451,7 +445,7 @@ layout shift while analytics load.**
 Until docs/DEPLOY.md exists (X05), the settings a deploy must not miss:
 
 - **`REGISTRATION_CODE`** — unset by default, which leaves interviewer sign-up open.
-  Must be set in production. Since X01 it gates only *founding a new
+  Must be set in production. It gates only *founding a new
   organisation*; joining an existing one goes through an org invite, which is its
   own credential. **XS.**
 - **`TRUST_PROXY_HEADERS=true`** behind a proxy or load balancer. Without it every

@@ -627,3 +627,48 @@ export interface IntegrityReport {
   risk?: IntegrityRisk | null
   events: IntegrityEvent[]
 }
+
+// --------------------------------------------------------------------------
+// Organisations (X01)
+// --------------------------------------------------------------------------
+
+export type OrgRole = 'admin' | 'member'
+
+/** The caller's organisation, plus their own standing in it — `role` decides
+ *  which controls the team page offers at all, rather than offering them and
+ *  letting the click come back 403. */
+export interface Organization {
+  id: number
+  name: string
+  role: OrgRole
+  member_count: number
+}
+
+export interface Member {
+  interviewer_id: number
+  email: string
+  name: string
+  role: OrgRole
+  joined_at: string
+}
+
+/** A sent invitation. `sent` is the mail outcome captured when it was created:
+ *  an admin who is never told the mail bounced waits for someone who was never
+ *  written to, so the row carries the link to pass on by hand. */
+export interface OrgInvite {
+  id: number
+  email: string
+  role: OrgRole
+  url: string
+  expires_at: string | null
+  accepted_at: string | null
+  sent: boolean
+  error: string | null
+}
+
+/** What a join link shows before anyone signs in — deliberately thin. */
+export interface OrgInvitePublic {
+  org_name: string
+  email: string
+  role: OrgRole
+}

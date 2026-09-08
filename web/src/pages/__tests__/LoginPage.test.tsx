@@ -33,14 +33,21 @@ vi.mock('../../api', () => {
   }
 })
 
-function renderLoginPage() {
+function renderLoginPage(url = '/login') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[url]}>
       <AuthProvider>
         <LoginPage />
       </AuthProvider>
     </MemoryRouter>,
   )
+}
+
+async function signIn() {
+  const user = userEvent.setup()
+  await user.type(screen.getByLabelText('Email'), 'sam@acme.io')
+  await user.type(screen.getByLabelText('Password'), 'pw-long-enough-12')
+  await user.click(screen.getByRole('button', { name: /log in/i }))
 }
 
 describe('LoginPage', () => {
@@ -92,5 +99,34 @@ describe('LoginPage', () => {
       'href',
       '/forgot-password',
     )
+  })
+})
+
+describe('LoginPage · returning to where you came from', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.login).mockResolvedValue({ access_token: 't', token_type: 'bearer' })
+  })
+
+  it('returns to the invitation an existing account arrived from', async () => {
+    // The join page sends people here when they already have an account; without
+    // carrying the token they land on the dashboard with the invitation lost.
+    renderLoginPage(`/login?next=${encodeURIComponent('/join?token=abc')}`)
+    await signIn()
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/join?token=abc'))
+  })
+
+  it('ignores an off-site destination', async () => {
+    // `next` comes from the address bar, so anyone can set it — an absolute URL
+    // here would turn sign-in into an open redirect.
+    renderLoginPage('/login?next=https://evil.example/steal')
+    await signIn()
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/dashboard'))
+  })
+
+  it('ignores a protocol-relative destination', async () => {
+    renderLoginPage('/login?next=//evil.example/steal')
+    await signIn()
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/dashboard'))
   })
 })
