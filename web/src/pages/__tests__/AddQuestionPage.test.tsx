@@ -265,6 +265,72 @@ describe('AddQuestionPage — edit mode (UI-B)', () => {
     vi.mocked(api.getQuestion).mockResolvedValue(drafted)
   })
 
+  it('keeps the reference solution when an AI re-draft fails', async () => {
+    // Clearing it BEFORE the call meant a failed re-draft left it null in form
+    // state, and the next Save wrote that null over the stored oracle — the
+    // exact destruction edit mode exists to prevent.
+    vi.mocked(api.draftQuestion).mockRejectedValue(new ApiError(503, 'agent unavailable'))
+    vi.mocked(api.updateQuestion).mockResolvedValue(drafted)
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <AddQuestionPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Longest increasing run')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /draft with ai/i }))
+    await user.type(screen.getByLabelText(/brief/i), 'make it harder')
+    await user.click(screen.getByRole('button', { name: /^draft with ai$/i }))
+    await waitFor(() => expect(api.draftQuestion).toHaveBeenCalled())
+
+    for (let i = 0; i < 4; i++) {
+      await user.click(screen.getByRole('button', { name: /^next$/i }))
+    }
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() => expect(api.updateQuestion).toHaveBeenCalled())
+    const [, payload] = vi.mocked(api.updateQuestion).mock.calls[0]
+    expect(payload.reference_solution).toBe('def solve(nums): ...')
+  })
+
+  it('does not stamp a difficulty on a question that had none', async () => {
+    vi.mocked(api.getQuestion).mockResolvedValue({ ...drafted, difficulty: null } as never)
+    vi.mocked(api.updateQuestion).mockResolvedValue(drafted)
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <AddQuestionPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Longest increasing run')).toBeInTheDocument()
+    for (let i = 0; i < 4; i++) {
+      await user.click(screen.getByRole('button', { name: /^next$/i }))
+    }
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() => expect(api.updateQuestion).toHaveBeenCalled())
+    const [, payload] = vi.mocked(api.updateQuestion).mock.calls[0]
+    // Seeding 'medium' would have silently promoted an unlabelled question.
+    expect(payload.difficulty).toBeUndefined()
+  })
+
+  it('refuses to render a saveable wizard when the seed fetch failed', async () => {
+    // PUT is a full replace, so an empty-but-saveable form would blank the
+    // question it could not load.
+    vi.mocked(api.getQuestion).mockRejectedValue(new ApiError(500, 'boom'))
+    render(
+      <MemoryRouter>
+        <AddQuestionPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/boom/i)
+    expect(screen.queryByRole('button', { name: /save changes/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^next$/i })).not.toBeInTheDocument()
+  })
+
   it('saves an AI-drafted question without destroying its reference solution or difficulty', async () => {
     vi.mocked(api.updateQuestion).mockResolvedValue(drafted)
     const user = userEvent.setup()

@@ -38,8 +38,14 @@ export function DashboardPage() {
   // rows rendered with a silent em-dash where their stats should have been.
   useEffect(() => {
     let cancelled = false
+    // /analytics/questions filters to active, non-variant questions; the list
+    // above can include archived. The two windows only line up when the filters
+    // agree — with archived shown, offset N in one is not offset N in the other,
+    // and rows that have stats would render an em-dash. Fall back to a wide
+    // offset-0 fetch there; the lookup is by question_id, so a superset is fine.
+    const wide = showArchived
     api
-      .analyticsQuestions(days, offset, PAGE_SIZE)
+      .analyticsQuestions(days, wide ? 0 : offset, wide ? 200 : PAGE_SIZE)
       .then((page) => {
         if (!cancelled) setStats(new Map(page.items.map((s) => [s.question_id, s])))
       })
@@ -47,7 +53,7 @@ export function DashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [days, offset, reloadKey])
+  }, [days, offset, showArchived, reloadKey])
 
   useEffect(() => {
     let cancelled = false
@@ -223,7 +229,9 @@ export function DashboardPage() {
                       {stats.has(q.id) ? formatDuration(stats.get(q.id)!.median_time_to_solve_s) : '—'}
                     </td>
                     <td className="num">
-                      {stats.has(q.id) && stats.get(q.id)!.late > 0 ? (
+                      {!stats.has(q.id) ? (
+                        <span className="muted">—</span>
+                      ) : stats.get(q.id)!.late > 0 ? (
                         <span className="chip chip-late">{stats.get(q.id)!.late}</span>
                       ) : (
                         <span className="muted">0</span>

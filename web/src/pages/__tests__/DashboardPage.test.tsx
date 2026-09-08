@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -126,6 +126,43 @@ describe('DashboardPage — lists that do not lie (UI-E)', () => {
     const [, , listLimit] = vi.mocked(api.listQuestions).mock.calls[0]
     expect(offset).toBe(0)
     expect(limit).toBe(listLimit)
+  })
+
+  it('does not page analytics in lockstep when archived rows are shown', async () => {
+    // /analytics/questions filters to active, non-variant questions; the list can
+    // include archived. At the same offset the two windows diverge, and rows that
+    // do have stats render an em-dash.
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole('link', { name: 'Two Sum' })
+
+    await user.click(screen.getByLabelText(/show archived/i))
+
+    await waitFor(() => {
+      const calls = vi.mocked(api.analyticsQuestions).mock.calls
+      const [, offset, limit] = calls[calls.length - 1]
+      expect(offset).toBe(0)
+      expect(limit).toBeGreaterThan(25)
+    })
+  })
+
+  it('shows an em-dash, not a confident zero, for a row with no stats row', async () => {
+    vi.mocked(api.analyticsQuestions).mockResolvedValue(page([]) as never)
+    renderPage()
+
+    const link = await screen.findByRole('link', { name: 'Two Sum' })
+    const row = link.closest('tr')!
+    const cells = within(row).getAllByRole('cell')
+    // Late is the last stat column before Test cases. "0 late" is a claim; with
+    // no analytics row we do not know, and every sibling column says so with an
+    // em-dash. Asserting on the row, not the page — the overview tiles above
+    // legitimately show zeros.
+    // Derive the column rather than hardcoding an index — the row legitimately
+    // contains a 0 elsewhere (Test cases), so this must be the Late cell exactly.
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent)
+    const lateCol = headers.indexOf('Late')
+    expect(lateCol).toBeGreaterThan(-1)
+    expect(cells[lateCol].textContent).toBe('—')
   })
 
   it('shows the median and late columns the analytics rows already carried', async () => {

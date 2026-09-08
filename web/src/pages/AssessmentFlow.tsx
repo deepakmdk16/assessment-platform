@@ -125,7 +125,14 @@ export function AssessmentFlow({
   // and never stopped the keyboard, so a candidate kept typing behind a screen
   // that said they were blocked. `locked` already drives readOnly and every
   // action, so folding it in here locks all of them at once.
+  // Editing is blocked: drives readOnly and every action.
   const locked = isDone || timeUp || integrity.mustReturnToFullscreen
+  // Persistence is a SEPARATE condition. Gating the autosave on `locked` meant
+  // that leaving fullscreen mid-debounce cancelled the pending save and
+  // scheduled nothing — a candidate who never came back to that tab lost
+  // everything typed since the last successful save. A submitted or timed-out
+  // question still stops saving, which is the original intent.
+  const savingStopped = isDone || timeUp
   const submittedCount = questions.filter((q) => submitted[q.id]).length
   // Terminal screen (A5): reached from BOTH triggers — every question
   // submitted manually before time's up, or the timeout auto-submit pass has
@@ -137,7 +144,7 @@ export function AssessmentFlow({
   // — a lost save costs at most a few seconds of typing; skipped once this
   // question is submitted or time is up (nothing left worth saving).
   useEffect(() => {
-    if (!answer?.code || locked) return
+    if (!answer?.code || savingStopped) return
     const t = setTimeout(() => {
       void api
         .saveCandidateDraft(token, {
@@ -149,7 +156,7 @@ export function AssessmentFlow({
         .catch(() => {})
     }, 2000)
     return () => clearTimeout(t)
-  }, [token, candidateEmail, cq.id, answer?.code, answer?.language, locked])
+  }, [token, candidateEmail, cq.id, answer?.code, answer?.language, savingStopped])
 
   // Switch questions and reset the scratch console (its output belonged to the
   // previous question); code/language are kept per question in `answers`. Done in

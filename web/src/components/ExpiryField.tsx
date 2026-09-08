@@ -26,6 +26,17 @@ export function ExpiryField({
 }) {
   const [choice, setChoice] = useState<string>(EXPIRY_PRESETS[0].label)
   const [inPast, setInPast] = useState(false)
+  // Follow the parent when it resets the value (after a successful send, or on
+  // closing the dialog). Without this the select keeps showing the old preset
+  // while `value` is null, and the next invite silently never expires.
+  const [lastValue, setLastValue] = useState(value)
+  if (value !== lastValue) {
+    setLastValue(value)
+    if (value === null && choice !== EXPIRY_PRESETS[0].label) {
+      setChoice(EXPIRY_PRESETS[0].label)
+      setInPast(false)
+    }
+  }
   const selectId = `${idPrefix}-expiry`
   const customId = `${idPrefix}-expiry-custom`
   const isCustom = choice === 'custom'

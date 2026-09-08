@@ -34,6 +34,11 @@ export function SubmissionDetailPage() {
   const [integrityFailed, setIntegrityFailed] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState<string | null>(null)
+  // Restarts the poll. The poll effect keys on [id, retryKey]: after a retry the
+  // id has not changed, so without this the effect never re-runs — and its last
+  // pass had already stopped, because at that point the status was `error`. The
+  // page would sit on "updates automatically" forever.
+  const [retryKey, setRetryKey] = useState(0)
 
   async function handleDownloadReport() {
     if (!id) return
@@ -90,7 +95,7 @@ export function SubmissionDetailPage() {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [id])
+  }, [id, retryKey])
 
   // Promise-chain rather than await: setState belongs in the callback, not in
   // the effect body, or every load cascades an extra render.
@@ -129,6 +134,7 @@ export function SubmissionDetailPage() {
     try {
       setSub(await api.retrySubmission(id))
       setPollTimedOut(false)
+      setRetryKey((k) => k + 1)
     } catch (err) {
       // A 409 means the status moved on (someone else retried, or it graded);
       // the server's own wording is more useful than a generic failure.

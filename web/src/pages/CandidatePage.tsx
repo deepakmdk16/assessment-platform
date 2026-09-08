@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
+import { parseServerDate } from '../invites'
 import { IntegrityNotice, IntegrityOverlay } from '../components/IntegrityGate'
 import { fullscreenSupported, useIntegrity } from '../integrity'
 import { ThemeCycleButton } from '../components/ThemeToggle'
@@ -72,8 +73,11 @@ function saveDraft(token: string, candidateEmail: string, draft: Draft): void {
 function pickDraft(local: Draft | null, server: ServerDraft | null): Draft | null {
   if (!local?.code) return server?.code ? server : null
   if (!server?.code) return local
+  // `saved_at` is a real ISO instant from this browser; `updated_at` comes from
+  // the API with no offset and would otherwise be read as local time, making
+  // "newest wins" wrong by the viewer's UTC offset.
   const localAt = local.saved_at ? new Date(local.saved_at).getTime() : 0
-  const serverAt = new Date(server.updated_at).getTime()
+  const serverAt = parseServerDate(server.updated_at).getTime()
   return serverAt > localAt ? server : local
 }
 
@@ -179,13 +183,16 @@ export function CandidatePage() {
   // localStorage), and clear it once the attempt is recorded so a later invite
   // to the same browser starts clean.
   useEffect(() => {
-    if (stage !== 'editor' || !token) return
+    // Not while a draft choice is pending: the autosave would overwrite the local
+    // copy with the pre-selected winner, so choosing "this device" would restore
+    // the server's code instead.
+    if (stage !== 'editor' || !token || draftConflict) return
     const t = setTimeout(
       () => saveDraft(token, candidateEmail, { code, language, saved_at: new Date().toISOString() }),
       500,
     )
     return () => clearTimeout(t)
-  }, [stage, token, candidateEmail, code, language])
+  }, [stage, token, candidateEmail, code, language, draftConflict])
 
   // Server-side autosave (CX2), single-question flow only — AssessmentFlow
   // saves per question itself. Gentler cadence than the localStorage one, and
@@ -209,6 +216,21 @@ export function CandidatePage() {
     if (token && (stage === 'submitted' || stage === 'already_submitted'))
       clearDraft(token, candidateEmail)
   }, [stage, token, candidateEmail])
+
+  /** Restore a whole draft, not just its code. Both halves of a draft matter:
+   *  a Java answer reopened under Python does not compile. The language is
+   *  validated against what this invite still offers, exactly as the initial
+   *  restore does. */
+  function applyDraft(draft: { code: string; language: string }) {
+    setCode(draft.code)
+    const offered = invite?.languages ?? []
+    setLanguage(
+      offered.includes(draft.language as Language)
+        ? (draft.language as Language)
+        : ((offered[0] ?? '') as Language),
+    )
+    setDraftConflict(null)
+  }
 
   async function handleGateSubmit(e: FormEvent) {
     e.preventDefault()
@@ -584,10 +606,7 @@ export function CandidatePage() {
                     <button
                       type="button"
                       className="btn sec"
-                      onClick={() => {
-                        setCode(draftConflict.local.code)
-                        setDraftConflict(null)
-                      }}
+                      onClick={() => applyDraft(draftConflict.local)}
                     >
                       This device
                       {draftConflict.local.saved_at
@@ -597,12 +616,9 @@ export function CandidatePage() {
                     <button
                       type="button"
                       className="btn"
-                      onClick={() => {
-                        setCode(draftConflict.server.code)
-                        setDraftConflict(null)
-                      }}
+                      onClick={() => applyDraft(draftConflict.server)}
                     >
-                      Your account · {new Date(draftConflict.server.updated_at).toLocaleString()}
+                      Your account · {parseServerDate(draftConflict.server.updated_at).toLocaleString()}
                     </button>
                   </div>
                 </div>

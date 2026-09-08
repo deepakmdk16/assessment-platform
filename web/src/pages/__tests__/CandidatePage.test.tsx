@@ -656,6 +656,65 @@ describe('server drafts (CX2)', () => {
     expect(screen.getByRole('dialog', { name: /two versions of your work/i })).toBeInTheDocument()
   })
 
+  it('restores the chosen draft\'s language, not just its code', async () => {
+    // Restoring code alone reopened a Java answer under Python, which then fails
+    // to compile — the candidate's own work, sabotaged by the restore.
+    localStorage.setItem(
+      'assessment-draft:tok123:jane@example.com',
+      JSON.stringify({
+        code: 'local version',
+        language: 'javascript',
+        saved_at: '2026-09-08T12:00:00Z',
+      }),
+    )
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({
+      drafts: [
+        {
+          question_id: 'q1',
+          code: 'server version',
+          language: 'python',
+          updated_at: '2026-09-08T11:00:00',
+        },
+      ],
+    })
+    const user = await startSitting()
+
+    await screen.findByRole('dialog', { name: /two versions of your work/i })
+    await user.click(screen.getByRole('button', { name: /your account/i }))
+
+    expect(await screen.findByLabelText(/code editor/i)).toHaveValue('server version')
+    expect(screen.getByLabelText(/language/i)).toHaveValue('python')
+  })
+
+  it('compares draft ages as UTC, so the server copy is not mis-ranked', async () => {
+    // updated_at arrives with no offset. Read as local time it lands hours away
+    // from the instant the server meant, and "newest wins" picks the wrong one.
+    localStorage.setItem(
+      'assessment-draft:tok123:jane@example.com',
+      JSON.stringify({
+        code: 'local, one hour older',
+        language: 'python',
+        saved_at: '2026-09-08T11:00:00Z',
+      }),
+    )
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({
+      drafts: [
+        {
+          question_id: 'q1',
+          code: 'server, newer',
+          language: 'python',
+          updated_at: '2026-09-08T12:00:00',
+        },
+      ],
+    })
+
+    await startSitting()
+
+    expect(await screen.findByLabelText(/code editor/i)).toHaveValue('server, newer')
+  })
+
   it("does not seed a candidate with the previous candidate's work on a shared machine", async () => {
     // Keyed on the token alone, the next person to open the same link inherited
     // whatever the last one left unsent.

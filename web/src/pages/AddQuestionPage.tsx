@@ -71,6 +71,9 @@ export function AddQuestionPage() {
   const { id: editId } = useParams<{ id: string }>()
   const isEdit = Boolean(editId)
   const [loading, setLoading] = useState(isEdit)
+  // A failed seed must not fall through to an empty-but-saveable wizard: PUT is
+  // a full replace, so saving it would blank the question it failed to load.
+  const [seedFailed, setSeedFailed] = useState(false)
 
   const [step, setStep] = useState(0)
 
@@ -127,7 +130,9 @@ export function AddQuestionPage() {
         setRequiredComplexity(q.required_complexity ?? '')
         setExampleInput(q.example_input ?? '')
         setExampleOutput(q.example_output ?? '')
-        setDifficulty(q.difficulty ?? 'medium')
+        // Not 'medium': a question with no difficulty must round-trip as none,
+        // or a no-op edit silently stamps one on.
+        setDifficulty(q.difficulty ?? '')
         setReferenceSolution(q.reference_solution ?? null)
         setReferenceLanguage(q.reference_language ?? null)
         if (q.duration_minutes == null) {
@@ -154,6 +159,7 @@ export function AddQuestionPage() {
       .catch((err) => {
         if (cancelled) return
         setError(err instanceof ApiError ? err.message : 'Failed to load question')
+        setSeedFailed(true)
         setLoading(false)
       })
     return () => {
@@ -167,11 +173,11 @@ export function AddQuestionPage() {
       return
     }
     setDraftError(null)
-    // Clear any prior draft's output so a failed re-draft doesn't leave stale
-    // warnings / reference solution on screen.
+    // Clear the previous draft's warnings up front, but NOT the reference: a
+    // failed re-draft would then leave `reference_solution` null in form state,
+    // and the next Save would write that null over the stored oracle every
+    // expected output came from. Cleared on success instead, below.
     setDraftWarnings([])
-    setReferenceSolution(null)
-    setReferenceLanguage(null)
     setDrafting(true)
     try {
       const res = await api.draftQuestion({
@@ -192,6 +198,7 @@ export function AddQuestionPage() {
       setExampleOutput(q.example_output ?? '')
       setTestCases(q.test_cases.length > 0 ? q.test_cases : [emptyTestCase()])
       setDraftWarnings(res.warnings)
+      // Success: the new draft's reference replaces the old one.
       setReferenceSolution(res.reference_solution)
       setReferenceLanguage(res.reference_language)
     } catch (err) {
@@ -297,6 +304,17 @@ export function AddQuestionPage() {
   }
 
   if (loading) return <p className="page-loading">Loading…</p>
+  if (seedFailed)
+    return (
+      <div className="wizard">
+        <p role="alert" className="form-error">
+          {error ?? 'Failed to load question'}
+        </p>
+        <button type="button" className="btn sec" onClick={() => window.location.reload()}>
+          Try again
+        </button>
+      </div>
+    )
 
   return (
     <div className="wizard">
@@ -518,6 +536,7 @@ export function AddQuestionPage() {
                     value={difficulty}
                     onChange={(e) => setDifficulty(e.target.value)}
                   >
+                    <option value="">— none —</option>
                     <option value="easy">easy</option>
                     <option value="medium">medium</option>
                     <option value="hard">hard</option>

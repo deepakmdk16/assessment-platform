@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { describeRecipients, inviteState, parseRecipients, toLocalInputValue } from '../invites'
+import {
+  describeRecipients,
+  inviteState,
+  parseRecipients,
+  parseServerDate,
+  toLocalInputValue,
+} from '../invites'
 import type { Invite } from '../types'
 
 const invite = (overrides: Partial<Invite> = {}): Invite => ({
@@ -86,5 +92,40 @@ describe('toLocalInputValue', () => {
       '0',
     )}`
     expect(toLocalInputValue(d)).toBe(expected)
+  })
+})
+
+describe('parseServerDate', () => {
+  it('reads an offset-less API timestamp as UTC, not as local time', () => {
+    // Every timestamp column is timezone-naive (STATUS P14), so the API emits
+    // UTC instants with no offset. `new Date()` would read them as local, which
+    // shifted every expiry comparison by the viewer's offset.
+    expect(parseServerDate('2026-09-15T08:45:16').toISOString()).toBe('2026-09-15T08:45:16.000Z')
+    expect(parseServerDate('2026-09-15T08:45:16.432493').getTime()).toBe(
+      Date.UTC(2026, 8, 15, 8, 45, 16, 432),
+    )
+  })
+
+  it('leaves an already-aware timestamp alone', () => {
+    // So it keeps working when P14 lands and the API starts emitting offsets.
+    expect(parseServerDate('2026-09-15T08:45:16Z').toISOString()).toBe('2026-09-15T08:45:16.000Z')
+    expect(parseServerDate('2026-09-15T14:15:16+05:30').toISOString()).toBe(
+      '2026-09-15T08:45:16.000Z',
+    )
+  })
+})
+
+describe('inviteState — timezone correctness', () => {
+  it('does not expire a link early for a viewer east of UTC', () => {
+    // The naive string is 2 hours in the future. Read as local time in UTC+5:30
+    // it would look 3.5 hours PAST, and the invite would show expired with its
+    // Revoke button gone, while the server still honoured the link.
+    const now = new Date('2026-09-15T08:00:00Z')
+    const invite = {
+      token: 't', url: 'u', question_id: 'q', assessment_id: null, variant_set_id: null,
+      variant_label: null, recipients: [], expires_at: '2026-09-15T10:00:00',
+      status: 'active' as const, deliveries: [],
+    }
+    expect(inviteState(invite, now)).toBe('active')
   })
 })

@@ -24,11 +24,11 @@ export function SubmissionsPage() {
   const [exporting, setExporting] = useState(false)
   // Keyed by submission id: two failed rows must not share one spinner or one
   // error message.
-  const [retryingId, setRetryingId] = useState<string | null>(null)
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set())
   const [retryErrors, setRetryErrors] = useState<Record<string, string>>({})
 
   async function handleRetry(submissionId: string) {
-    setRetryingId(submissionId)
+    setRetryingIds((prev) => new Set(prev).add(submissionId))
     setRetryErrors((prev) => {
       if (!(submissionId in prev)) return prev
       const next = { ...prev }
@@ -50,7 +50,11 @@ export function SubmissionsPage() {
         [submissionId]: err instanceof ApiError ? err.message : 'Failed to retry grading',
       }))
     } finally {
-      setRetryingId(null)
+      setRetryingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(submissionId)
+        return next
+      })
     }
   }
 
@@ -223,9 +227,9 @@ export function SubmissionsPage() {
                               e.stopPropagation()
                               void handleRetry(s.id)
                             }}
-                            disabled={retryingId === s.id}
+                            disabled={retryingIds.has(s.id)}
                           >
-                            {retryingId === s.id ? 'Retrying…' : 'Retry'}
+                            {retryingIds.has(s.id) ? 'Retrying…' : 'Retry'}
                           </button>
                           {retryErrors[s.id] && (
                             <p role="alert" className="form-error">

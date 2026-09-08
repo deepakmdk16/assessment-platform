@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { badgeClass } from '../badges'
-import { inviteState } from '../invites'
+import { inviteState, parseServerDate } from '../invites'
 import type { Invite } from '../types'
 
 /** One invite table for all three surfaces.
@@ -124,7 +124,7 @@ function InviteRow({
       </td>
       <td>
         {invite.expires_at ? (
-          new Date(invite.expires_at).toLocaleString()
+          parseServerDate(invite.expires_at).toLocaleString()
         ) : (
           <span className="muted">Never</span>
         )}

@@ -247,8 +247,9 @@ describe('SubmissionDetailPage', () => {
 
   it('offers a working retry when grading failed, instead of pointing elsewhere', async () => {
     const errored: SubmissionDetail = { ...submission, status: 'error', result: null }
+    const pending: SubmissionDetail = { ...errored, status: 'pending' }
     vi.mocked(api.getSubmission).mockResolvedValue(errored)
-    vi.mocked(api.retrySubmission).mockResolvedValue({ ...errored, status: 'pending' })
+    vi.mocked(api.retrySubmission).mockResolvedValue(pending)
     const user = userEvent.setup()
     renderPage()
 
@@ -256,10 +257,34 @@ describe('SubmissionDetailPage', () => {
     // The old copy sent the interviewer to a list that had no retry control.
     expect(screen.queryByText(/retry it from the submissions list/i)).not.toBeInTheDocument()
 
+    // The restarted poll re-fetches, so the server is the source of truth from
+    // here — mirror a backend that has accepted the retry.
+    vi.mocked(api.getSubmission).mockResolvedValue(pending)
     await user.click(screen.getByRole('button', { name: /retry grading/i }))
 
     expect(api.retrySubmission).toHaveBeenCalledWith('sub1')
     expect(await screen.findByText(/grading in progress/i)).toBeInTheDocument()
+  })
+
+  it('restarts polling after a retry, so the grade actually appears', async () => {
+    // The poll effect keys on [id, retryKey]. Without the retryKey bump it never
+    // re-runs — its previous pass had already stopped, because the status was
+    // `error` — and the page promises updates that never come.
+    const errored: SubmissionDetail = { ...submission, status: 'error', result: null }
+    vi.mocked(api.getSubmission).mockResolvedValue(errored)
+    vi.mocked(api.retrySubmission).mockResolvedValue({ ...errored, status: 'pending' })
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByText(/grading couldn.t complete/i)
+    const before = vi.mocked(api.getSubmission).mock.calls.length
+
+    // The grade lands between the retry and the next poll tick.
+    vi.mocked(api.getSubmission).mockResolvedValue(submission)
+    await user.click(screen.getByRole('button', { name: /retry grading/i }))
+
+    expect(await screen.findByText('FAIL')).toBeInTheDocument()
+    expect(vi.mocked(api.getSubmission).mock.calls.length).toBeGreaterThan(before)
   })
 
   it("shows the server's own words when a retry is refused", async () => {

@@ -42,6 +42,21 @@ export function describeRecipients(raw: string): string | null {
     : `${people} · lower-cased`
 }
 
+/** Parse a datetime the API returned.
+ *
+ *  Every timestamp column is timezone-naive (STATUS P14), so the API serialises
+ *  UTC instants with no offset — "2026-09-15T08:45:16". `new Date()` reads an
+ *  offset-less string as LOCAL time, which silently shifts every comparison and
+ *  every rendered time by the viewer's offset: in UTC+5:30 an invite reads as
+ *  expired five and a half hours before it is, and Revoke disappears from a link
+ *  the server still honours.
+ *
+ *  Appending 'Z' when there is no offset makes the client agree with the server.
+ *  Harmless once P14 lands and the API starts emitting aware datetimes. */
+export function parseServerDate(value: string): Date {
+  return new Date(/(?:Z|[+-]\d{2}:?\d{2})$/.test(value) ? value : value + 'Z')
+}
+
 export type InviteState = 'active' | 'revoked' | 'expired'
 
 /** The invite's effective state.
@@ -52,7 +67,8 @@ export type InviteState = 'active' | 'revoked' | 'expired'
  *  verbatim would tell an interviewer a dead link is live. */
 export function inviteState(invite: Invite, now: Date = new Date()): InviteState {
   if (invite.status === 'revoked') return 'revoked'
-  if (invite.expires_at && new Date(invite.expires_at).getTime() <= now.getTime()) return 'expired'
+  if (invite.expires_at && parseServerDate(invite.expires_at).getTime() <= now.getTime())
+    return 'expired'
   return 'active'
 }
 
