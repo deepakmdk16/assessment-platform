@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
+import { parseServerDate } from '../invites'
 import type { Billing, PaidPlanKey, Plan } from '../types'
 
 /** Where a meter turns from reassuring to worth acting on. Under the first it
@@ -26,7 +27,10 @@ function periodLabel(period: string): string {
 }
 
 function dateLabel(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
+  // Via parseServerDate: every timestamp column is timezone-naive (P14), so the
+  // API serialises UTC with no offset and a bare `new Date` would read it as
+  // local — showing the renewal a day early for anyone east of UTC.
+  return parseServerDate(iso).toLocaleDateString(undefined, {
     day: 'numeric',
     month: 'long',
     year: 'numeric',

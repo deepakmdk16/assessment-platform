@@ -132,9 +132,26 @@ def test_a_new_organisation_is_on_the_free_plan_with_nothing_used(client) -> Non
     assert body["usage"]["seats"] == 1  # the founder
     assert body["usage"]["period"] == billing.period_key()
     assert body["current_period_end"] is None
-    # The pricing table is served, not hardcoded in the SPA.
-    assert [p["key"] for p in body["plans"]] == ["free", "starter", "growth"]
     assert body["payments_enabled"] is False  # no Stripe key configured
+    # Only what this deployment could actually sell: with no Stripe prices
+    # configured, offering Starter would render a button that 503s on click.
+    assert [p["key"] for p in body["plans"]] == ["free"]
+
+
+def test_the_pricing_table_is_served_not_hardcoded(client, monkeypatch) -> None:
+    monkeypatch.setattr(
+        config, "STRIPE_PRICE_IDS", {"starter": "price_starter", "growth": "price_growth"}
+    )
+
+    plans = client.get("/billing").json()["plans"]
+    assert [p["key"] for p in plans] == ["free", "starter", "growth"]
+    assert [p["sittings"] for p in plans] == [10, 100, 500]
+
+
+def test_a_plan_whose_price_is_unconfigured_is_not_offered(client, monkeypatch) -> None:
+    monkeypatch.setattr(config, "STRIPE_PRICE_IDS", {"starter": "price_starter", "growth": None})
+
+    assert [p["key"] for p in client.get("/billing").json()["plans"]] == ["free", "starter"]
 
 
 def test_reading_the_billing_page_creates_no_usage_row(client) -> None:
@@ -237,6 +254,24 @@ def test_invites_are_refused_once_the_month_is_spent(client, enforced) -> None:
     assert "Free plan" in resp.json()["detail"]
 
 
+def test_one_invite_to_many_recipients_needs_a_sitting_each(client, enforced) -> None:
+    """One invite row carries every recipient and they share the link, so ten
+    addressed people can start ten sittings. Checking for one would send the
+    links and then turn nine candidates away."""
+    assert client.post("/questions", json=_question("q1")).status_code == 201
+    _set_usage(sittings=billing.PLANS["free"].sittings - 3)
+
+    refused = client.post(
+        "/questions/q1/invites", json={"recipients": [f"c{i}@x.io" for i in range(4)]}
+    )
+    assert refused.status_code == 402
+
+    allowed = client.post(
+        "/questions/q1/invites", json={"recipients": [f"c{i}@x.io" for i in range(3)]}
+    )
+    assert allowed.status_code == 201
+
+
 def test_a_variant_set_batch_must_fit_the_remaining_allowance(client, enforced, monkeypatch) -> None:
     monkeypatch.setattr(agent_client, "draft_set", _fake_set(_variant("va"), _variant("vb")))
     created = client.post(
@@ -323,6 +358,20 @@ def test_a_set_that_would_overshoot_is_refused_whole(client, enforced, monkeypat
     )
     assert resp.status_code == 402
     assert _usage().drafts == billing.PLANS["free"].drafts - 2  # nothing claimed
+
+
+def test_variants_the_agent_could_not_draft_are_handed_back(client, monkeypatch) -> None:
+    """A set that comes back short costs what it delivered. The agent reports the
+    shortfall as a warning; charging for the missing variants is the same
+    unfairness as charging for a draft it refused outright."""
+    monkeypatch.setattr(agent_client, "draft_set", _fake_set(_variant("va"), _variant("vb")))
+
+    resp = client.post(
+        "/variant-sets/draft", json={"brief": "b", "language": "python", "count": 3}
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()["variants"]) == 2
+    assert _usage().drafts == 2
 
 
 def test_a_draft_the_agent_never_produced_is_handed_back(client, enforced, monkeypatch) -> None:
@@ -588,6 +637,25 @@ def test_only_an_admin_can_spend_the_organisations_money(
     assert anon_client.get("/billing", headers=auth(member)).status_code == 200
 
 
+def test_an_organisation_cannot_subscribe_twice(client, stripe_configured, monkeypatch) -> None:
+    """A second checkout mints a second subscription, and the webhook would
+    overwrite the id of the first — which Stripe keeps billing with nothing here
+    pointing at it. Reachable from a stale tab, since the UI hides the button."""
+    monkeypatch.setattr(stripe_client, "create_checkout_session", lambda **_k: "https://x")
+    _set_plan(stripe_customer_id="cus_1", stripe_subscription_id="sub_1", plan="growth")
+
+    resp = client.post("/billing/checkout", json={"plan": "starter"})
+    assert resp.status_code == 409
+    assert "already has a subscription" in resp.json()["detail"]
+
+
+def test_a_cancelled_organisation_can_subscribe_again(client, stripe_configured, monkeypatch) -> None:
+    monkeypatch.setattr(stripe_client, "create_checkout_session", lambda **_k: "https://x")
+    _set_plan(stripe_customer_id="cus_1", stripe_subscription_id="sub_old", plan_status="canceled")
+
+    assert client.post("/billing/checkout", json={"plan": "starter"}).status_code == 200
+
+
 def test_the_portal_needs_a_subscription_to_manage(client, stripe_configured) -> None:
     assert client.post("/billing/portal").status_code == 409
 
@@ -720,6 +788,30 @@ def test_checkout_completion_links_the_subscription(client, stripe_configured, m
 
     with Session(db_module.engine) as s:
         assert s.get(Organization, _org_id()).stripe_subscription_id == "sub_1"
+
+
+def test_a_completed_checkout_is_placed_by_its_client_reference(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """The customer id may not be stored yet when the completion event lands.
+    A checkout session carries the organisation in `client_reference_id` — its
+    own `metadata` is a different bag from the subscription's."""
+    org_id = _org_id()
+
+    resp = _deliver(
+        client,
+        monkeypatch,
+        _Event(
+            "checkout.session.completed",
+            {"customer": "cus_unstored", "subscription": "sub_1", "client_reference_id": str(org_id)},
+        ),
+    )
+    assert resp.json()["status"] == "ok"
+
+    with Session(db_module.engine) as s:
+        org = s.get(Organization, org_id)
+        assert org.stripe_customer_id == "cus_unstored"
+        assert org.stripe_subscription_id == "sub_1"
 
 
 def test_a_webhook_for_an_unknown_customer_is_acknowledged_not_retried(

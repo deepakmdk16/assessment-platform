@@ -1448,6 +1448,16 @@ def _plan_out(plan: billing.Plan) -> PlanOut:
     return PlanOut(**asdict(plan))
 
 
+def _purchasable(plan: billing.Plan) -> bool:
+    """Whether this deployment could actually sell this plan.
+
+    `payments_enabled` says a card can be taken at all; this is the same honesty
+    one level down. A paid plan whose STRIPE_PRICE_* is unset would render a live
+    "Choose" button that 503s on click, so it is not offered.
+    """
+    return plan.price_usd_month == 0 or stripe_client.price_id(plan.key) is not None
+
+
 @app.get("/billing", response_model=BillingOut)
 def get_billing(
     org: Membership = Depends(get_current_membership),
@@ -1478,7 +1488,7 @@ def get_billing(
         current_period_end=organization.current_period_end,
         enforced=config.BILLING_ENFORCED,
         payments_enabled=config.billing_enabled(),
-        plans=[_plan_out(plan) for plan in billing.PLANS.values()],
+        plans=[_plan_out(plan) for plan in billing.PLANS.values() if _purchasable(plan)],
     )
 
 
@@ -1531,6 +1541,21 @@ def start_checkout(
             status_code=503, detail=f"the {body.plan} plan is not available on this deployment."
         )
     organization = _organization(org.org_id, session)
+    if (
+        organization.stripe_subscription_id
+        and organization.plan_status in billing.ENTITLED_STATUSES
+    ):
+        # A second checkout would mint a second subscription, and the webhook
+        # would overwrite the id of the first — which Stripe would keep billing
+        # with nothing here pointing at it. Reachable from a stale tab or a
+        # direct POST, since the UI hides the button once subscribed.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this organisation already has a subscription; "
+                "change the plan in the payment portal."
+            ),
+        )
     url = stripe_client.create_checkout_session(
         customer_id=_stripe_customer(organization, current, session),
         plan=body.plan,
@@ -1574,7 +1599,12 @@ def _org_for_stripe(obj: dict[str, Any], session: Session) -> Organization | Non
         ).first()
         if found is not None:
             return found
-    raw_org_id = (obj.get("metadata") or {}).get("org_id")
+    # A subscription carries our org_id in its metadata; a checkout session
+    # carries it in client_reference_id (its own `metadata` is a different bag
+    # from the `subscription_data.metadata` we set). Read both, or the fallback
+    # silently never fires for the completion event and the webhook answers
+    # "ignored" — which Stripe does not retry.
+    raw_org_id = (obj.get("metadata") or {}).get("org_id") or obj.get("client_reference_id")
     if isinstance(raw_org_id, str) and raw_org_id.isdigit():
         return session.get(Organization, int(raw_org_id))
     return None
@@ -1998,6 +2028,13 @@ async def draft_variant_set(
             )
         )
     billing.record(session, org.org_id, draft_cost_usd=total_cost)
+    undelivered = body.count - len(variants)
+    if undelivered > 0:
+        # The agent couldn't draft the whole set (it reports the shortfall as a
+        # set-level warning). Charging the allowance for variants that were never
+        # delivered is the same unfairness as charging for a draft it refused
+        # outright — the dollars it did spend are still recorded above.
+        billing.release(session, org.org_id, "drafts", undelivered)
     return VariantSetDraftOut(
         variants=variants,
         warnings=payload.get("warnings", []),
@@ -2630,8 +2667,12 @@ def delete_assessment(
 # --------------------------------------------------------------------------- #
 
 
-def _check_invite_capacity(org: Membership, session: Session, n: int = 1) -> None:
+def _check_invite_capacity(org: Membership, session: Session, n: int) -> None:
     """Refuse to hand out invites the plan has no sittings left for (X02).
+
+    `n` is the number of recipients, not of invite rows: one invite carries every
+    address on it and they share the link, so N addressed people can start N
+    sittings. (The schema requires at least one recipient.)
 
     Checked, never consumed: the metered event is a candidate *starting*, and
     plenty of invites are never opened. This is the interviewer-facing half of
@@ -2654,7 +2695,7 @@ def create_invite(
     session: Session = Depends(get_session),
 ) -> InviteOut:
     question = _owned_question(question_id, org, session)  # 404/403 guard
-    _check_invite_capacity(org, session)
+    _check_invite_capacity(org, session, len(body.recipients))
     invite = Invite(
         token=secrets.token_urlsafe(32),
         question_id=question_id,
@@ -2711,7 +2752,7 @@ def create_assessment_invite(
         raise HTTPException(
             status_code=400, detail="cannot invite to an assessment with no questions."
         )
-    _check_invite_capacity(org, session)
+    _check_invite_capacity(org, session, len(body.recipients))
     invite = Invite(
         token=secrets.token_urlsafe(32),
         assessment_id=assessment_id,
@@ -3489,25 +3530,32 @@ def _invite_org_id(invite: Invite, session: Session) -> int:
     raise HTTPException(status_code=500, detail="invite belongs to no organisation.")
 
 
-def _require_sitting_quota(org_id: int, session: Session) -> None:
-    """Refuse a NEW sitting once the organisation's monthly allowance is spent.
+def _claim_sitting(org_id: int, session: Session) -> None:
+    """Claim one sitting from the organisation's month, or turn the candidate away.
 
-    Candidate-facing, so it reveals nothing about somebody else's billing: a
-    neutral 403, not the interviewer's 402. Only the creation of a sitting is
-    gated — a candidate who has already begun is never re-checked — so an
-    allowance running out mid-assessment can never take away someone's work.
+    Atomic, like the draft allowance: two candidates opening the last sitting at
+    the same moment cannot both be let through, because the limit is checked
+    inside the UPDATE rather than read first.
+
+    Only the creation of a sitting is gated — a candidate who has already begun
+    is never re-checked — so an allowance running out mid-assessment can never
+    take away someone's work. The 402 `billing.consume` raises names the plan and
+    its limit, which is an interviewer's error; it is translated here into a
+    neutral 403 that tells a candidate nothing about someone else's billing.
     """
-    if not config.BILLING_ENFORCED:
-        return
     organization = _organization(org_id, session)
-    if billing.remaining(session, organization, "sittings") <= 0:
+    try:
+        billing.consume(session, organization, "sittings", 1)
+    except HTTPException as exc:
+        if exc.status_code != 402:
+            raise
         raise HTTPException(
             status_code=403,
             detail=(
                 "this assessment link is not available right now; "
                 "please contact whoever invited you."
             ),
-        )
+        ) from None
 
 
 def _get_or_start_attempt(
@@ -3542,7 +3590,7 @@ def _get_or_start_attempt(
     # come through here, and the row that loses the race below returns without
     # being counted, so a double-clicked Start bills once.
     org_id = _invite_org_id(invite, session)
-    _require_sitting_quota(org_id, session)
+    _claim_sitting(org_id, session)
     attempt = CandidateAttempt(
         invite_id=_require_id(invite.id), candidate_email=email, candidate_name=candidate_name
     )
@@ -3559,9 +3607,11 @@ def _get_or_start_attempt(
         ).first()
         if raced is None:  # pragma: no cover — the constraint guarantees a row here
             raise
+        # The sitting was claimed above but this request didn't start one, so the
+        # claim goes back: a double-clicked Start bills once, not twice.
+        billing.release(session, org_id, "sittings", 1)
         return raced
     session.refresh(attempt)
-    billing.record(session, org_id, sittings=1)
     return attempt
 
 
