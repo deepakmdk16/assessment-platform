@@ -57,18 +57,19 @@ proctoring.**
   customer-blocking. Fix: explicit consent checkbox stored on CandidateAttempt;
   privacy-policy + terms links; a DPA template (legal review).
   _Verified: cited lines read in this audit; source: saas._
-- **P03 · P1 · S — Assessment and variant-set invites cannot be revoked (no route,
-no UI); archiving does not stop links.**
+- **P03 · P1 · S — Assessment and variant-set invites cannot be revoked (no route);
+archiving does not stop links.**
   Evidence: the only revoke route requires Invite.question_id == question_id
   (api.py:1992-2003); assessment invites have question_id=None (api.py:1437-1446);
   live: revoke via the question route → 404; _load_invite_or_error checks only
   invite status/expiry (api.py:2023-2026); the API's own 409 text says "Revoke its
-  invites instead" (api.py:1067,1101); web has revoke only on QuestionDetailPage
-  (api.ts:247-251) and never lets expires_at be set (api.ts:204,236). Why: a leaked
-  assessment link stays live indefinitely. Fix: owner-scoped POST
-  /assessments/{id}/invites/{token}/revoke (+ variant-set) and UI revoke/expiry
-  controls on both surfaces.
-  _Verified: live run in this audit; source: backend,frontend,live._
+  invites instead" (api.py:1067,1101). Why: a leaked assessment link stays live
+  indefinitely, and expiry is now the only control an interviewer has over one.
+  Fix: owner-scoped POST /assessments/{id}/invites/{token}/revoke (+ variant-set);
+  the shared InviteTable already renders a revoke column when handed an
+  `onRevoke`, so the web half is one prop once the routes exist.
+  _Verified: live run in this audit; source: backend,frontend,live. Expiry and the
+  status column landed 2026-09-08._
 - **W03 · P1 · S — Every list row is mouse-only.**
   Evidence: <tr className="clickable-row" onClick=navigate> with no link/focusable
   target inside at pages/DashboardPage.tsx:170-174, AssessmentsListPage.tsx:113-117,
@@ -333,23 +334,12 @@ browser.**
   accessible names/labels, aria-current, arrow keys on the tablist; add jsx-a11y
   lint.
   _Verified: single-audit claim, not independently re-verified; source: frontend._
-- **W16 · P2 · M — Duplicated logic that should be shared.**
-  Evidence: candidate IDE panel duplicated ~130 lines (CandidatePage.tsx:491-623 vs
-  AssessmentFlow.tsx:368-495) plus countdown (:298-309 / :160-170), auto-submit and
-  doRun; CandidatePage.tsx:433-436 re-inlines timerClass from
-  candidateTimer.ts:9-11; three recipient parsers with different semantics
-  (QuestionDetailPage.tsx:95-98, AssessmentDetailPage.tsx:54-57,
-  VariantSetInvitePanel.tsx:7-18 — only the last lowercases/dedupes); invite table +
-  delivery warning duplicated (QuestionDetailPage.tsx:193-262,348-357 vs
-  AssessmentDetailPage.tsx:279-331,342-351); copyUrl ×3
-  (VariantSetInvitePanel.tsx:173 has no feedback and an unhandled rejection);
-  branding preview ×2 (NewAssessmentPage.tsx:204-215, SettingsPage.tsx:84-92);
-  archive toggle ×2; three duration formatters (analytics/format.ts:22-36,
-  IntegrityPanel.tsx:16-20, candidateTimer.ts:14-21); 15 pages hand-roll
-  useEffect+cancelled+Promise.all. Why: divergent behaviour (recipient parsing) and
-  double maintenance. Fix: shared CandidateIde + useCountdown + useAsync hooks; one
-  parseRecipients; one InviteTable; one formatDuration.
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W16 · P2 · M — Duplicated candidate IDE and countdown.**
+  Evidence: the candidate editor panel is ~130 duplicated lines between
+  CandidatePage and AssessmentFlow, plus the countdown in both. Why: a fix to one
+  silently misses the other. Fix: extract `CandidateIde` and `useCountdown`.
+  _Verified: cited lines read in this audit; source: frontend. The three divergent
+  recipient parsers and the duplicated invite table were extracted 2026-09-08._
 - **W17 · P2 · XS — components.css carries raw colour literals against the token
 rule; the hex guard scans only .tsx.**
   Evidence: 21 raw colour literals in styles/components.css (lines 36, 38, 45, 76,

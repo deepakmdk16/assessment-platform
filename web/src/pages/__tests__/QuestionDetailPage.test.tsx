@@ -181,6 +181,8 @@ describe('QuestionDetailPage', () => {
     await waitFor(() =>
       expect(api.createInvite).toHaveBeenCalledWith('two-sum', {
         recipients: ['alice@example.com', 'bob@example.com'],
+        // Default is "Never", matching every invite the product has sent so far.
+        expires_at: null,
       }),
     )
     // Dialog closes and the interviewer is told it went out.
