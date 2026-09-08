@@ -6,7 +6,10 @@ import { IntegrityCell } from '../components/IntegrityPanel'
 import { Pager } from '../components/Pager'
 import type { SubmissionSummary } from '../types'
 
-const PAGE_SIZE = 100
+// 25, not 100: the pager below has always been rendered, but at 100 it only
+// appeared for workspaces large enough that the silent truncation had
+// already bitten. A page you can see the end of is a page you can trust.
+const PAGE_SIZE = 25
 // Enough to title-map every question a normal workspace has; ids beyond this
 // fall back to showing the raw question_id.
 const QUESTION_FETCH_LIMIT = 200
@@ -156,7 +159,13 @@ export function SubmissionsPage() {
                     title="View submission detail"
                   >
                     <td>
-                      <div className="t-title">{s.candidate}</div>
+                      <Link
+                        to={`/submissions/${s.id}`}
+                        className="t-title"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {s.candidate}
+                      </Link>
                       {s.candidate_email && <div className="cellsub">{s.candidate_email}</div>}
                     </td>
                     <td>

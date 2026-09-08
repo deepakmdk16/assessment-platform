@@ -5,7 +5,10 @@ import { difficultyClass } from '../badges'
 import { Pager } from '../components/Pager'
 import type { VariantSetSummary } from '../types'
 
-const PAGE_SIZE = 100
+// 25, not 100: the pager below has always been rendered, but at 100 it only
+// appeared for workspaces large enough that the silent truncation had
+// already bitten. A page you can see the end of is a page you can trust.
+const PAGE_SIZE = 25
 
 export function VariantSetsListPage() {
   const navigate = useNavigate()
@@ -84,7 +87,13 @@ export function VariantSetsListPage() {
                     onClick={() => navigate(`/variant-sets/${s.id}`)}
                   >
                     <td>
-                      <div className="t-title">{s.title}</div>
+                      <Link
+                        to={`/variant-sets/${s.id}`}
+                        className="t-title"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {s.title}
+                      </Link>
                     </td>
                     <td className="num">{s.variant_count}</td>
                     <td>

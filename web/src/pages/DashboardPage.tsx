@@ -8,7 +8,10 @@ import { Meter } from '../components/Meter'
 import { Pager } from '../components/Pager'
 import type { QuestionAnalytics, QuestionOut } from '../types'
 
-const PAGE_SIZE = 100
+// 25, not 100: the pager below has always been rendered, but at 100 it only
+// appeared for workspaces large enough that the silent truncation had
+// already bitten. A page you can see the end of is a page you can trust.
+const PAGE_SIZE = 25
 
 export function DashboardPage() {
   const navigate = useNavigate()
@@ -29,12 +32,14 @@ export function DashboardPage() {
   const [days, setDays] = useState<number | undefined>(30)
   const [stats, setStats] = useState<Map<string, QuestionAnalytics>>(new Map())
 
-  // Per-question stats for the table columns. Fetched wide (one page) and looked
-  // up by id, so archived rows — absent from analytics — simply show no stats.
+  // Per-question stats for the table columns, looked up by id — archived rows are
+  // absent from analytics and simply show no stats. Requests the SAME window as
+  // the question list it decorates: the old fixed 200 meant that past that point
+  // rows rendered with a silent em-dash where their stats should have been.
   useEffect(() => {
     let cancelled = false
     api
-      .analyticsQuestions(days, 0, 200)
+      .analyticsQuestions(days, offset, PAGE_SIZE)
       .then((page) => {
         if (!cancelled) setStats(new Map(page.items.map((s) => [s.question_id, s])))
       })
@@ -42,7 +47,7 @@ export function DashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [days, reloadKey])
+  }, [days, offset, reloadKey])
 
   useEffect(() => {
     let cancelled = false
@@ -158,8 +163,13 @@ export function DashboardPage() {
                   <th>Difficulty</th>
                   <th>Pass rate</th>
                   <th className="th-num">Avg</th>
+                  {/* Both come from rows this page already fetches and rendered
+                      nowhere. A skewed question shows up immediately when the
+                      median and the mean disagree. */}
+                  <th className="th-num">Median</th>
                   <th className="th-num">Median time</th>
-                  <th className="num">Test cases</th>
+                  <th className="th-num">Late</th>
+                  <th className="th-num">Test cases</th>
                   <th>Status</th>
                   <th>Created</th>
                   <th></th>
@@ -181,7 +191,13 @@ export function DashboardPage() {
                       />
                     </td>
                     <td>
-                      <div className="t-title">{q.title}</div>
+                      <Link
+                        to={`/questions/${q.id}`}
+                        className="t-title"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {q.title}
+                      </Link>
                     </td>
                     <td>
                       {q.difficulty ? (
@@ -200,8 +216,18 @@ export function DashboardPage() {
                     <td className="num">
                       {stats.has(q.id) ? score(stats.get(q.id)!.avg_score_pct, 0) : '—'}
                     </td>
+                    <td className="num">
+                      {stats.has(q.id) ? score(stats.get(q.id)!.median_score_pct, 0) : '—'}
+                    </td>
                     <td className="num mono">
                       {stats.has(q.id) ? formatDuration(stats.get(q.id)!.median_time_to_solve_s) : '—'}
+                    </td>
+                    <td className="num">
+                      {stats.has(q.id) && stats.get(q.id)!.late > 0 ? (
+                        <span className="chip chip-late">{stats.get(q.id)!.late}</span>
+                      ) : (
+                        <span className="muted">0</span>
+                      )}
                     </td>
                     <td className="num">{q.test_cases.length}</td>
                     <td>

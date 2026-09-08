@@ -193,9 +193,15 @@ export function AssessmentDetailPage() {
             </div>
           </section>
 
+          <h2 className="sect-title">Attempts</h2>
+          {attempts.length === 0 && (
+            <p className="empty-state">
+              No one has started this assessment yet. Invite a candidate below and their attempt
+              will appear here.
+            </p>
+          )}
           {attempts.length > 0 && (
             <>
-              <h2 className="sect-title">Attempts</h2>
               <div className="card tbl-wrap">
                 <table className="tbl">
                   <thead>
@@ -270,9 +276,15 @@ export function AssessmentDetailPage() {
             </>
           )}
 
+          <h2 className="sect-title">Invites</h2>
+          {invites.length === 0 && (
+            <p className="empty-state">
+              No invites sent yet. Each one is a link that works only for the address you send it
+              to.
+            </p>
+          )}
           {invites.length > 0 && (
             <>
-              <h2 className="sect-title">Invites</h2>
               <div className="card">
                 {/* No onRevoke: assessment invites have no revoke route yet
                     (P03, backend), so expiry is the only control here. */}

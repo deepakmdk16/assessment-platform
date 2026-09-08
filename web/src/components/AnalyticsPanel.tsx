@@ -80,7 +80,34 @@ export function AnalyticsPanel({
   }, [selectedId])
 
   if (error) return <p className="form-error">{error}</p>
-  if (!overview) return null // the question list below still renders while this loads
+  // Reserve the space rather than returning null: the dashboard used to render
+  // without this panel and then shove the whole question list down when the
+  // numbers arrived. The skeleton reuses the real containers, so the height it
+  // holds is the height the loaded panel takes.
+  if (!overview) {
+    return (
+      <section className="analytics" aria-busy="true">
+        <div className="range-seg" role="group" aria-label="Time range">
+          {RANGES.map((r) => (
+            <button key={r.label} type="button" disabled>
+              {r.label}
+            </button>
+          ))}
+        </div>
+        <div className="stat-grid">
+          {/* Five, matching the five <Tile>s below — a skeleton that reserves the
+              wrong shape defeats the point. */}
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div className="stat" key={i}>
+              <div className="stat-label skeleton-line" aria-hidden="true" />
+              <div className="stat-value skeleton-line" aria-hidden="true" />
+            </div>
+          ))}
+        </div>
+        <p className="page-loading">Loading analytics…</p>
+      </section>
+    )
+  }
 
   return (
     <section className="analytics">

@@ -610,18 +610,20 @@ export function AddQuestionPage() {
                 </div>
                 <div className="tc-io">
                   <div>
-                    <label>Input (stdin)</label>
+                    <label htmlFor={`tc-${i}-stdin`}>Input (stdin)</label>
                     <textarea
-                      aria-label={`Test case ${i + 1} stdin`}
+                      id={`tc-${i}-stdin`}
+                      aria-label={`Test case ${i + 1} input (stdin)`}
                       placeholder="stdin passed to the program"
                       value={tc.stdin}
                       onChange={(e) => updateTestCase(i, { stdin: e.target.value })}
                     />
                   </div>
                   <div>
-                    <label>Expected output</label>
+                    <label htmlFor={`tc-${i}-expected`}>Expected output</label>
                     <textarea
-                      aria-label={`Test case ${i + 1} expected`}
+                      id={`tc-${i}-expected`}
+                      aria-label={`Test case ${i + 1} expected output`}
                       placeholder="exact expected stdout"
                       value={tc.expected}
                       onChange={(e) => updateTestCase(i, { expected: e.target.value })}

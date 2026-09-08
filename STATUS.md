@@ -70,15 +70,6 @@ archiving does not stop links.**
   `onRevoke`, so the web half is one prop once the routes exist.
   _Verified: live run in this audit; source: backend,frontend,live. Expiry and the
   status column landed 2026-09-08._
-- **W03 · P1 · S — Every list row is mouse-only.**
-  Evidence: <tr className="clickable-row" onClick=navigate> with no link/focusable
-  target inside at pages/DashboardPage.tsx:170-174, AssessmentsListPage.tsx:113-117,
-  VariantSetsListPage.tsx:81-86, SubmissionsPage.tsx:118-123,
-  QuestionDetailPage.tsx:287-293 (attempts chips do it right:
-  AssessmentDetailPage.tsx:238-243). Why: keyboard/screen-reader users cannot open a
-  question, assessment, set or submission (WCAG 2.1.1). Fix: wrap the title cell in
-  a <Link>; keep the row click as a convenience.
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
 - **X05 · P1 · M — No platform container, prod entrypoint, migration-on-start, or
 compose; the agent needs a privileged host.**
   Evidence: only AssesmentAgent/Dockerfile exists; no Dockerfile for the platform or
@@ -283,12 +274,6 @@ ErrorBoundary only logs; 401 redirect loses returnTo.**
   one api.test.ts.
   _Verified: single-audit claim, not independently re-verified; source:
   frontend,quality._
-- **W12 · P2 · S — Silent truncation at 100/200 rows.**
-  Evidence: builder library NewAssessmentPage.tsx:42 (200, no pager); submissions
-  title map SubmissionsPage.tsx:12; per-question stats DashboardPage.tsx:37;
-  analytics assessment picker AnalyticsPanel.tsx:59 (default 100). Why: larger
-  workspaces silently lose rows and stats. Fix: page or search these sources.
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
 - **W13 · P2 · XS — The logo URL is rendered unvalidated in the candidate's
 browser.**
   Evidence: NewAssessmentPage.tsx:207-208 live-previews whatever is typed;
@@ -297,34 +282,21 @@ browser.**
   candidate's IP is sent to an arbitrary host. Fix: require https:// client- and
   server-side.
   _Verified: single-audit claim, not independently re-verified; source: frontend._
-- **W14 · P2 · S — Accessibility details.**
-  Evidence: builder reorder/remove buttons named "↑", "↓", "✕" and every picker row
-  has an identical "Add" (NewAssessmentPage.tsx:250-258,285,313); per-recipient
-  variant <select> has no label (VariantSetInvitePanel.tsx:118-131); bare <label>
-  without htmlFor (AddQuestionPage.tsx:521,530); sidebar active link has no
-  aria-current (Sidebar.tsx:35-74); ARIA tablist without arrow-key handling
-  (AssessmentFlow.tsx:319-333); Monaco Tab-trap has no escape hint; positives:
-  native <dialog> + autoFocus for invite/edit, role="alert"/"status" used
-  consistently. Why: WCAG name/role/value failures on interviewer surfaces. Fix:
-  accessible names/labels, aria-current, arrow keys on the tablist; add jsx-a11y
-  lint.
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W14 · P2 · S — Accessibility: the remaining three.**
+  Evidence: every picker row has an identical "Add" (NewAssessmentPage.tsx); the
+  ARIA tablist has no arrow-key handling (AssessmentFlow.tsx); the Monaco Tab-trap
+  has no escape hint. Why: WCAG name/role/value failures on interviewer surfaces.
+  Fix: name the Add buttons per row, arrow keys on the tablist, an escape hint;
+  add jsx-a11y lint so these can't come back.
+  _Verified: single-audit claim; source: frontend. The icon buttons, the
+  per-recipient select, the unbound labels and the sidebar's aria-current were
+  fixed 2026-09-08._
 - **W16 · P2 · M — Duplicated candidate IDE and countdown.**
   Evidence: the candidate editor panel is ~130 duplicated lines between
   CandidatePage and AssessmentFlow, plus the countdown in both. Why: a fix to one
   silently misses the other. Fix: extract `CandidateIde` and `useCountdown`.
   _Verified: cited lines read in this audit; source: frontend. The three divergent
   recipient parsers and the duplicated invite table were extracted 2026-09-08._
-- **W17 · P2 · XS — components.css carries raw colour literals against the token
-rule; the hex guard scans only .tsx.**
-  Evidence: 21 raw colour literals in styles/components.css (lines 36, 38, 45, 76,
-  77, 82, 83, 156, 157, 164, 167, 196, 197, 368, 374, 548, 1009, 1227, 1321, 1330,
-  1554); worst .editor-wrapper { background: #1e1e1e } (:1554) is Monaco-dark in the
-  light theme; scripts/check-no-hex.mjs:8,15 scans only .tsx and only hex; the
-  ESLint rule catches only JSX style. Why: a re-theme cannot be done in tokens.css
-  alone as CONVENTIONS promises. Fix: move the literals to tokens; extend the guard
-  to .ts and rgb()/hsl().
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
 - **W18 · P2 · S — Hand-written types.ts mirrors 66 pydantic schemas with no drift
 gate.**
   Evidence: types.ts (627 lines, 61 exports) vs schemas.py (66 classes); no OpenAPI
@@ -462,8 +434,9 @@ layout shift while analytics load.**
   tseslint.recommended (not recommendedTypeChecked); no jsx-a11y;
   AnalyticsPanel.tsx:83 returns null until the overview arrives (layout jumps). Why:
   strictness depends on a compiler default; a11y regressions are unlinted. Fix: pin
-  strict; recommendedTypeChecked + jsx-a11y; fixed-height skeleton.
-  _Verified: cited lines read in this audit; source: quality._
+  strict; recommendedTypeChecked + jsx-a11y.
+  _Verified: cited lines read in this audit; source: quality. The analytics layout
+  shift was fixed with a reserved-height skeleton 2026-09-08._
 - **W21 · P3 · XS — The start gate cannot show branding before identification.**
   Evidence: live: GET /invite/{token} pre-start returns only status + proctored;
   branding arrives in the /start payload. Why: candidates see a generic gate for a

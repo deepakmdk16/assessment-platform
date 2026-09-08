@@ -167,12 +167,15 @@ describe('AssessmentDetailPage — attempts (A3/A11)', () => {
     expect(await screen.findByText('Submission detail page')).toBeInTheDocument()
   })
 
-  it('renders no Attempts section when nobody has started yet', async () => {
+  it('shows an empty Attempts section with a next step, not a blank page', async () => {
+    // This is the first screen after creating an assessment. Hiding the section
+    // entirely left it showing nothing at all and offering nowhere to go.
     vi.mocked(api.listAssessmentAttempts).mockResolvedValue([])
     renderPage()
 
     await screen.findByRole('heading', { name: /backend screen/i })
-    expect(screen.queryByRole('heading', { name: /attempts/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /attempts/i })).toBeInTheDocument()
+    expect(screen.getByText(/no one has started this assessment yet/i)).toBeInTheDocument()
   })
 
   it('shows a variant-set slot and each candidate’s assigned variant (VS2)', async () => {

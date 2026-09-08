@@ -68,8 +68,8 @@ describe('AddQuestionPage', () => {
 
     // Step 3: Test cases
     await user.type(screen.getByLabelText(/test case 1 name/i), 'basic')
-    await user.type(screen.getByLabelText(/test case 1 stdin/i), '2 7 11 15\n9')
-    await user.type(screen.getByLabelText(/test case 1 expected/i), '0 1')
+    await user.type(screen.getByLabelText(/test case 1 input \(stdin\)/i), '2 7 11 15\n9')
+    await user.type(screen.getByLabelText(/test case 1 expected output/i), '0 1')
     await next(user)
 
     // Step 4: Worked example

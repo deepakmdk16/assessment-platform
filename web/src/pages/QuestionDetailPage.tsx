@@ -312,7 +312,13 @@ export function QuestionDetailPage() {
                       title="View submission detail"
                     >
                       <td>
-                        <div className="t-title">{s.candidate_name}</div>
+                        <Link
+                          to={`/submissions/${s.submission_id}`}
+                          className="t-title"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {s.candidate_name}
+                        </Link>
                         <div className="cellsub">{s.candidate_email}</div>
                       </td>
                       <td>{s.language}</td>
