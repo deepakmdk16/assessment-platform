@@ -1510,6 +1510,8 @@ def get_billing(
             seats=_seats_used(org.org_id, session),
             sittings_carried=row.sittings_carried,
             drafts_carried=row.drafts_carried,
+            sittings_over=row.sittings_over,
+            drafts_over=row.drafts_over,
             judge_cost_usd=round(row.judge_cost_usd, 4),
             draft_cost_usd=round(row.draft_cost_usd, 4),
         ),

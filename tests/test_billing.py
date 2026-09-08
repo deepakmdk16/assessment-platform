@@ -1113,18 +1113,20 @@ def test_the_export_carries_what_each_grade_cost(client, monkeypatch) -> None:
     _graded(client, monkeypatch)
     client.post("/assessments/callback", json=_callback("job-1"))
 
-    body = client.get("/submissions/export").text
-    header, row = body.splitlines()[0], body.splitlines()[1]
-    assert "judge_cost_usd" in header.split(",")
-    assert "0.009400" in row
+    header, row = client.get("/submissions/export").text.splitlines()[:2]
+    cost = header.split(",").index("judge_cost_usd")
+    assert row.split(",")[cost] == "0.009400"
 
 
 def test_an_unpriced_grade_exports_blank_not_zero(client, monkeypatch) -> None:
     _graded(client, monkeypatch)
     client.post("/assessments/callback", json=_callback("job-1", cost=None))
 
-    row = client.get("/submissions/export").text.splitlines()[1].split(",")
-    assert row[-2] == ""  # the cost column, before created_at
+    # By header name, like every other CSV assertion here: a positional index
+    # breaks silently the next time a column is added.
+    header, row = client.get("/submissions/export").text.splitlines()[:2]
+    cost = header.split(",").index("judge_cost_usd")
+    assert row.split(",")[cost] == ""
 
 
 def test_the_session_asks_stripe_for_automatic_tax(monkeypatch) -> None:

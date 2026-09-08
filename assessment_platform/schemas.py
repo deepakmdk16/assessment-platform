@@ -1015,6 +1015,13 @@ class UsageOut(BaseModel):
     # the month started with less than the plan's headline number.
     sittings_carried: int = 0
     drafts_carried: int = 0
+    # What THIS period has gone past its allowance by, as recorded when it
+    # happened. Sent rather than left to the client to subtract, for the same
+    # reason the server stopped reconstructing it: usage measured against the
+    # plan in force *now* reads a mid-month downgrade as an overrun, and would
+    # tell a customer they are 300 over when nothing will be carried.
+    sittings_over: int = 0
+    drafts_over: int = 0
     # The organisation's LLM spend this period, rolled up from what the agent
     # priced: grading (judge) and question authoring (drafts).
     judge_cost_usd: float

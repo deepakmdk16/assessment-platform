@@ -38,6 +38,8 @@ function billing(over: Partial<Billing> = {}): Billing {
       seats: 1,
       sittings_carried: 0,
       drafts_carried: 0,
+      sittings_over: 0,
+      drafts_over: 0,
       judge_cost_usd: 3.81,
       draft_cost_usd: 0.94,
     },
@@ -144,6 +146,8 @@ describe('BillingPanel', () => {
         seats: 1,
         sittings_carried: 3,
         drafts_carried: 0,
+        sittings_over: 0,
+        drafts_over: 0,
         judge_cost_usd: 0,
         draft_cost_usd: 0,
       },
@@ -164,12 +168,40 @@ describe('BillingPanel', () => {
         seats: 3,
         sittings_carried: 0,
         drafts_carried: 0,
+        sittings_over: 0,
+        drafts_over: 0,
         judge_cost_usd: 0,
         draft_cost_usd: 0,
       },
     })
 
     expect(await screen.findByText('1 over the plan')).toBeInTheDocument()
+  })
+
+  it('reports the overrun the server recorded, not one derived from the plan', async () => {
+    // A mid-month downgrade leaves usage above the new plan without anything
+    // being owed — the usage was entitled when it happened. Subtracting here
+    // would tell that customer they are 300 over.
+    mount({
+      plan: PLANS[1], // downgraded to Starter mid-month
+      usage: {
+        period: '2026-09',
+        sittings: 400,
+        drafts: 0,
+        seats: 1,
+        sittings_carried: 0,
+        drafts_carried: 0,
+        sittings_over: 0,
+        drafts_over: 0,
+        judge_cost_usd: 0,
+        draft_cost_usd: 0,
+      },
+    })
+
+    // The number and its limit are separate elements, as elsewhere here.
+    expect(await screen.findByText('/ 100')).toBeInTheDocument()
+    expect(screen.getByText('400')).toBeInTheDocument()
+    expect(screen.queryByText(/over the plan/)).not.toBeInTheDocument()
   })
 
   it('says so when limits are measured but not enforced', async () => {

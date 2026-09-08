@@ -55,6 +55,7 @@ function UsageRow({
   used,
   limit,
   carried = 0,
+  over,
 }: {
   name: string
   hint?: string
@@ -64,17 +65,21 @@ function UsageRow({
    *  so a month that starts with less than the plan's headline number says why
    *  rather than looking like a mistake. */
   carried?: number
+  /** What this period has gone past its allowance by. Passed in from what the
+   *  server recorded at the time for the two metered allowances; seats have no
+   *  such record — they are a live headcount — so that row derives it. */
+  over?: number
 }) {
   const width = limit > 0 ? Math.min(100, (used / limit) * 100) : 100
-  const over = used - limit
+  const overBy = over ?? used - limit
   return (
     <div className="usage-row">
       <div className="usage-name">
         {name}
         {carried > 0 ? (
           <small>{carried} carried over from last month</small>
-        ) : over > 0 ? (
-          <small>{over} over the plan</small>
+        ) : overBy > 0 ? (
+          <small>{overBy} over the plan</small>
         ) : (
           hint && <small>{hint}</small>
         )}
@@ -275,6 +280,7 @@ export function BillingPanel() {
             used={usage.sittings}
             limit={allowanceOf(plan.sittings, usage.sittings_carried)}
             carried={usage.sittings_carried}
+            over={usage.sittings_over}
           />
           <UsageRow
             name="AI question drafts"
@@ -282,6 +288,7 @@ export function BillingPanel() {
             used={usage.drafts}
             limit={allowanceOf(plan.drafts, usage.drafts_carried)}
             carried={usage.drafts_carried}
+            over={usage.drafts_over}
           />
           <UsageRow
             name="Seats"

@@ -664,6 +664,11 @@ export interface BillingUsage {
    *  metering without enforcement. */
   sittings_carried: number
   drafts_carried: number
+  /** What this period has gone past its allowance by, as recorded when it
+   *  happened. Not derived from usage vs the current plan: that reads a
+   *  mid-month downgrade as an overrun nobody will be charged for. */
+  sittings_over: number
+  drafts_over: number
   judge_cost_usd: number
   draft_cost_usd: number
 }
