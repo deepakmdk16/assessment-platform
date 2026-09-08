@@ -26,6 +26,17 @@
   --color-accent-soft: #e9f0ff;
   --color-accent-ink: #1e57e6;
 
+  /* Text that sits on a saturated fill (accent buttons, coloured chips, the
+     brand mark). Constant across themes: those fills stay dark either way. */
+  --color-on-accent: #ffffff;
+  /* The second stop of the brand gradient, and the alternate first stop used by
+     the round avatar mark. */
+  --color-brand-grad: #6f5bff;
+  --color-brand-grad-alt: #31527d;
+  /* Monaco paints its own surface this colour, so the wrapper behind it must
+     match or a light-theme editor shows a pale seam while it mounts. */
+  --color-editor-bg: #1e1e1e;
+
   /* Semantic */
   --color-good: #12a150;
   --color-good-soft: #e3f5ea;

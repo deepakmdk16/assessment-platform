@@ -5,7 +5,9 @@ export function badgeClass(value: string | null | undefined): string {
   if (['revoked', 'error', 'fail'].includes(v)) return 'chip chip-bad'
   // TLE is a failure the candidate can act on (too slow), not a wrong answer —
   // warn keeps it visually distinct from FAIL in the per-test table.
-  if (['running', 'pending', 'tle'].includes(v)) return 'chip chip-warn'
+  // `expired` is derived client-side (see invites.ts): the server stores only
+  // active/revoked, so an expired link arrives labelled active.
+  if (['running', 'pending', 'tle', 'expired'].includes(v)) return 'chip chip-warn'
   return 'chip chip-neutral'
 }
 

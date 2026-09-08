@@ -167,9 +167,15 @@ export function IntegrityPanel({ report }: { report: IntegrityReport }) {
 }
 
 /** The header chip: how many signals, at a glance. Null when there are none, so
- *  a clean sitting stays visually quiet. */
+ *  a clean sitting stays visually quiet.
+ *
+ *  Deliberately NOT gated on `monitored`: an unmonitored sitting can still carry
+ *  recorded events (monitoring is frozen at submit, and a sitting can be
+ *  un-proctored after the fact), and hiding the chip there made the header
+ *  contradict the panel below it — the header said nothing happened while the
+ *  tab listed the evidence. */
 export function IntegrityChip({ report }: { report: IntegrityReport }) {
-  if (!report.monitored || report.summary.total === 0) return null
+  if (report.summary.total === 0) return null
   // Colour by the risk level so the header agrees with the tab's banner — a
   // sitting can reach "high" without a blocked paste (devtools + heavy ambient),
   // and the old blocked-pastes rule showed it amber. Blocked-pastes stays the

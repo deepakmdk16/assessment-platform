@@ -5,7 +5,10 @@ import { badgeClass } from '../badges'
 import { Pager } from '../components/Pager'
 import type { AssessmentOut } from '../types'
 
-const PAGE_SIZE = 100
+// 25, not 100: the pager below has always been rendered, but at 100 it only
+// appeared for workspaces large enough that the silent truncation had
+// already bitten. A page you can see the end of is a page you can trust.
+const PAGE_SIZE = 25
 
 export function AssessmentsListPage() {
   const navigate = useNavigate()
@@ -116,7 +119,13 @@ export function AssessmentsListPage() {
                     onClick={() => navigate(`/assessments/${a.id}`)}
                   >
                     <td>
-                      <div className="t-title">{a.title}</div>
+                      <Link
+                        to={`/assessments/${a.id}`}
+                        className="t-title"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {a.title}
+                      </Link>
                     </td>
                     <td className="num">{a.questions.length}</td>
                     <td>

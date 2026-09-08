@@ -67,7 +67,9 @@ export async function createInvite(page: Page, recipients: string[]): Promise<st
   await dialog.getByLabel('Candidate emails').fill(recipients.join(', '))
   await dialog.getByRole('button', { name: 'Send quick screen' }).click()
   await expect(dialog).toBeHidden()
-  const urlCell = page.locator('td.invite-url').first()
+  // The cell now holds the URL plus a Copy button, so read the URL element
+  // itself — the cell's textContent would append the button's label.
+  const urlCell = page.locator('td.invite-url .mono').first()
   await expect(urlCell).toBeVisible()
   const url = (await urlCell.textContent())?.trim()
   if (!url) throw new Error('invite URL cell was empty')

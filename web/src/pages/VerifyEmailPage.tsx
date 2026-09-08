@@ -3,11 +3,12 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { emailFromToken } from '../auth/tokenEmail'
+import { PRODUCT_NAME } from '../branding'
 
 const brand = (
   <div className="brand">
     <span className="brand-mark" aria-hidden="true" />
-    <span className="brand-name">assess.dev</span>
+    <span className="brand-name">{PRODUCT_NAME}</span>
   </div>
 )
 

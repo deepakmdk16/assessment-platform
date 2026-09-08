@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth/AuthContext'
+import { PRODUCT_NAME } from '../branding'
 
 export function RegisterPage() {
   const [name, setName] = useState('')
@@ -32,7 +33,7 @@ export function RegisterPage() {
       <form className="auth-card" onSubmit={handleSubmit}>
         <div className="brand">
           <span className="brand-mark" aria-hidden="true" />
-          <span className="brand-name">assess.dev</span>
+          <span className="brand-name">{PRODUCT_NAME}</span>
         </div>
         <h1>Create your account</h1>
         <p className="auth-lead">Author coding assessments and review graded submissions.</p>

@@ -191,7 +191,7 @@ describe('VariantSetInvitePanel', () => {
     await waitFor(() => expect(api.listVariantSetInvites).toHaveBeenCalled())
 
     await userEvent.type(screen.getByLabelText(/candidate emails/i), 'a@x.io')
-    await userEvent.selectOptions(screen.getByRole('combobox'), 'vb')
+    await userEvent.selectOptions(screen.getByLabelText('Variant for a@x.io'), 'vb')
     await userEvent.click(screen.getByRole('button', { name: /send 1 invite/i }))
 
     await waitFor(() => expect(api.createVariantSetInvites).toHaveBeenCalled())

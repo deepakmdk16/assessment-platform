@@ -173,6 +173,46 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or None
 SMTP_FROM = os.getenv("SMTP_FROM", "no-reply@assessment.local")
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
 
+# The .env.example placeholder. `.local` is a reserved mDNS TLD with no MX, so a
+# send with this From is accepted locally and then bounced by every real
+# receiver. `missing_smtp_vars` counts it as unset rather than as a configured
+# sender — otherwise a presence-only check waves through a server whose every
+# mail bounces, which is exactly the "no original email exists" failure.
+SMTP_FROM_PLACEHOLDER = "no-reply@assessment.local"
+
+# Per socket operation, not per send: smtplib hands this to each connect, TLS
+# handshake, login and send in turn.
+SMTP_TIMEOUT_S = float(os.getenv("SMTP_TIMEOUT_S", "10"))
+# Ceiling on one whole multi-recipient delivery. Without it the worst case for a
+# ten-recipient invite is SMTP_TIMEOUT_S multiplied by every operation in the
+# loop, all of it inline on someone's HTTP request.
+SMTP_DEADLINE_S = float(os.getenv("SMTP_DEADLINE_S", "30"))
+
+# The single, deliberate escape hatch for the startup mail check. OFF by default:
+# a deploy that forgets SMTP must fail on the box where .env is still editable,
+# not silently swallow every invite, confirmation and password reset. Turn it on
+# only for offline local dev, where the mailer logs the link instead of sending
+# it (pair with LOG_PII=true to get the link verbatim).
+ALLOW_UNCONFIGURED_EMAIL = os.getenv("ALLOW_UNCONFIGURED_EMAIL", "").lower() in {"1", "true"}
+
+
+def missing_smtp_vars() -> list[str]:
+    """Names of the mail settings that are unset or still on the placeholder.
+
+    Reads the environment directly rather than the module constants above,
+    because SMTP_HOST is hard-nulled under TESTING — using the constant would
+    report it missing in every test process.
+    """
+    required = {
+        "SMTP_HOST": os.getenv("SMTP_HOST"),
+        "SMTP_PORT": os.getenv("SMTP_PORT", "587"),
+        "SMTP_USER": SMTP_USER,
+        "SMTP_PASSWORD": SMTP_PASSWORD,
+        "SMTP_FROM": None if SMTP_FROM == SMTP_FROM_PLACEHOLDER else SMTP_FROM,
+    }
+    return [name for name, value in required.items() if not value]
+
+
 # Rate limits (requests per window, seconds). Guards brute-force on login and
 # spam on the public candidate submit (which triggers paid agent jobs).
 # Set the *_MAX to 0 to disable a given limiter.

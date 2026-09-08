@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ThemeProvider } from '../../theme/ThemeContext'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SubmissionDetailPage } from '../SubmissionDetailPage'
-import { api } from '../../api'
+import { api, ApiError } from '../../api'
 import type { AgentFullResult, QuestionOut, SubmissionDetail } from '../../types'
 
 vi.mock('../../api', () => {
@@ -21,6 +21,7 @@ vi.mock('../../api', () => {
       getQuestion: vi.fn(),
       // I1: the panel loads alongside the report; a clean sitting by default so
       // these cases stay about the report itself.
+      retrySubmission: vi.fn(),
       getSubmissionIntegrity: vi.fn(() =>
         Promise.resolve({
           monitored: true,
@@ -232,5 +233,104 @@ describe('SubmissionDetailPage', () => {
     renderPage()
 
     expect(await screen.findByText(/grading couldn’t complete/i)).toBeInTheDocument()
+  })
+
+  it('surfaces the grading details the API already returned', async () => {
+    renderPage()
+
+    // Both are on the payload today and were rendered nowhere. agent_job_id is
+    // the only handle for correlating with the agent's own logs; received_at
+    // answers "when was this graded", which created_at does not.
+    expect(await screen.findByText('job1')).toBeInTheDocument()
+    expect(screen.getByText('Grading details')).toBeInTheDocument()
+  })
+
+  it('offers a working retry when grading failed, instead of pointing elsewhere', async () => {
+    const errored: SubmissionDetail = { ...submission, status: 'error', result: null }
+    const pending: SubmissionDetail = { ...errored, status: 'pending' }
+    vi.mocked(api.getSubmission).mockResolvedValue(errored)
+    vi.mocked(api.retrySubmission).mockResolvedValue(pending)
+    const user = userEvent.setup()
+    renderPage()
+
+    expect(await screen.findByText(/grading couldn.t complete/i)).toBeInTheDocument()
+    // The old copy sent the interviewer to a list that had no retry control.
+    expect(screen.queryByText(/retry it from the submissions list/i)).not.toBeInTheDocument()
+
+    // The restarted poll re-fetches, so the server is the source of truth from
+    // here — mirror a backend that has accepted the retry.
+    vi.mocked(api.getSubmission).mockResolvedValue(pending)
+    await user.click(screen.getByRole('button', { name: /retry grading/i }))
+
+    expect(api.retrySubmission).toHaveBeenCalledWith('sub1')
+    expect(await screen.findByText(/grading in progress/i)).toBeInTheDocument()
+  })
+
+  it('restarts polling after a retry, so the grade actually appears', async () => {
+    // The poll effect keys on [id, retryKey]. Without the retryKey bump it never
+    // re-runs — its previous pass had already stopped, because the status was
+    // `error` — and the page promises updates that never come.
+    const errored: SubmissionDetail = { ...submission, status: 'error', result: null }
+    vi.mocked(api.getSubmission).mockResolvedValue(errored)
+    vi.mocked(api.retrySubmission).mockResolvedValue({ ...errored, status: 'pending' })
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByText(/grading couldn.t complete/i)
+    const before = vi.mocked(api.getSubmission).mock.calls.length
+
+    // The grade lands between the retry and the next poll tick.
+    vi.mocked(api.getSubmission).mockResolvedValue(submission)
+    await user.click(screen.getByRole('button', { name: /retry grading/i }))
+
+    expect(await screen.findByText('FAIL')).toBeInTheDocument()
+    expect(vi.mocked(api.getSubmission).mock.calls.length).toBeGreaterThan(before)
+  })
+
+  it("shows the server's own words when a retry is refused", async () => {
+    vi.mocked(api.getSubmission).mockResolvedValue({
+      ...submission,
+      status: 'error',
+      result: null,
+    })
+    // 409: the status moved on. The server's wording beats a generic failure.
+    vi.mocked(api.retrySubmission).mockRejectedValue(
+      new ApiError(409, 'submission is not in an error state'),
+    )
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: /retry grading/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/not in an error state/i)
+  })
+
+  it('says the integrity report failed to load rather than spinning forever', async () => {
+    vi.mocked(api.getSubmissionIntegrity).mockRejectedValueOnce(new Error('network'))
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: /integrity/i }))
+
+    expect(await screen.findByText(/couldn.t load the integrity report/i)).toBeInTheDocument()
+    // Absence of evidence is the thing being judged on this screen, so a read
+    // failure must never read as an empty timeline.
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument()
+
+    vi.mocked(api.getSubmissionIntegrity).mockResolvedValueOnce({
+      monitored: true,
+      summary: {
+        total: 0,
+        focus_losses: 0,
+        away_ms: 0,
+        fullscreen_exits: 0,
+        pastes_blocked: 0,
+        devtools_opens: 0,
+      },
+      events: [],
+    })
+    await user.click(screen.getByRole('button', { name: /^retry$/i }))
+
+    expect(await screen.findByText(/stayed in fullscreen/i)).toBeInTheDocument()
   })
 })

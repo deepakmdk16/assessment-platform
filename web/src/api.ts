@@ -346,6 +346,14 @@ export const api = {
   getSubmissionIntegrity: (submissionId: string) =>
     request<IntegrityReport>(`/submissions/${submissionId}/integrity`, { auth: true }),
 
+  /** Re-trigger the agent for a submission whose grading failed. The server
+   *  409s unless status is `error`, so the caller can surface that verbatim. */
+  retrySubmission: (submissionId: string) =>
+    request<SubmissionDetail>(`/submissions/${submissionId}/retry`, {
+      method: 'POST',
+      auth: true,
+    }),
+
   startInvite: (token: string, candidate_email: string, candidate_name?: string) =>
     request<InviteStartResponse>(`/invite/${token}/start`, {
       method: 'POST',

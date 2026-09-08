@@ -230,6 +230,8 @@ export function NewAssessmentPage() {
               slots.map((slot, i) => {
                 const q = slot.kind === 'question' ? qById.get(slot.id) : undefined
                 const vs = slot.kind === 'set' ? setById.get(slot.id) : undefined
+                // Names the row, so N identical arrow buttons are distinguishable.
+                const label = q?.title ?? vs?.title ?? slot.id
                 return (
                   <div className={`q-pick${vs ? ' set' : ''}`} key={`${slot.kind}:${slot.id}`}>
                     <span className="q-ord">{i + 1}</span>
@@ -246,13 +248,31 @@ export function NewAssessmentPage() {
                         </span>
                       )}
                     </span>
-                    <button type="button" className="mini" title="Move up" onClick={() => move(i, -1)}>
+                    <button
+                      type="button"
+                      className="mini"
+                      title="Move up"
+                      aria-label={`Move ${label} up`}
+                      onClick={() => move(i, -1)}
+                    >
                       ↑
                     </button>
-                    <button type="button" className="mini" title="Move down" onClick={() => move(i, 1)}>
+                    <button
+                      type="button"
+                      className="mini"
+                      title="Move down"
+                      aria-label={`Move ${label} down`}
+                      onClick={() => move(i, 1)}
+                    >
                       ↓
                     </button>
-                    <button type="button" className="mini" title="Remove" onClick={() => remove(i)}>
+                    <button
+                      type="button"
+                      className="mini"
+                      title="Remove"
+                      aria-label={`Remove ${label}`}
+                      onClick={() => remove(i)}
+                    >
                       ✕
                     </button>
                   </div>

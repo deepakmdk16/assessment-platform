@@ -2,7 +2,10 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass, difficultyClass } from '../badges'
+import { ExpiryField } from '../components/ExpiryField'
 import { IntegrityCell } from '../components/IntegrityPanel'
+import { InviteTable } from '../components/InviteTable'
+import { describeRecipients, parseRecipients } from '../invites'
 import { Pager } from '../components/Pager'
 import type { Invite, InviteDelivery, QuestionOut, SubmissionRow } from '../types'
 
@@ -29,11 +32,15 @@ export function QuestionDetailPage() {
   // deliberate act, so the dismiss button goes back to reading "Cancel".
   const [isNudge, setIsNudge] = useState(justCreated)
   const dialogRef = useRef<HTMLDialogElement>(null)
+  const deleteDialogRef = useRef<HTMLDialogElement>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const [recipients, setRecipients] = useState('')
+  const [inviteExpiresAt, setInviteExpiresAt] = useState<string | null>(null)
   const [creatingInvite, setCreatingInvite] = useState(false)
   const [inviteError, setInviteError] = useState<string | null>(null)
-  const [copiedUrl, setCopiedUrl] = useState<string | null>(null)
   const [revokingToken, setRevokingToken] = useState<string | null>(null)
   const [revokeError, setRevokeError] = useState<{ token: string; message: string } | null>(null)
   // Emailing is best-effort, so a created invite may still not have reached
@@ -78,11 +85,41 @@ export function QuestionDetailPage() {
     if (!inviteOpen && el.open) el.close()
   }, [inviteOpen, question])
 
+  useEffect(() => {
+    const el = deleteDialogRef.current
+    if (!el) return
+    if (deleteOpen && !el.open) el.showModal()
+    if (!deleteOpen && el.open) el.close()
+  }, [deleteOpen, question])
+
+  function openDeleteDialog() {
+    setDeleteError(null)
+    setDeleteOpen(true)
+  }
+
+  async function handleDelete() {
+    if (!id) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await api.deleteQuestion(id)
+      navigate('/dashboard')
+    } catch (err) {
+      // The server already refuses when submissions exist, and its message names
+      // the count and the alternative. Showing it verbatim beats paraphrasing a
+      // rule that lives server-side.
+      setDeleteError(err instanceof ApiError ? err.message : 'Failed to delete question')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   function closeInviteDialog() {
     setInviteOpen(false)
     setIsNudge(false)
     setInviteError(null)
     setRecipients('')
+    setInviteExpiresAt(null)
   }
 
   async function handleCreateInvite(e: FormEvent) {
@@ -91,11 +128,9 @@ export function QuestionDetailPage() {
     setInviteError(null)
     setUndelivered([])
     setSentTo([])
-    // Accept the comma- or newline-separated list interviewers actually paste.
-    const recipientList = recipients
-      .split(/[,\n]/)
-      .map((r) => r.trim())
-      .filter(Boolean)
+    // One shared parser: commas, semicolons and whitespace, lower-cased and
+    // de-duplicated, so the same paste behaves identically on all three screens.
+    const recipientList = parseRecipients(recipients)
     if (recipientList.length === 0) {
       // No recipients means no link: it would be one nobody could open.
       setInviteError('Enter at least one candidate email — the link only works for these addresses.')
@@ -103,7 +138,10 @@ export function QuestionDetailPage() {
     }
     setCreatingInvite(true)
     try {
-      const invite = await api.createInvite(id, { recipients: recipientList })
+      const invite = await api.createInvite(id, {
+        recipients: recipientList,
+        expires_at: inviteExpiresAt,
+      })
       setInvites((prev) => [invite, ...prev])
       setUndelivered(invite.deliveries.filter((d) => !d.sent))
       setSentTo(invite.deliveries.filter((d) => d.sent).map((d) => d.recipient))
@@ -133,16 +171,6 @@ export function QuestionDetailPage() {
     }
   }
 
-  async function copyUrl(url: string) {
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopiedUrl(url)
-      setTimeout(() => setCopiedUrl(null), 2000)
-    } catch {
-      // clipboard API unavailable; ignore
-    }
-  }
-
   if (error) return <p className="form-error">{error}</p>
   if (!question) return <p className="page-loading">Loading…</p>
 
@@ -152,6 +180,14 @@ export function QuestionDetailPage() {
         <div>
           <h1>{question.title}</h1>
           <div className="sub">Created {new Date(question.created_at).toLocaleDateString()}</div>
+        </div>
+        <div className="head-actions">
+          <Link to={`/questions/${question.id}/edit`} className="btn sec">
+            Edit
+          </Link>
+          <button type="button" className="btn danger" onClick={openDeleteDialog}>
+            Delete
+          </button>
         </div>
       </div>
 
@@ -179,6 +215,47 @@ export function QuestionDetailPage() {
                 )}
               </>
             )}
+            <h2>Test cases</h2>
+            <p className="muted">
+              The answer key — never sent to the candidate. Only the worked example above is
+              public.
+            </p>
+            {question.test_cases.length === 0 ? (
+              <p className="empty-state">No test cases on this question.</p>
+            ) : (
+              <div className="tbl-wrap">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Category</th>
+                      <th className="th-num">Weight</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {question.test_cases.map((tc) => (
+                      <tr key={tc.id}>
+                        <td>
+                          <details>
+                            <summary className="t-title">{tc.name}</summary>
+                            <div className="io">
+                              <span className="io-label">Input</span>
+                              <pre className="code">{tc.stdin}</pre>
+                            </div>
+                            <div className="io">
+                              <span className="io-label">Expected</span>
+                              <pre className="code">{tc.expected}</pre>
+                            </div>
+                          </details>
+                        </td>
+                        <td>{tc.category}</td>
+                        <td className="num">{tc.weight}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             {question.reference_solution && (
               <details className="draft-reference">
                 <summary>
@@ -193,70 +270,14 @@ export function QuestionDetailPage() {
           {invites.length > 0 && (
             <>
               <h2 className="sect-title">Quick screens</h2>
-              <div className="card tbl-wrap">
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th>Link</th>
-                      <th>Recipients &amp; delivery</th>
-                      <th>Status</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invites.map((invite) => (
-                      <tr key={invite.token}>
-                        <td className="invite-url">{invite.url}</td>
-                        <td>
-                          {invite.deliveries.length > 0 ? (
-                            <ul className="recip-list">
-                              {invite.deliveries.map((d) => (
-                                <li className="recip" key={d.recipient}>
-                                  <span className={`recip-dot ${d.sent ? 'ok' : 'fail'}`} />
-                                  <span className="recip-addr">{d.recipient}</span>
-                                  {!d.sent && d.error && (
-                                    <span className="recip-why">— {d.error}</span>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                          ) : (
-                            invite.recipients.join(', ') || '—'
-                          )}
-                        </td>
-                        <td>
-                          <span className={badgeClass(invite.status)}>{invite.status}</span>
-                        </td>
-                        <td>
-                          <div className="row-actions">
-                            <button
-                              type="button"
-                              className="btn sec sm"
-                              onClick={() => copyUrl(invite.url)}
-                            >
-                              {copiedUrl === invite.url ? 'Copied!' : 'Copy link'}
-                            </button>
-                            {invite.status === 'active' && (
-                              <button
-                                type="button"
-                                className="btn danger sm"
-                                onClick={() => handleRevoke(invite.token)}
-                                disabled={revokingToken === invite.token}
-                              >
-                                {revokingToken === invite.token ? 'Revoking…' : 'Revoke'}
-                              </button>
-                            )}
-                            {revokeError?.token === invite.token && (
-                              <p role="alert" className="form-error">
-                                {revokeError.message}
-                              </p>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="card">
+                <InviteTable
+                  invites={invites}
+                  showDeliveries
+                  onRevoke={handleRevoke}
+                  revokingToken={revokingToken}
+                  revokeError={revokeError}
+                />
               </div>
             </>
           )}
@@ -291,7 +312,13 @@ export function QuestionDetailPage() {
                       title="View submission detail"
                     >
                       <td>
-                        <div className="t-title">{s.candidate_name}</div>
+                        <Link
+                          to={`/submissions/${s.submission_id}`}
+                          className="t-title"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {s.candidate_name}
+                        </Link>
                         <div className="cellsub">{s.candidate_email}</div>
                       </td>
                       <td>{s.language}</td>
@@ -385,6 +412,12 @@ export function QuestionDetailPage() {
               <span className="k">Test cases</span>
               <span className="num">{question.test_cases.length}</span>
             </div>
+            {question.duration_minutes != null && (
+              <div className="kv">
+                <span className="k">Time allowed</span>
+                <span className="num">{question.duration_minutes} min</span>
+              </div>
+            )}
             {question.required_complexity && (
               <div className="kv">
                 <span className="k">Complexity</span>
@@ -394,6 +427,44 @@ export function QuestionDetailPage() {
           </div>
         </aside>
       </div>
+
+      <dialog
+        ref={deleteDialogRef}
+        className="modal"
+        aria-labelledby="delete-dialog-title"
+        onClose={() => setDeleteOpen(false)}
+      >
+        <div className="stack">
+          <h2 id="delete-dialog-title">Delete this question?</h2>
+          <p>
+            <b>{question.title}</b> and its {question.test_cases.length} test case
+            {question.test_cases.length === 1 ? '' : 's'} are removed for good, along with any
+            invites that point at it. This can't be undone.
+          </p>
+          <p className="muted">
+            Archiving hides a question from the library and keeps its history. Deleting is for a
+            question that was never really used.
+          </p>
+          {deleteError && (
+            <p role="alert" className="form-error">
+              {deleteError}
+            </p>
+          )}
+          <div className="modal-actions">
+            <button type="button" className="btn sec" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn danger"
+              onClick={() => void handleDelete()}
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting…' : 'Delete question'}
+            </button>
+          </div>
+        </div>
+      </dialog>
 
       <dialog
         ref={dialogRef}
@@ -416,8 +487,12 @@ export function QuestionDetailPage() {
               onChange={(e) => setRecipients(e.target.value)}
               placeholder="alice@example.com, bob@example.com"
             />
-            <p className="cellsub">Separate multiple addresses with a comma or a new line.</p>
+            <p className="field-hint">
+              {describeRecipients(recipients) ??
+                'Separate addresses with a comma, a semicolon or a new line.'}
+            </p>
           </div>
+          <ExpiryField value={inviteExpiresAt} onChange={setInviteExpiresAt} idPrefix="q" />
           {inviteError && (
             <p role="alert" className="form-error">
               {inviteError}

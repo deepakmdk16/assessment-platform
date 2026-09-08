@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError, exportSubmissionsCsv } from '../api'
 import { badgeClass } from '../badges'
 import { IntegrityCell } from '../components/IntegrityPanel'
 import { Pager } from '../components/Pager'
 import type { SubmissionSummary } from '../types'
 
-const PAGE_SIZE = 100
+// 25, not 100: the pager below has always been rendered, but at 100 it only
+// appeared for workspaces large enough that the silent truncation had
+// already bitten. A page you can see the end of is a page you can trust.
+const PAGE_SIZE = 25
 // Enough to title-map every question a normal workspace has; ids beyond this
 // fall back to showing the raw question_id.
 const QUESTION_FETCH_LIMIT = 200
@@ -19,6 +22,41 @@ export function SubmissionsPage() {
   const [titles, setTitles] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  // Keyed by submission id: two failed rows must not share one spinner or one
+  // error message.
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set())
+  const [retryErrors, setRetryErrors] = useState<Record<string, string>>({})
+
+  async function handleRetry(submissionId: string) {
+    setRetryingIds((prev) => new Set(prev).add(submissionId))
+    setRetryErrors((prev) => {
+      if (!(submissionId in prev)) return prev
+      const next = { ...prev }
+      delete next[submissionId]
+      return next
+    })
+    try {
+      const updated = await api.retrySubmission(submissionId)
+      // Swap the row in place rather than refetching the page — an offset reload
+      // would shuffle rows under the pointer while other retries are in flight.
+      setSubmissions((prev) =>
+        prev
+          ? prev.map((s) => (s.id === submissionId ? { ...s, status: updated.status } : s))
+          : prev,
+      )
+    } catch (err) {
+      setRetryErrors((prev) => ({
+        ...prev,
+        [submissionId]: err instanceof ApiError ? err.message : 'Failed to retry grading',
+      }))
+    } finally {
+      setRetryingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(submissionId)
+        return next
+      })
+    }
+  }
 
   async function handleExport() {
     setError(null)
@@ -111,6 +149,9 @@ export function SubmissionsPage() {
                   <th>Score</th>
                   <th>Integrity</th>
                   <th>Submitted</th>
+                  {/* Actions. Unlabelled: the column is empty for all but the
+                      handful of rows whose grading failed. */}
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -122,11 +163,25 @@ export function SubmissionsPage() {
                     title="View submission detail"
                   >
                     <td>
-                      <div className="t-title">{s.candidate}</div>
+                      <Link
+                        to={`/submissions/${s.id}`}
+                        className="t-title"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {s.candidate}
+                      </Link>
                       {s.candidate_email && <div className="cellsub">{s.candidate_email}</div>}
                     </td>
                     <td>
-                      {s.assessment_title ? (
+                      {s.assessment_title && s.assessment_id ? (
+                        <Link
+                          to={`/assessments/${s.assessment_id}`}
+                          className="chip chip-neutral"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {s.assessment_title}
+                        </Link>
+                      ) : s.assessment_title ? (
                         <span className="chip chip-neutral">{s.assessment_title}</span>
                       ) : (
                         <span className="muted">Standalone</span>
@@ -161,6 +216,29 @@ export function SubmissionsPage() {
                       />
                     </td>
                     <td>{new Date(s.created_at).toLocaleDateString()}</td>
+                    <td>
+                      {s.status === 'error' && (
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="btn sec sm"
+                            // The row navigates on click; the action must not.
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void handleRetry(s.id)
+                            }}
+                            disabled={retryingIds.has(s.id)}
+                          >
+                            {retryingIds.has(s.id) ? 'Retrying…' : 'Retry'}
+                          </button>
+                          {retryErrors[s.id] && (
+                            <p role="alert" className="form-error">
+                              {retryErrors[s.id]}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

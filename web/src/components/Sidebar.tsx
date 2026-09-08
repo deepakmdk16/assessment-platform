@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { ThemeToggle } from './ThemeToggle'
+import { PRODUCT_NAME } from '../branding'
 
 function initials(name: string): string {
   return name
@@ -27,18 +28,26 @@ export function Sidebar() {
     <aside className="sidebar">
       <Link to="/dashboard" className="brand">
         <span className="brand-mark" aria-hidden="true" />
-        <span className="brand-name">assess.dev</span>
+        <span className="brand-name">{PRODUCT_NAME}</span>
       </Link>
 
       <div className="nav-label">Workspace</div>
       <nav className="nav">
-        <Link to="/dashboard" className={onQuestions ? 'on' : undefined}>
+        <Link
+          to="/dashboard"
+          className={onQuestions ? 'on' : undefined}
+          aria-current={onQuestions ? 'page' : undefined}
+        >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M4 6h16M4 12h16M4 18h10" />
           </svg>
           Questions
         </Link>
-        <Link to="/variant-sets" className={onVariantSets ? 'on' : undefined}>
+        <Link
+          to="/variant-sets"
+          className={onVariantSets ? 'on' : undefined}
+          aria-current={onVariantSets ? 'page' : undefined}
+        >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <rect x="3" y="3" width="7" height="7" rx="1.5" />
             <rect x="14" y="3" width="7" height="7" rx="1.5" />
@@ -47,13 +56,21 @@ export function Sidebar() {
           </svg>
           Variant sets
         </Link>
-        <Link to="/assessments" className={onAssessments ? 'on' : undefined}>
+        <Link
+          to="/assessments"
+          className={onAssessments ? 'on' : undefined}
+          aria-current={onAssessments ? 'page' : undefined}
+        >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M4 5h16v14H4zM4 10h16M10 10v9" />
           </svg>
           Assessments
         </Link>
-        <Link to="/submissions" className={onSubmissions ? 'on' : undefined}>
+        <Link
+          to="/submissions"
+          className={onSubmissions ? 'on' : undefined}
+          aria-current={onSubmissions ? 'page' : undefined}
+        >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M9 5h9M9 12h9M9 19h9M4 5h.01M4 12h.01M4 19h.01" />
           </svg>
@@ -65,7 +82,11 @@ export function Sidebar() {
           </svg>
           New question
         </Link>
-        <Link to="/settings" className={onSettings ? 'on' : undefined}>
+        <Link
+          to="/settings"
+          className={onSettings ? 'on' : undefined}
+          aria-current={onSettings ? 'page' : undefined}
+        >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />

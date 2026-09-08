@@ -1,5 +1,5 @@
-import { Fragment, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Fragment, useEffect, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { difficultyClass } from '../badges'
 import { LANGUAGES } from '../types'
@@ -65,6 +65,15 @@ const DURATION_BY_DIFFICULTY: Record<string, number> = { easy: 20, medium: 30, h
 
 export function AddQuestionPage() {
   const navigate = useNavigate()
+  // Edit mode when the route carries an id. The wizard is otherwise identical —
+  // the same validation, the same steps — so authoring and correcting can't
+  // drift apart.
+  const { id: editId } = useParams<{ id: string }>()
+  const isEdit = Boolean(editId)
+  const [loading, setLoading] = useState(isEdit)
+  // A failed seed must not fall through to an empty-but-saveable wizard: PUT is
+  // a full replace, so saving it would blank the question it failed to load.
+  const [seedFailed, setSeedFailed] = useState(false)
 
   const [step, setStep] = useState(0)
 
@@ -102,17 +111,73 @@ export function AddQuestionPage() {
   const [referenceSolution, setReferenceSolution] = useState<string | null>(null)
   const [referenceLanguage, setReferenceLanguage] = useState<string | null>(null)
 
+  // Seed from the existing question. `reference_solution` and `reference_language`
+  // have no editable control anywhere in the wizard — they are only ever produced
+  // by a draft — so carrying them through here is what stops an edit from wiping
+  // an AI-drafted question's oracle.
+  useEffect(() => {
+    if (!editId) return
+    let cancelled = false
+    api
+      .getQuestion(editId)
+      .then((q) => {
+        if (cancelled) return
+        setTitle(q.title)
+        setPrompt(q.prompt)
+        setConstraints(q.constraints)
+        setTimeLimitS(q.time_limit_s)
+        setPassThreshold(Math.round(q.pass_threshold * 100))
+        setRequiredComplexity(q.required_complexity ?? '')
+        setExampleInput(q.example_input ?? '')
+        setExampleOutput(q.example_output ?? '')
+        // Not 'medium': a question with no difficulty must round-trip as none,
+        // or a no-op edit silently stamps one on.
+        setDifficulty(q.difficulty ?? '')
+        setReferenceSolution(q.reference_solution ?? null)
+        setReferenceLanguage(q.reference_language ?? null)
+        if (q.duration_minutes == null) {
+          setIndefinite(true)
+        } else {
+          setDurationMinutes(q.duration_minutes)
+        }
+        // The seeded duration is the question's own, not a difficulty default —
+        // mark it touched so changing difficulty can't silently overwrite it.
+        setDurationTouched(true)
+        setTestCases(
+          q.test_cases.length > 0
+            ? q.test_cases.map((tc) => ({
+                name: tc.name,
+                stdin: tc.stdin,
+                expected: tc.expected,
+                category: tc.category,
+                weight: tc.weight,
+              }))
+            : [emptyTestCase()],
+        )
+        setLoading(false)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(err instanceof ApiError ? err.message : 'Failed to load question')
+        setSeedFailed(true)
+        setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [editId])
+
   async function handleDraft() {
     if (!brief.trim()) {
       setDraftError({ message: 'Enter a brief to draft from.', canRetry: false })
       return
     }
     setDraftError(null)
-    // Clear any prior draft's output so a failed re-draft doesn't leave stale
-    // warnings / reference solution on screen.
+    // Clear the previous draft's warnings up front, but NOT the reference: a
+    // failed re-draft would then leave `reference_solution` null in form state,
+    // and the next Save would write that null over the stored oracle every
+    // expected output came from. Cleared on success instead, below.
     setDraftWarnings([])
-    setReferenceSolution(null)
-    setReferenceLanguage(null)
     setDrafting(true)
     try {
       const res = await api.draftQuestion({
@@ -133,6 +198,7 @@ export function AddQuestionPage() {
       setExampleOutput(q.example_output ?? '')
       setTestCases(q.test_cases.length > 0 ? q.test_cases : [emptyTestCase()])
       setDraftWarnings(res.warnings)
+      // Success: the new draft's reference replaces the old one.
       setReferenceSolution(res.reference_solution)
       setReferenceLanguage(res.reference_language)
     } catch (err) {
@@ -199,7 +265,7 @@ export function AddQuestionPage() {
     setError(null)
     setSubmitting(true)
     try {
-      const created = await api.createQuestion({
+      const payload = {
         title,
         prompt,
         constraints,
@@ -216,23 +282,50 @@ export function AddQuestionPage() {
         reference_language: referenceLanguage,
         duration_minutes: indefinite ? null : durationMinutes,
         test_cases: testCases,
-      })
-      // `justCreated` opens the invite dialog once, as a nudge — inviting is
-      // optional, so it offers "Skip for now" rather than blocking the page.
-      navigate(`/questions/${created.id}`, { state: { justCreated: true } })
+      }
+      if (editId) {
+        await api.updateQuestion(editId, payload)
+        navigate(`/questions/${editId}`)
+      } else {
+        const created = await api.createQuestion(payload)
+        // `justCreated` opens the invite dialog once, as a nudge — inviting is
+        // optional, so it offers "Skip for now" rather than blocking the page.
+        navigate(`/questions/${created.id}`, { state: { justCreated: true } })
+      }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to create question')
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : `Failed to ${editId ? 'save' : 'create'} question`,
+      )
     } finally {
       setSubmitting(false)
     }
   }
 
+  if (loading) return <p className="page-loading">Loading…</p>
+  if (seedFailed)
+    return (
+      <div className="wizard">
+        <p role="alert" className="form-error">
+          {error ?? 'Failed to load question'}
+        </p>
+        <button type="button" className="btn sec" onClick={() => window.location.reload()}>
+          Try again
+        </button>
+      </div>
+    )
+
   return (
     <div className="wizard">
       <div className="page-head">
         <div>
-          <h1>New question</h1>
-          <div className="sub">Draft with AI or author by hand — review every step before it's saved.</div>
+          <h1>{isEdit ? 'Edit question' : 'New question'}</h1>
+          <div className="sub">
+            {isEdit
+              ? 'Changes apply to future sittings. Existing submissions keep the grade they were given.'
+              : "Draft with AI or author by hand — review every step before it's saved."}
+          </div>
         </div>
       </div>
 
@@ -431,6 +524,25 @@ export function AddQuestionPage() {
                   />
                 </div>
               </div>
+              {isEdit && (
+                <div className="field">
+                  {/* Difficulty lives in the "Draft with AI" panel when authoring,
+                      where it steers the draft. There is no drafting in edit mode,
+                      so the property needs its own control here — otherwise a save
+                      would write back whatever the panel's default happened to be. */}
+                  <label htmlFor="edit-difficulty">Difficulty</label>
+                  <select
+                    id="edit-difficulty"
+                    value={difficulty}
+                    onChange={(e) => setDifficulty(e.target.value)}
+                  >
+                    <option value="">— none —</option>
+                    <option value="easy">easy</option>
+                    <option value="medium">medium</option>
+                    <option value="hard">hard</option>
+                  </select>
+                </div>
+              )}
               <div className="field">
                 <label htmlFor="required_complexity">Required complexity</label>
                 <input
@@ -517,18 +629,20 @@ export function AddQuestionPage() {
                 </div>
                 <div className="tc-io">
                   <div>
-                    <label>Input (stdin)</label>
+                    <label htmlFor={`tc-${i}-stdin`}>Input (stdin)</label>
                     <textarea
-                      aria-label={`Test case ${i + 1} stdin`}
+                      id={`tc-${i}-stdin`}
+                      aria-label={`Test case ${i + 1} input (stdin)`}
                       placeholder="stdin passed to the program"
                       value={tc.stdin}
                       onChange={(e) => updateTestCase(i, { stdin: e.target.value })}
                     />
                   </div>
                   <div>
-                    <label>Expected output</label>
+                    <label htmlFor={`tc-${i}-expected`}>Expected output</label>
                     <textarea
-                      aria-label={`Test case ${i + 1} expected`}
+                      id={`tc-${i}-expected`}
+                      aria-label={`Test case ${i + 1} expected output`}
                       placeholder="exact expected stdout"
                       value={tc.expected}
                       onChange={(e) => updateTestCase(i, { expected: e.target.value })}
@@ -570,6 +684,13 @@ export function AddQuestionPage() {
         {step === LAST_STEP && (
           <div className="card pad">
             <div className="card-title">Review</div>
+            {isEdit && referenceSolution && (
+              <p className="muted">
+                This question's AI reference solution ({referenceLanguage ?? 'unknown language'})
+                is kept as-is. It is the oracle every expected output came from, so the wizard
+                never edits or clears it.
+              </p>
+            )}
             <dl className="review-list">
               <dt>Title</dt>
               <dd>{title}</dd>
@@ -603,7 +724,13 @@ export function AddQuestionPage() {
             </button>
           ) : (
             <button type="button" className="btn" onClick={handleCreate} disabled={submitting}>
-              {submitting ? 'Creating…' : 'Create question'}
+              {submitting
+                ? isEdit
+                  ? 'Saving…'
+                  : 'Creating…'
+                : isEdit
+                  ? 'Save changes'
+                  : 'Create question'}
             </button>
           )}
         </div>

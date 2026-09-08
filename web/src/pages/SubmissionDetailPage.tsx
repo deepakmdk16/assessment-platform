@@ -28,6 +28,17 @@ export function SubmissionDetailPage() {
   // The sitting's integrity signals (I1). Loaded once — signals stop when the
   // candidate submits, so unlike the grade there's nothing to poll for.
   const [integrity, setIntegrity] = useState<IntegrityReport | null>(null)
+  // Distinguish "still loading" from "the fetch failed". Without this the tab
+  // renders Loading… forever on a failure, on the one screen where absence of
+  // evidence is the thing being judged.
+  const [integrityFailed, setIntegrityFailed] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState<string | null>(null)
+  // Restarts the poll. The poll effect keys on [id, retryKey]: after a retry the
+  // id has not changed, so without this the effect never re-runs — and its last
+  // pass had already stopped, because at that point the status was `error`. The
+  // page would sit on "updates automatically" forever.
+  const [retryKey, setRetryKey] = useState(0)
 
   async function handleDownloadReport() {
     if (!id) return
@@ -84,8 +95,10 @@ export function SubmissionDetailPage() {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [id])
+  }, [id, retryKey])
 
+  // Promise-chain rather than await: setState belongs in the callback, not in
+  // the effect body, or every load cascades an extra render.
   useEffect(() => {
     if (!id) return
     let cancelled = false
@@ -94,11 +107,42 @@ export function SubmissionDetailPage() {
       .then((r) => {
         if (!cancelled) setIntegrity(r)
       })
-      .catch(() => undefined)  // the report is supporting evidence; never block the page
+      // Supporting evidence — never block the page. But do record the failure,
+      // so the tab can say so instead of spinning on "Loading…" forever.
+      .catch(() => {
+        if (!cancelled) setIntegrityFailed(true)
+      })
     return () => {
       cancelled = true
     }
   }, [id])
+
+  async function handleRetryIntegrity() {
+    if (!id) return
+    setIntegrityFailed(false)
+    try {
+      setIntegrity(await api.getSubmissionIntegrity(id))
+    } catch {
+      setIntegrityFailed(true)
+    }
+  }
+
+  async function handleRetryGrading() {
+    if (!id) return
+    setRetrying(true)
+    setRetryError(null)
+    try {
+      setSub(await api.retrySubmission(id))
+      setPollTimedOut(false)
+      setRetryKey((k) => k + 1)
+    } catch (err) {
+      // A 409 means the status moved on (someone else retried, or it graded);
+      // the server's own wording is more useful than a generic failure.
+      setRetryError(err instanceof ApiError ? err.message : 'Failed to retry grading')
+    } finally {
+      setRetrying(false)
+    }
+  }
 
   if (error) return <p className="form-error">{error}</p>
   if (!sub) return <p className="page-loading">Loading…</p>
@@ -212,11 +256,34 @@ export function SubmissionDetailPage() {
       {tab === 'integrity' ? (
         integrity ? (
           <IntegrityPanel report={integrity} />
+        ) : integrityFailed ? (
+          <div className="form-error" role="alert">
+            <p>
+              <strong>Couldn’t load the integrity report</strong>
+            </p>
+            <p>
+              Nothing was lost — the sitting’s signals are stored. This is a read failure, not an
+              empty timeline.
+            </p>
+            <button
+              type="button"
+              className="btn sec sm"
+              onClick={() => void handleRetryIntegrity()}
+            >
+              Retry
+            </button>
+          </div>
         ) : (
           <p className="page-loading">Loading…</p>
         )
       ) : !result ? (
-        <GradingNotice status={sub.status} timedOut={pollTimedOut} />
+        <GradingNotice
+          status={sub.status}
+          timedOut={pollTimedOut}
+          onRetry={handleRetryGrading}
+          retrying={retrying}
+          retryError={retryError}
+        />
       ) : tab === 'report' ? (
         <ReportTab
           reason={result.reason}
@@ -227,6 +294,8 @@ export function SubmissionDetailPage() {
           pointsTotal={full?.points_total}
           passThresholdPct={full?.pass_threshold_pct}
           quality={quality ?? null}
+          agentJobId={sub.agent_job_id ?? null}
+          receivedAt={result.received_at ?? null}
         />
       ) : (
         <TestsTab cases={cases} />
@@ -303,15 +372,35 @@ export function SubmissionDetailPage() {
   )
 }
 
-function GradingNotice({ status, timedOut }: { status: string; timedOut: boolean }) {
+function GradingNotice({
+  status,
+  timedOut,
+  onRetry,
+  retrying,
+  retryError,
+}: {
+  status: string
+  timedOut: boolean
+  onRetry: () => void
+  retrying: boolean
+  retryError: string | null
+}) {
   if (status === 'error') {
     return (
       <div className="grading">
         <div className="grading-title">Grading couldn’t complete</div>
         <p className="grading-sub">
-          The agent couldn’t be reached for this submission, so it was never graded. Retry it from
-          the submissions list.
+          The agent couldn’t be reached for this submission, so it was never graded. The
+          candidate’s code is stored — retrying re-runs the grade on this same submission.
         </p>
+        <button type="button" className="btn" onClick={onRetry} disabled={retrying}>
+          {retrying ? 'Retrying…' : 'Retry grading'}
+        </button>
+        {retryError && (
+          <p role="alert" className="form-error">
+            {retryError}
+          </p>
+        )}
       </div>
     )
   }
@@ -347,6 +436,8 @@ function ReportTab({
   pointsTotal,
   passThresholdPct,
   quality,
+  agentJobId,
+  receivedAt,
 }: {
   reason: string
   compileError: string | null
@@ -356,6 +447,8 @@ function ReportTab({
   pointsTotal?: number
   passThresholdPct?: number
   quality: import('../types').ResultQuality | null
+  agentJobId: string | null
+  receivedAt: string | null
 }) {
   return (
     <>
@@ -466,6 +559,25 @@ function ReportTab({
         <p className="muted">
           No AI summary for this submission — the judge is skipped when the code doesn’t run.
         </p>
+      )}
+      {(agentJobId || receivedAt) && (
+        <>
+          <div className="section-title">Grading details</div>
+          <div className="kv-row">
+            {agentJobId && (
+              <div className="kv">
+                <span className="k">Agent job</span>
+                <span className="mono">{agentJobId}</span>
+              </div>
+            )}
+            {receivedAt && (
+              <div className="kv">
+                <span className="k">Graded at</span>
+                <span>{new Date(receivedAt).toLocaleString()}</span>
+              </div>
+            )}
+          </div>
+        </>
       )}
     </>
   )

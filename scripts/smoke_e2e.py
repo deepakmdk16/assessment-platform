@@ -172,6 +172,12 @@ def main() -> int:
     agent_env = _child_env(**wire) if secure else _child_env(ASSESS_AUTH_DISABLED="1")
     platform_env = _child_env(
         HOST="::1", PORT=str(PLATFORM_PORT), AUTO_CREATE_TABLES="true",
+        # The smoke boots the REAL platform and creates a real invite, but there
+        # is no mailbox behind it — take the documented escape hatch so the
+        # startup mail check doesn't refuse to boot. Deliberately NOT
+        # PLATFORM_TESTING, which would also silence the reaper and the breach
+        # check this smoke is here to exercise.
+        ALLOW_UNCONFIGURED_EMAIL="1",
         DATABASE_URL=f"sqlite:///{SMOKE_DB}",
         AGENT_BASE_URL=AGENT_URL, PLATFORM_BASE_URL=CALLBACK_BASE,
         **wire,

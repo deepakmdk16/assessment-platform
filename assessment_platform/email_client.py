@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import smtplib
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -26,6 +27,10 @@ from . import config
 logger = logging.getLogger(__name__)
 
 _NOT_CONFIGURED = "email is not configured on the server; the link was logged, not sent."
+_DEADLINE_EXCEEDED = (
+    "the server's email time budget (SMTP_DEADLINE_S) ran out before this address "
+    "was reached; the link was not sent."
+)
 
 
 @dataclass(frozen=True)
@@ -113,13 +118,33 @@ def _deliver(
             )
         return [Delivery(r, sent=False, error=_NOT_CONFIGURED) for r in recipients]
 
+    # One wall clock for the whole delivery, started before the connect so the
+    # handshake and login count against it too. smtplib's `timeout` bounds each
+    # socket operation individually, and a multi-recipient send makes many — so
+    # without a total ceiling the worst case grows with the recipient list, all
+    # of it inline on the caller's request. Checked between recipients, so the
+    # real bound is this budget plus the one send already in flight.
+    deadline = time.monotonic() + config.SMTP_DEADLINE_S
     try:
-        with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=10) as smtp:
+        with smtplib.SMTP(
+            config.SMTP_HOST, config.SMTP_PORT, timeout=config.SMTP_TIMEOUT_S
+        ) as smtp:
             if config.SMTP_USE_TLS:
                 smtp.starttls()
             if config.SMTP_USER and config.SMTP_PASSWORD:
                 smtp.login(config.SMTP_USER, config.SMTP_PASSWORD)
-            return [_send_one(smtp, to, kind, build) for to in recipients]
+            out: list[Delivery] = []
+            for to in recipients:
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "%s email: time budget exhausted with %d recipient(s) unsent",
+                        kind,
+                        len(recipients) - len(out),
+                    )
+                    out.append(Delivery(to, sent=False, error=_DEADLINE_EXCEEDED))
+                    continue
+                out.append(_send_one(smtp, to, kind, build))
+            return out
     except Exception as exc:
         # Connect/TLS/login failed — nobody was mailed. Report it against every
         # recipient rather than failing the caller's operation.

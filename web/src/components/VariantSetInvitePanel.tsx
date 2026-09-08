@@ -1,21 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api'
+import { ExpiryField } from './ExpiryField'
+import { InviteTable } from './InviteTable'
+import { describeRecipients, parseRecipients } from '../invites'
 import type { Invite, VariantOut } from '../types'
-
-/** Parse a free-text recipients box (commas / whitespace / newlines) into a
- *  deduped, order-preserving email list. */
-function parseRecipients(raw: string): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const tok of raw.split(/[\s,;]+/)) {
-    const e = tok.trim().toLowerCase()
-    if (e && !seen.has(e)) {
-      seen.add(e)
-      out.push(e)
-    }
-  }
-  return out
-}
 
 const AUTO = '__auto__'
 
@@ -28,6 +16,7 @@ export function VariantSetInvitePanel({
 }) {
   const [invites, setInvites] = useState<Invite[]>([])
   const [raw, setRaw] = useState('')
+  const [expiresAt, setExpiresAt] = useState<string | null>(null)
   const [overrides, setOverrides] = useState<Record<string, string>>({})
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -64,6 +53,7 @@ export function VariantSetInvitePanel({
       const created = await api.createVariantSetInvites(setId, {
         recipients,
         overrides: picked,
+        expires_at: expiresAt,
       })
       setInvites((prev) => [...created, ...prev])
       setRaw('')
@@ -99,7 +89,10 @@ export function VariantSetInvitePanel({
           onChange={(e) => setRaw(e.target.value)}
           placeholder="priya@example.com, marcus@example.com"
         />
+        {describeRecipients(raw) && <p className="field-hint">{describeRecipients(raw)}</p>}
       </div>
+
+      <ExpiryField value={expiresAt} onChange={setExpiresAt} idPrefix="vs" />
 
       {recipients.length > 0 && (
         <div className="tbl-wrap">
@@ -116,6 +109,9 @@ export function VariantSetInvitePanel({
                   <td>{email}</td>
                   <td>
                     <select
+                      // N identical selects in a column need distinguishing for
+                      // a screen reader — and for anyone querying them by role.
+                      aria-label={`Variant for ${email}`}
                       value={overrides[email] ?? AUTO}
                       onChange={(e) =>
                         setOverrides((prev) => ({ ...prev, [email]: e.target.value }))
@@ -146,40 +142,10 @@ export function VariantSetInvitePanel({
       {invites.length > 0 && (
         <>
           <h3 className="sect-title">Sent</h3>
-          <div className="tbl-wrap">
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>Candidate</th>
-                  <th>Variant</th>
-                  <th>Link</th>
-                </tr>
-              </thead>
-              <tbody>
-                {invites.map((inv) => (
-                  <tr key={inv.token}>
-                    <td>{inv.recipients.join(', ')}</td>
-                    <td>
-                      {inv.variant_label ? (
-                        <span className="chip chip-neutral">{inv.variant_label}</span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn sec sm"
-                        onClick={() => navigator.clipboard?.writeText(inv.url)}
-                      >
-                        Copy link
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {/* No onRevoke: there is no revoke route for variant-set invites yet
+              (P03, backend). The column stays absent rather than offering a
+              control that can't work. */}
+          <InviteTable invites={invites} showVariant />
         </>
       )}
     </div>

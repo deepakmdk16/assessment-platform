@@ -33,7 +33,7 @@
   width: 1.7rem;
   height: 1.7rem;
   border-radius: 7px;
-  background: linear-gradient(135deg, var(--color-accent), #6f5bff);
+  background: linear-gradient(135deg, var(--color-accent), var(--color-brand-grad));
   flex: none;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
@@ -42,7 +42,7 @@
   font-family: var(--font-mono);
   font-weight: 700;
   font-size: 0.95rem;
-  color: #fff;
+  color: var(--color-on-accent);
   letter-spacing: -0.01em;
 }
 
@@ -74,13 +74,13 @@
 
 .nav a:hover {
   background: rgba(255, 255, 255, 0.05);
-  color: #fff;
+  color: var(--color-on-accent);
   text-decoration: none;
 }
 
 .nav a.on {
   background: rgba(47, 107, 255, 0.16);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .nav a svg {
@@ -154,17 +154,17 @@
 
 .theme-seg button.on {
   background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .avatar {
   width: 1.9rem;
   height: 1.9rem;
   border-radius: 50%;
-  background: linear-gradient(135deg, #31527d, var(--color-accent));
+  background: linear-gradient(135deg, var(--color-brand-grad-alt), var(--color-accent));
   display: grid;
   place-items: center;
-  color: #fff;
+  color: var(--color-on-accent);
   font-size: 0.78rem;
   font-weight: 700;
   flex: none;
@@ -193,7 +193,7 @@
 }
 
 .side-logout:hover {
-  color: #fff;
+  color: var(--color-on-accent);
   background: rgba(255, 255, 255, 0.06);
 }
 
@@ -390,13 +390,13 @@
 .btn.accent {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .btn.submit {
   background: var(--color-good);
   border-color: var(--color-good);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .btn.submit:hover {
@@ -1118,7 +1118,7 @@ textarea {
 .step.on .dot {
   border-color: var(--color-accent);
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-on-accent);
   box-shadow: 0 0 0 4px var(--color-accent-soft);
 }
 
@@ -1336,7 +1336,7 @@ textarea {
   width: 1.1rem;
   height: 1.1rem;
   border-radius: 5px;
-  background: linear-gradient(135deg, var(--color-accent), #6f5bff);
+  background: linear-gradient(135deg, var(--color-accent), var(--color-brand-grad));
   flex: none;
 }
 
@@ -1430,7 +1430,7 @@ textarea {
 
 .q-tab.on .n {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .q-tab.done {
@@ -1439,7 +1439,7 @@ textarea {
 
 .q-tab.done .n {
   background: var(--color-good);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 /* Square icon-only button (e.g. the candidate header's theme cycle). */
@@ -1663,7 +1663,7 @@ button.tab:hover {
   flex: 1;
   min-height: 200px;
   overflow: hidden;
-  background: #1e1e1e;
+  background: var(--color-editor-bg);
 }
 
 .editor-wrapper-review {
@@ -2366,6 +2366,32 @@ button.tab:hover {
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
   padding: 1rem 1.15rem;
+}
+
+/* Skeleton placeholder: a token-coloured bar standing in for text that hasn't
+   arrived. Sized in em so it inherits the height of whatever it replaces, which
+   is what makes the reserved space match the loaded panel. */
+.skeleton-line {
+  background: var(--color-surface-3);
+  border-radius: var(--radius-sm);
+  height: 1em;
+  margin: 0.25em 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton-line {
+    animation: skeleton-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 
 .stat-label {

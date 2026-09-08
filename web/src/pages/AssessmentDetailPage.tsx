@@ -2,7 +2,10 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { badgeClass } from '../badges'
+import { ExpiryField } from '../components/ExpiryField'
 import { IntegrityCell } from '../components/IntegrityPanel'
+import { InviteTable } from '../components/InviteTable'
+import { describeRecipients, parseRecipients } from '../invites'
 import type { AssessmentAttempt, AssessmentOut, Invite, InviteDelivery } from '../types'
 
 export function AssessmentDetailPage() {
@@ -12,11 +15,11 @@ export function AssessmentDetailPage() {
   const [invites, setInvites] = useState<Invite[]>([])
   const [attempts, setAttempts] = useState<AssessmentAttempt[]>([])
   const [recipients, setRecipients] = useState('')
+  const [inviteExpiresAt, setInviteExpiresAt] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [sentTo, setSentTo] = useState<string[]>([])
   const [undelivered, setUndelivered] = useState<InviteDelivery[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [copied, setCopied] = useState<string | null>(null)
   // Edit dialog (settings only — title/timer/monitoring/branding). The question
   // set is deliberately not editable here: post-invite the server locks it (A9),
   // and pre-invite it would mean rebuilding the whole builder on this page.
@@ -51,19 +54,20 @@ export function AssessmentDetailPage() {
 
   async function handleSend() {
     if (!id) return
-    const list = recipients
-      .split(/[\n,]/)
-      .map((r) => r.trim())
-      .filter(Boolean)
+    const list = parseRecipients(recipients)
     if (list.length === 0) return setError('Enter at least one candidate email.')
     setError(null)
     setSending(true)
     try {
-      const invite = await api.createAssessmentInvite(id, { recipients: list })
+      const invite = await api.createAssessmentInvite(id, {
+        recipients: list,
+        expires_at: inviteExpiresAt,
+      })
       setInvites((prev) => [invite, ...prev])
       setSentTo(invite.deliveries.filter((d) => d.sent).map((d) => d.recipient))
       setUndelivered(invite.deliveries.filter((d) => !d.sent))
       setRecipients('')
+      setInviteExpiresAt(null)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create invite')
     } finally {
@@ -120,16 +124,6 @@ export function AssessmentDetailPage() {
       setEditError(err instanceof ApiError ? err.message : 'Failed to save changes')
     } finally {
       setSaving(false)
-    }
-  }
-
-  async function copyUrl(url: string) {
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopied(url)
-      setTimeout(() => setCopied(null), 1500)
-    } catch {
-      // clipboard blocked — the url is on screen to copy manually
     }
   }
 
@@ -199,9 +193,15 @@ export function AssessmentDetailPage() {
             </div>
           </section>
 
+          <h2 className="sect-title">Attempts</h2>
+          {attempts.length === 0 && (
+            <p className="empty-state">
+              No one has started this assessment yet. Invite a candidate below and their attempt
+              will appear here.
+            </p>
+          )}
           {attempts.length > 0 && (
             <>
-              <h2 className="sect-title">Attempts</h2>
               <div className="card tbl-wrap">
                 <table className="tbl">
                   <thead>
@@ -276,56 +276,19 @@ export function AssessmentDetailPage() {
             </>
           )}
 
+          <h2 className="sect-title">Invites</h2>
+          {invites.length === 0 && (
+            <p className="empty-state">
+              No invites sent yet. Each one is a link that works only for the address you send it
+              to.
+            </p>
+          )}
           {invites.length > 0 && (
             <>
-              <h2 className="sect-title">Invites</h2>
-              <div className="card tbl-wrap">
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th>Link</th>
-                      <th>Recipients &amp; delivery</th>
-                      <th>Status</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invites.map((inv) => (
-                      <tr key={inv.token}>
-                        <td className="invite-url">{inv.url}</td>
-                        <td>
-                          {inv.deliveries.length > 0 ? (
-                            <ul className="recip-list">
-                              {inv.deliveries.map((d) => (
-                                <li className="recip" key={d.recipient}>
-                                  <span className={`recip-dot ${d.sent ? 'ok' : 'fail'}`} />
-                                  <span className="recip-addr">{d.recipient}</span>
-                                  {!d.sent && d.error && (
-                                    <span className="recip-why">— {d.error}</span>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                          ) : (
-                            inv.recipients.join(', ') || '—'
-                          )}
-                        </td>
-                        <td>
-                          <span className={badgeClass(inv.status)}>{inv.status}</span>
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="btn sec sm"
-                            onClick={() => copyUrl(inv.url)}
-                          >
-                            {copied === inv.url ? 'Copied!' : 'Copy link'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="card">
+                {/* No onRevoke: assessment invites have no revoke route yet
+                    (P03, backend), so expiry is the only control here. */}
+                <InviteTable invites={invites} showDeliveries />
               </div>
             </>
           )}
@@ -357,7 +320,12 @@ export function AssessmentDetailPage() {
                 placeholder="one per line, or comma-separated"
                 onChange={(e) => setRecipients(e.target.value)}
               />
+              <p className="field-hint">
+                {describeRecipients(recipients) ??
+                  'Separate addresses with a comma, a semicolon or a new line.'}
+              </p>
             </div>
+            <ExpiryField value={inviteExpiresAt} onChange={setInviteExpiresAt} idPrefix="a" />
             <button
               type="button"
               className="btn accent block"

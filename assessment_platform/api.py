@@ -26,7 +26,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import delete, func, or_, text, update
@@ -145,8 +154,41 @@ from .schemas import (
 logger = logging.getLogger(__name__)
 
 
+def _require_email_configured() -> None:
+    """Refuse to boot with a half-configured mailer.
+
+    Every invite, address confirmation and password reset leaves over SMTP, so a
+    server that cannot send is a server that accepts invites it silently never
+    delivers. A half-filled `.env` is worse than an empty one: with SMTP_HOST set
+    but no password, `_deliver` skips login and pays a full connect + TLS + send
+    round trip per recipient before the provider rejects it. Failing here puts
+    the error on the box where `.env` is still editable, instead of in front of a
+    candidate waiting for a link that is never coming.
+
+    Skipped under PLATFORM_TESTING (pytest's conftest and the Playwright
+    webServer both set it, and config force-disables SMTP there anyway), and
+    behind the one documented escape hatch, ALLOW_UNCONFIGURED_EMAIL.
+    """
+    if config.TESTING or config.ALLOW_UNCONFIGURED_EMAIL:
+        return
+    missing = config.missing_smtp_vars()
+    if missing:
+        raise RuntimeError(
+            "Email is not configured, so invites, address confirmations and password "
+            f"resets could not be delivered. Missing: {', '.join(missing)}. Set them "
+            "in .env (see .env.example) — for a Gmail sender SMTP_PASSWORD is a "
+            "16-character app password, not the account password, and SMTP_FROM must "
+            "be a real mailbox rather than the no-reply@assessment.local placeholder. "
+            "For offline local dev, start with ALLOW_UNCONFIGURED_EMAIL=true to log "
+            "links instead of sending them."
+        )
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Fail fast, before the port is bound: a mail misconfiguration is cheap to fix
+    # now and expensive to discover from a candidate's silence later.
+    _require_email_configured()
     # Production runs Alembic migrations; create_all only when explicitly opted in
     # (dev/E2E) so a missing migration surfaces instead of being papered over.
     if config.AUTO_CREATE_TABLES:
@@ -493,9 +535,12 @@ def _set_password(interviewer: Interviewer, new_password: str) -> None:
     interviewer.updated_at = datetime.now(timezone.utc)
 
 
-def _send_verification(interviewer: Interviewer) -> None:
+def _send_verification(interviewer: Interviewer, background: BackgroundTasks) -> None:
+    # Queued, not sent inline: SMTP latency would otherwise be this request's
+    # latency, and the wait would hold one of the shared worker-thread slots.
     url = f"{config.FRONTEND_BASE_URL}/verify-email?token={create_verify_token(interviewer)}"
-    email_client.send_account_email(
+    background.add_task(
+        email_client.send_account_email,
         interviewer.email,
         "Confirm your email address",
         f"Hi {interviewer.name},\n\n"
@@ -544,7 +589,10 @@ def _purge_interviewer(owner_id: int, session: Session) -> None:
 
 @app.post("/auth/register", response_model=InterviewerOut, status_code=201)
 def register(
-    body: RegisterIn, request: Request, session: Session = Depends(get_session)
+    body: RegisterIn,
+    request: Request,
+    background: BackgroundTasks,
+    session: Session = Depends(get_session),
 ) -> InterviewerOut:
     # Login was rate-limited but this wasn't, and sign-up is open unless
     # REGISTRATION_CODE is set — so this was the unmetered way to mint the accounts
@@ -573,7 +621,7 @@ def register(
     session.refresh(interviewer)
     # Best-effort, like invite mail: a mailer outage must not block sign-up. The
     # link can be re-sent from the account.
-    _send_verification(interviewer)
+    _send_verification(interviewer, background)
     return _interviewer_out(interviewer)
 
 
@@ -617,7 +665,10 @@ def logout(response: Response) -> None:
 
 @app.post("/auth/forgot-password", response_model=MessageOut, status_code=202)
 def forgot_password(
-    body: ForgotPasswordIn, request: Request, session: Session = Depends(get_session)
+    body: ForgotPasswordIn,
+    request: Request,
+    background: BackgroundTasks,
+    session: Session = Depends(get_session),
 ) -> MessageOut:
     limiter.check(
         "forgot", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
@@ -627,7 +678,8 @@ def forgot_password(
     ).first()
     if interviewer is not None:
         url = f"{config.FRONTEND_BASE_URL}/reset-password?token={create_reset_token(interviewer)}"
-        email_client.send_account_email(
+        background.add_task(
+            email_client.send_account_email,
             interviewer.email,
             "Reset your password",
             f"Hi {interviewer.name},\n\n"
@@ -689,14 +741,16 @@ def verify_email(body: VerifyEmailIn, session: Session = Depends(get_session)) -
 
 @app.post("/auth/resend-verification", response_model=MessageOut, status_code=202)
 def resend_verification(
-    request: Request, current: Interviewer = Depends(get_current_interviewer)
+    request: Request,
+    background: BackgroundTasks,
+    current: Interviewer = Depends(get_current_interviewer),
 ) -> MessageOut:
     limiter.check(
         "forgot", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
     if current.email_verified_at is not None:
         return MessageOut(detail="email already verified.")
-    _send_verification(current)
+    _send_verification(current, background)
     return MessageOut(detail="verification email sent.")
 
 
