@@ -60,6 +60,15 @@ deterministic grade.
 - `integrity.py` — DB-free risk scoring over a sitting's integrity signals
   (score/level/reasons, I1); a triage hint, never proof, and never part of a
   verdict.
+- `billing.py` — plans, monthly quotas and usage metering (X02). Plans are a
+  frozen table in code, not rows; `consume` claims an allowance with a
+  conditional UPDATE *before* the money is spent, `record` counts what happened
+  and never refuses. `Organization.plan` + `plan_status` decide the limits, and
+  a lapsed subscription falls back to free rather than to zero.
+- `stripe_client.py` — the payment boundary (mocked in tests, like
+  `agent_client`). Hosted Checkout + Stripe's portal, so no card detail reaches
+  this server. The **signed webhook is the only thing that grants a plan** — a
+  browser landing on `?billing=success` proves nothing.
 - `auth.py` — interviewer auth: bcrypt hashing + stateless JWT bearer.
 - `agent_client.py` — the outbound call that triggers the agent (the mock
   boundary in tests).

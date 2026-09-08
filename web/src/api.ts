@@ -3,6 +3,7 @@ import type {
   AssessmentAttempt,
   AssessmentIn,
   AssessmentOut,
+  Billing,
   CandidateDraftsResponse,
   IntegrityEventIn,
   IntegrityReport,
@@ -16,6 +17,7 @@ import type {
   OrgInvitePublic,
   OrgRole,
   OverviewAnalytics,
+  PaidPlanKey,
   Page,
   QuestionAnalytics,
   QuestionDraftIn,
@@ -268,6 +270,18 @@ export const api = {
 
   revokeOrgInvite: (inviteId: number) =>
     request<void>(`/orgs/current/invites/${inviteId}`, { method: 'DELETE', auth: true }),
+
+  // --- Billing (X02) -------------------------------------------------------
+
+  getBilling: () => request<Billing>('/billing', { auth: true }),
+
+  // Both return a URL on Stripe to send the browser to; neither takes a card
+  // here, so no payment detail ever reaches this origin.
+  startCheckout: (plan: PaidPlanKey) =>
+    request<{ url: string }>('/billing/checkout', { method: 'POST', body: { plan }, auth: true }),
+
+  openBillingPortal: () =>
+    request<{ url: string }>('/billing/portal', { method: 'POST', auth: true }),
 
   // Public: the join page reads this before anyone has signed in.
   readOrgInvite: (token: string) => request<OrgInvitePublic>(`/org-invites/${token}`),
