@@ -13,6 +13,7 @@ about a limit turns it on explicitly; metering is always on.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -21,7 +22,7 @@ from conftest import async_raise, async_return, register_interviewer
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from assessment_platform import agent_client, billing, config
+from assessment_platform import agent_client, billing, config, stripe_client
 from assessment_platform import db as db_module
 from assessment_platform.models import Membership, Organization, OrgUsage, Submission
 
@@ -472,3 +473,285 @@ def test_a_bigger_plan_buys_more_seats(client, enforced) -> None:
             "/orgs/current/invites", json={"email": f"colleague{i}@acme.io"}
         ).status_code == 201
     assert client.get("/billing").json()["plan"]["seats"] == 20
+
+
+# --------------------------------------------------------------------------- #
+# Payment (Stripe)                                                              #
+# --------------------------------------------------------------------------- #
+
+
+class _Event:
+    """The shape of a Stripe event as the route reads it (`.type`, `.data.object`)."""
+
+    def __init__(self, type_: str, obj: dict[str, Any]) -> None:
+        self.type = type_
+        self.data = SimpleNamespace(object=obj)
+
+
+@pytest.fixture
+def stripe_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "STRIPE_SECRET_KEY", "sk_test_x")
+    monkeypatch.setattr(config, "STRIPE_WEBHOOK_SECRET", "whsec_x")
+    monkeypatch.setattr(
+        config, "STRIPE_PRICE_IDS", {"starter": "price_starter", "growth": "price_growth"}
+    )
+
+
+def _subscription(
+    sub_id: str = "sub_1",
+    customer: str = "cus_1",
+    price: str = "price_growth",
+    status: str = "active",
+    period_end: int = 1_800_000_000,
+) -> dict[str, Any]:
+    return {
+        "id": sub_id,
+        "customer": customer,
+        "status": status,
+        "current_period_end": period_end,
+        "items": {"data": [{"price": {"id": price}}]},
+    }
+
+
+def _link_customer(customer_id: str = "cus_1") -> None:
+    _set_plan(stripe_customer_id=customer_id)
+
+
+def _deliver(client: TestClient, monkeypatch: pytest.MonkeyPatch, event: _Event):
+    monkeypatch.setattr(stripe_client, "parse_event", lambda *_a, **_k: event)
+    return client.post("/billing/webhook", content=b"{}", headers={"stripe-signature": "t=1,v1=x"})
+
+
+def test_payments_are_unavailable_until_stripe_is_configured(client) -> None:
+    """Not a silent no-op: an upgrade button that appears to work and takes no
+    money is worse than one that says so."""
+    assert client.post("/billing/checkout", json={"plan": "starter"}).status_code == 503
+    assert client.post("/billing/portal").status_code == 503
+    assert client.post("/billing/webhook", content=b"{}").status_code == 503
+
+
+def test_checkout_returns_a_hosted_url_and_remembers_the_customer(
+    client, stripe_configured, monkeypatch
+) -> None:
+    monkeypatch.setattr(stripe_client, "create_customer", lambda *_a, **_k: "cus_new")
+    monkeypatch.setattr(
+        stripe_client, "create_checkout_session", lambda **_k: "https://checkout.stripe.test/s"
+    )
+
+    resp = client.post("/billing/checkout", json={"plan": "growth"})
+    assert resp.status_code == 200
+    assert resp.json()["url"] == "https://checkout.stripe.test/s"
+
+    # The customer belongs to the organisation, not to whoever clicked Upgrade.
+    with Session(db_module.engine) as s:
+        assert s.get(Organization, _org_id()).stripe_customer_id == "cus_new"
+
+
+def test_the_customer_is_created_once(client, stripe_configured, monkeypatch) -> None:
+    calls: list[int] = []
+
+    def _create(*_a: Any, **_k: Any) -> str:
+        calls.append(1)
+        return "cus_new"
+
+    monkeypatch.setattr(stripe_client, "create_customer", _create)
+    monkeypatch.setattr(stripe_client, "create_checkout_session", lambda **_k: "https://x")
+
+    client.post("/billing/checkout", json={"plan": "growth"})
+    client.post("/billing/checkout", json={"plan": "starter"})
+    assert calls == [1]
+
+
+def test_a_plan_with_no_configured_price_is_refused(client, monkeypatch) -> None:
+    monkeypatch.setattr(config, "STRIPE_SECRET_KEY", "sk_test_x")
+    monkeypatch.setattr(config, "STRIPE_PRICE_IDS", {"starter": None, "growth": None})
+
+    assert client.post("/billing/checkout", json={"plan": "starter"}).status_code == 503
+
+
+def test_only_an_admin_can_spend_the_organisations_money(
+    anon_client, stripe_configured
+) -> None:
+    admin = register_interviewer(anon_client, "admin@acme.io", name="Ada")
+    member = register_interviewer(anon_client, "member@acme.io", name="Mo")
+    join = anon_client.post(
+        "/orgs/current/invites", json={"email": "member@acme.io"}, headers=auth(admin)
+    ).json()["url"].rsplit("token=", 1)[1]
+    assert anon_client.post(
+        f"/org-invites/{join}/accept", headers=auth(member)
+    ).status_code == 200
+
+    for route, body in (("/billing/checkout", {"plan": "starter"}), ("/billing/portal", None)):
+        resp = anon_client.post(route, json=body, headers=auth(member))
+        assert resp.status_code == 403, route
+    # ...but a member can still read the page that explains a refused invite.
+    assert anon_client.get("/billing", headers=auth(member)).status_code == 200
+
+
+def test_the_portal_needs_a_subscription_to_manage(client, stripe_configured) -> None:
+    assert client.post("/billing/portal").status_code == 409
+
+
+def test_the_portal_returns_stripes_url(client, stripe_configured, monkeypatch) -> None:
+    _link_customer()
+    monkeypatch.setattr(
+        stripe_client, "create_portal_session", lambda **_k: "https://portal.stripe.test/p"
+    )
+
+    resp = client.post("/billing/portal")
+    assert resp.status_code == 200
+    assert resp.json()["url"] == "https://portal.stripe.test/p"
+
+
+def test_an_unverifiable_webhook_is_refused_without_saying_why(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """The endpoint is public and unauthenticated: the signature is the whole of
+    its trustworthiness, and which half of the check failed is not something an
+    unauthenticated caller may learn."""
+
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise stripe_client.WebhookError("no signature")
+
+    monkeypatch.setattr(stripe_client, "parse_event", _boom)
+
+    resp = client.post("/billing/webhook", content=b"{}", headers={"stripe-signature": "bad"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "invalid webhook."
+
+
+def test_a_subscription_event_moves_the_organisation_onto_the_plan(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """Stripe's signed account of what happened is the only thing that grants a
+    plan — never the browser landing on `?billing=success`, which anyone can type."""
+    _link_customer()
+
+    resp = _deliver(
+        client, monkeypatch, _Event("customer.subscription.updated", _subscription())
+    )
+    assert resp.status_code == 200
+
+    body = client.get("/billing").json()
+    assert body["plan"]["key"] == "growth"
+    assert body["plan"]["sittings"] == 500
+    assert body["status"] == "active"
+    assert body["current_period_end"].startswith("2027-01-15")
+
+
+def test_a_lapsed_card_keeps_the_plan_while_stripe_retries(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """`past_due` is dunning, not cancellation: cutting a paying customer off on
+    the first failed retry loses more than the invoice is worth."""
+    _link_customer()
+    _deliver(client, monkeypatch, _Event("customer.subscription.updated", _subscription()))
+
+    _deliver(
+        client,
+        monkeypatch,
+        _Event("customer.subscription.updated", _subscription(status="past_due")),
+    )
+
+    body = client.get("/billing").json()
+    assert body["plan"]["key"] == "growth"
+    assert body["status"] == "past_due"
+
+
+def test_cancellation_returns_the_organisation_to_free(
+    client, stripe_configured, monkeypatch
+) -> None:
+    _link_customer()
+    _deliver(client, monkeypatch, _Event("customer.subscription.updated", _subscription()))
+
+    _deliver(client, monkeypatch, _Event("customer.subscription.deleted", _subscription()))
+
+    body = client.get("/billing").json()
+    assert body["plan"]["key"] == "free"
+    assert body["status"] == "canceled"
+    assert body["current_period_end"] is None
+
+
+def test_a_stale_cancellation_cannot_undo_a_resubscription(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """Webhooks are not ordered: the delete of an old subscription can arrive
+    after the customer has already resubscribed."""
+    _link_customer()
+    _deliver(
+        client, monkeypatch, _Event("customer.subscription.updated", _subscription("sub_new"))
+    )
+
+    _deliver(
+        client, monkeypatch, _Event("customer.subscription.deleted", _subscription("sub_old"))
+    )
+
+    assert client.get("/billing").json()["plan"]["key"] == "growth"
+
+
+def test_an_unrecognised_price_leaves_the_plan_alone(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """Dropping a paying customer to free because someone renamed a price in the
+    dashboard is the worse of the two failures."""
+    _link_customer()
+    _deliver(client, monkeypatch, _Event("customer.subscription.updated", _subscription()))
+
+    _deliver(
+        client,
+        monkeypatch,
+        _Event("customer.subscription.updated", _subscription(price="price_renamed")),
+    )
+
+    assert client.get("/billing").json()["plan"]["key"] == "growth"
+
+
+def test_checkout_completion_links_the_subscription(client, stripe_configured, monkeypatch) -> None:
+    _link_customer()
+
+    _deliver(
+        client,
+        monkeypatch,
+        _Event(
+            "checkout.session.completed",
+            {"customer": "cus_1", "subscription": "sub_1", "client_reference_id": "1"},
+        ),
+    )
+
+    with Session(db_module.engine) as s:
+        assert s.get(Organization, _org_id()).stripe_subscription_id == "sub_1"
+
+
+def test_a_webhook_for_an_unknown_customer_is_acknowledged_not_retried(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """A non-2xx tells Stripe to retry, and retrying an event nobody can place is
+    noise that eventually disables the endpoint."""
+    resp = _deliver(
+        client,
+        monkeypatch,
+        _Event("customer.subscription.updated", _subscription(customer="cus_someone_else")),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ignored"
+
+
+def test_an_event_we_do_not_handle_is_acknowledged(client, stripe_configured, monkeypatch) -> None:
+    _link_customer()
+    resp = _deliver(client, monkeypatch, _Event("invoice.paid", {"customer": "cus_1"}))
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ignored"
+
+
+def test_metadata_places_an_event_when_the_customer_is_not_stored_yet(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """The org_id we attach when creating the customer is the link back if our
+    own column is somehow not written yet."""
+    org_id = _org_id()
+    obj = _subscription(customer="cus_unstored")
+    obj["metadata"] = {"org_id": str(org_id)}
+
+    resp = _deliver(client, monkeypatch, _Event("customer.subscription.updated", obj))
+    assert resp.status_code == 200
+    assert client.get("/billing").json()["plan"]["key"] == "growth"

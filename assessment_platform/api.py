@@ -44,7 +44,17 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, col, select
 
-from . import agent_client, analytics, billing, config, db, email_client, integrity, signing
+from . import (
+    agent_client,
+    analytics,
+    billing,
+    config,
+    db,
+    email_client,
+    integrity,
+    signing,
+    stripe_client,
+)
 from .auth import (
     REFRESH_COOKIE,
     clear_refresh_cookie,
@@ -110,6 +120,8 @@ from .schemas import (
     CandidateSubmitOut,
     CandidateTestOutcomeOut,
     ChangePasswordIn,
+    CheckoutIn,
+    CheckoutOut,
     DashboardSubmissionOut,
     DeleteAccountIn,
     ForgotPasswordIn,
@@ -1468,6 +1480,198 @@ def get_billing(
         payments_enabled=config.billing_enabled(),
         plans=[_plan_out(plan) for plan in billing.PLANS.values()],
     )
+
+
+def _require_payments() -> None:
+    """Refuse the payment routes when Stripe isn't configured.
+
+    503, not a silent no-op: an upgrade button that appears to work and takes no
+    money is worse than one that says the service isn't available. `GET /billing`
+    reports `payments_enabled` so the UI never shows the button in the first place.
+    """
+    if not config.billing_enabled():
+        raise HTTPException(
+            status_code=503, detail="payments are not configured on this deployment."
+        )
+
+
+def _stripe_customer(organization: Organization, current: Interviewer, session: Session) -> str:
+    """The organisation's Stripe customer id, creating it on first use.
+
+    Stored on the organisation, not the person: the subscription belongs to the
+    company and must survive whoever happened to click Upgrade leaving.
+    """
+    if organization.stripe_customer_id:
+        return organization.stripe_customer_id
+    customer_id = stripe_client.create_customer(
+        _require_id(organization.id), organization.name, current.email
+    )
+    organization.stripe_customer_id = customer_id
+    session.add(organization)
+    session.commit()
+    return customer_id
+
+
+@app.post("/billing/checkout", response_model=CheckoutOut)
+def start_checkout(
+    body: CheckoutIn,
+    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> CheckoutOut:
+    """Begin a subscription: returns the URL of Stripe's hosted checkout page.
+
+    Admin-only — spending the organisation's money is exactly the kind of thing
+    the roster's two roles exist to separate.
+    """
+    _require_admin(org)
+    _require_payments()
+    if not stripe_client.price_id(body.plan):
+        raise HTTPException(
+            status_code=503, detail=f"the {body.plan} plan is not available on this deployment."
+        )
+    organization = _organization(org.org_id, session)
+    url = stripe_client.create_checkout_session(
+        customer_id=_stripe_customer(organization, current, session),
+        plan=body.plan,
+        org_id=org.org_id,
+        success_url=f"{config.FRONTEND_BASE_URL}/settings?billing=success",
+        cancel_url=f"{config.FRONTEND_BASE_URL}/settings?billing=cancelled",
+    )
+    return CheckoutOut(url=url)
+
+
+@app.post("/billing/portal", response_model=CheckoutOut)
+def open_billing_portal(
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> CheckoutOut:
+    """Open Stripe's customer portal — change plan, update the card, cancel,
+    download invoices. All of that is a product Stripe gives away with the
+    payment; re-implementing any of it here would be building a worse one."""
+    _require_admin(org)
+    _require_payments()
+    organization = _organization(org.org_id, session)
+    if not organization.stripe_customer_id:
+        raise HTTPException(
+            status_code=409, detail="this organisation has no subscription to manage yet."
+        )
+    return CheckoutOut(
+        url=stripe_client.create_portal_session(
+            customer_id=organization.stripe_customer_id,
+            return_url=f"{config.FRONTEND_BASE_URL}/settings",
+        )
+    )
+
+
+def _org_for_stripe(obj: dict[str, Any], session: Session) -> Organization | None:
+    """The organisation a webhook is about: by customer id, or by the org_id we
+    put in the object's metadata when we created it."""
+    customer = obj.get("customer")
+    if isinstance(customer, str):
+        found = session.exec(
+            select(Organization).where(Organization.stripe_customer_id == customer)
+        ).first()
+        if found is not None:
+            return found
+    raw_org_id = (obj.get("metadata") or {}).get("org_id")
+    if isinstance(raw_org_id, str) and raw_org_id.isdigit():
+        return session.get(Organization, int(raw_org_id))
+    return None
+
+
+@app.post("/billing/webhook")
+async def stripe_webhook(request: Request, session: Session = Depends(get_session)) -> dict:
+    """Stripe's account of what happened to a subscription — the only thing that
+    moves an organisation onto or off a paid plan.
+
+    Never the checkout redirect: a browser landing on `?billing=success` proves
+    nothing (anyone can type that URL), while this body is signed. The signature
+    is the whole of the endpoint's authentication, so an unset webhook secret
+    means refusing to process anything rather than trusting the caller.
+
+    Always 200 once the signature verifies, including for events we ignore: a
+    non-2xx tells Stripe to retry, and retrying an event nobody handles is noise
+    that eventually disables the endpoint.
+    """
+    if not config.STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="webhooks are not configured.")
+    try:
+        event = stripe_client.parse_event(
+            await request.body(), request.headers.get("stripe-signature")
+        )
+    except stripe_client.WebhookError:
+        # Deliberately uninformative: the endpoint is public, and which half of
+        # the check failed is not something an unauthenticated caller may learn.
+        raise HTTPException(status_code=400, detail="invalid webhook.") from None
+
+    obj = dict(event.data.object)
+    organization = _org_for_stripe(obj, session)
+    if organization is None:
+        logger.warning("stripe webhook %s: no organisation for this customer", event.type)
+        return {"status": "ignored"}
+
+    if event.type == "checkout.session.completed":
+        # Links the subscription to the organisation. The plan and the period
+        # arrive with the subscription events below, which carry the price.
+        subscription_id = obj.get("subscription")
+        customer_id = obj.get("customer")
+        if isinstance(customer_id, str):
+            organization.stripe_customer_id = customer_id
+        if isinstance(subscription_id, str):
+            organization.stripe_subscription_id = subscription_id
+        session.add(organization)
+        session.commit()
+        logger.info("stripe: checkout completed for organisation %s", organization.id)
+        return {"status": "ok"}
+
+    if event.type in ("customer.subscription.created", "customer.subscription.updated"):
+        subscription = stripe_client.subscription_from(obj)
+        if subscription is None:
+            return {"status": "ignored"}
+        organization.stripe_subscription_id = subscription.id
+        organization.plan_status = subscription.status
+        organization.current_period_end = subscription.current_period_end
+        if subscription.plan is not None:
+            # An unrecognised price leaves the plan alone rather than guessing:
+            # dropping a paying customer to free because someone renamed a price
+            # in the dashboard is the worse of the two failures.
+            organization.plan = subscription.plan
+        session.add(organization)
+        session.commit()
+        logger.info(
+            "stripe: organisation %s is now %s/%s",
+            organization.id,
+            organization.plan,
+            organization.plan_status,
+        )
+        return {"status": "ok"}
+
+    if event.type == "customer.subscription.deleted":
+        subscription_id = obj.get("id")
+        if (
+            organization.stripe_subscription_id
+            and subscription_id != organization.stripe_subscription_id
+        ):
+            # A cancellation for a subscription that is no longer the current
+            # one — webhooks are not ordered, and this is the delete of an old
+            # subscription arriving after the customer has already resubscribed.
+            logger.info(
+                "stripe: stale cancellation for %s ignored (current is %s)",
+                subscription_id,
+                organization.stripe_subscription_id,
+            )
+            return {"status": "ignored"}
+        organization.plan = "free"
+        organization.plan_status = "canceled"
+        organization.stripe_subscription_id = None
+        organization.current_period_end = None
+        session.add(organization)
+        session.commit()
+        logger.info("stripe: subscription cancelled for organisation %s", organization.id)
+        return {"status": "ok"}
+
+    return {"status": "ignored"}
 
 
 # --------------------------------------------------------------------------- #

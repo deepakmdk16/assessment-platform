@@ -1031,6 +1031,20 @@ class BillingOut(BaseModel):
     plans: list[PlanOut]
 
 
+class CheckoutIn(BaseModel):
+    """Which plan the admin is buying. Only the paid ones: moving back to free
+    is a cancellation, which happens in Stripe's portal, not here."""
+
+    plan: Literal["starter", "growth"]
+
+
+class CheckoutOut(BaseModel):
+    """Where to send the browser — Stripe's hosted page, so card details never
+    reach this server."""
+
+    url: str
+
+
 class OrgInvitePublicOut(BaseModel):
     """What the join page may read before anyone has signed in.
 
