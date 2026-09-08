@@ -134,7 +134,17 @@ async function request<T>(
     let message = res.statusText
     try {
       const data = await res.json()
-      message = data.detail ?? data.message ?? message
+      // A schema failure (422) carries pydantic's list of {loc, msg} objects; join
+      // the messages so the page shows words, not "[object Object]".
+      const detail: unknown = data.detail
+      const joined = Array.isArray(detail)
+        ? detail
+            .map((d: { msg?: string }) => (d.msg ?? '').replace(/^Value error, /, ''))
+            .filter(Boolean)
+            .join(' ')
+        : null
+      // An empty join would blank the alert entirely, so keep the fallback.
+      message = joined || (typeof detail === 'string' ? detail : null) || data.message || message
     } catch {
       // response had no JSON body
     }

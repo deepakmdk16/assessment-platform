@@ -85,4 +85,12 @@ describe('LoginPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Invalid credentials')
   })
+
+  it('links to the forgot-password page', () => {
+    renderLoginPage()
+    expect(screen.getByRole('link', { name: /forgot password/i })).toHaveAttribute(
+      'href',
+      '/forgot-password',
+    )
+  })
 })

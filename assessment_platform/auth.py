@@ -194,10 +194,13 @@ def create_reset_token(interviewer: Interviewer) -> str:
     # Bound to the current hash, which makes a reset link single-use: once the
     # password changes — through this link or any other route — the binding no
     # longer matches and the link is dead.
+    # `email` is informational (the reset page greets the address); the binding
+    # that matters is `pwd`.
     return _encode(
         {
             "use": "reset",
             "sub": str(interviewer.id),
+            "email": interviewer.email,
             "pwd": _hash_fingerprint(interviewer.password_hash),
         },
         RESET_TOKEN_TTL,

@@ -8,6 +8,7 @@ import hashlib
 from typing import Any
 
 import httpx
+import jwt
 import pytest
 from conftest import register_interviewer  # pytest adds tests/ to sys.path
 from fastapi.testclient import TestClient
@@ -221,6 +222,8 @@ def test_reset_link_is_single_use_and_signs_out_old_sessions(
     old_access = _login(anon_client, "a@x.io").json()["access_token"]
     anon_client.post("/auth/forgot-password", json={"email": "a@x.io"})
     token = _link_token(outbox[-1]["url"])
+    # The page greets the address from the token's payload (informational only).
+    assert jwt.decode(token, options={"verify_signature": False})["email"] == "a@x.io"
 
     assert anon_client.get("/auth/me", headers=_auth(token)).status_code == 401  # not a bearer
     assert anon_client.post("/auth/verify-email", json={"token": token}).status_code == 400

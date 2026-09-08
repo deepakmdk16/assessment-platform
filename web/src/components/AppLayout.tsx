@@ -1,6 +1,7 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
+import { api, ApiError } from '../api'
 import { useAuth } from '../auth/AuthContext'
 
 function crumbFor(pathname: string): string {
@@ -17,8 +18,28 @@ function crumbFor(pathname: string): string {
 }
 
 export function AppLayout({ children }: { children: ReactNode }) {
-  const { logout } = useAuth()
+  const { user, logout } = useAuth()
   const { pathname } = useLocation()
+  // The unverified-email banner: hidden until the next page load once dismissed.
+  const [dismissed, setDismissed] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [resending, setResending] = useState(false)
+  const [resendError, setResendError] = useState<string | null>(null)
+
+  async function handleResend() {
+    setResendError(null)
+    setResending(true)
+    try {
+      await api.resendVerification()
+      setSent(true)
+    } catch (err) {
+      setResendError(err instanceof ApiError ? err.message : 'Failed to resend the link')
+    } finally {
+      setResending(false)
+    }
+  }
+
+  const showNotice = user && !user.email_verified && !dismissed
 
   return (
     <div className="app">
@@ -34,6 +55,48 @@ export function AppLayout({ children }: { children: ReactNode }) {
             </button>
           </div>
         </header>
+        {showNotice &&
+          (sent ? (
+            <div className="notice sent" role="status">
+              <span>
+                <b>Sent.</b> Check {user.email} for the new link.
+              </span>
+              <span className="spacer" />
+              <button
+                type="button"
+                className="btn ghost sm"
+                aria-label="Hide"
+                onClick={() => setDismissed(true)}
+              >
+                ✕
+              </button>
+            </div>
+          ) : (
+            <div className="notice" role="status">
+              <span>
+                <b>Confirm your email.</b> We sent a link to {user.email}. Until then, password
+                resets can&rsquo;t reach you.
+                {resendError && <> Couldn&rsquo;t resend: {resendError}</>}
+              </span>
+              <span className="spacer" />
+              <button
+                type="button"
+                className="btn sec sm"
+                onClick={handleResend}
+                disabled={resending}
+              >
+                Resend link
+              </button>
+              <button
+                type="button"
+                className="btn ghost sm"
+                aria-label="Hide for now"
+                onClick={() => setDismissed(true)}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
         <div className="content">{children}</div>
       </div>
     </div>
