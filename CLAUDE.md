@@ -48,7 +48,9 @@ deterministic grade.
 
 ## Architecture (where things live)
 
-- `models.py` — SQLModel tables (the durable state).
+- `models.py` — SQLModel tables (the durable state). `Organization` is the
+  tenant; `Membership` (unique per interviewer — one org per person, on
+  purpose) carries the role; `OrgInvite` is how a company adds people.
 - `schemas.py` — API request/response models. **`InvitePublicOut` is the
   candidate-facing view and must never expose `test_cases`/`expected`.**
 - `api.py` — FastAPI routes.
@@ -111,6 +113,11 @@ deterministic grade.
   when their env var is set (dev/tests run without). Interviewer routes are
   bearer-guarded **and owner-scoped**; candidate routes are public but
   token-gated; the agent callback is shared-secret-guarded.
+- **The organisation is the scope; the person is the provenance.** Every
+  interviewer-facing query filters on `org_id` via `get_current_membership`,
+  never on `owner_id` — `owner_id`/`created_by` only record who authored a row
+  and are nullable so an account can be deleted without taking the
+  organisation's work with it. A new owned table needs `org_id`, not an owner.
 - **Secrets from env only** — `JWT_SECRET`, `ASSESS_API_TOKEN`, `CALLBACK_TOKEN`,
   SMTP creds. Never commit them.
 

@@ -14,7 +14,13 @@ from typing import Any
 from sqlmodel import Session
 
 from assessment_platform import db as db_module
-from assessment_platform.models import Interviewer, Question, QuestionTestCase
+from assessment_platform.models import (
+    Interviewer,
+    Membership,
+    Organization,
+    Question,
+    QuestionTestCase,
+)
 
 # The audit's core lives in the deploy-time script; import it for a direct test.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -79,12 +85,18 @@ def test_check_question_cases_flags_offenders(anon_client) -> None:
     with Session(db_module.engine) as s:
         owner = Interviewer(email="owner@floor.io", password_hash="x", name="O")
         s.add(owner)
+        org = Organization(name="Floor Co")
+        s.add(org)
         s.commit()
         s.refresh(owner)
-        assert owner.id is not None
+        s.refresh(org)
+        assert owner.id is not None and org.id is not None
+        s.add(Membership(org_id=org.id, interviewer_id=owner.id, role="admin"))
+        s.commit()
         bad = Question(
             id="bad_legacy",
             owner_id=owner.id,
+            org_id=org.id,
             title="Bad",
             prompt="p",
             constraints="c",
@@ -98,6 +110,7 @@ def test_check_question_cases_flags_offenders(anon_client) -> None:
         good = Question(
             id="good_ok",
             owner_id=owner.id,
+            org_id=org.id,
             title="Good",
             prompt="p",
             constraints="c",
