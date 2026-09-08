@@ -18,6 +18,9 @@ from .models import as_utc
 Category = Literal["correctness", "performance"]
 Difficulty = Literal["easy", "medium", "hard"]
 QuestionStatus = Literal["active", "archived"]
+# Two roles, not a permission matrix: resources are organisation-wide, so the
+# only real question is who may change who has access to them (X01).
+OrgRole = Literal["admin", "member"]
 
 T = TypeVar("T")
 
@@ -430,6 +433,10 @@ class RegisterIn(BaseModel):
     name: str
     # Required only when the server sets REGISTRATION_CODE (gated sign-up).
     registration_code: str | None = None
+    # Joining an existing organisation instead of founding one (X01). An org
+    # invite is addressed to one email and is itself the proof of admission, so
+    # it stands in for the registration code rather than being asked for on top.
+    org_invite_token: str | None = None
 
 
 class InterviewerOut(BaseModel):
@@ -915,3 +922,78 @@ class IntegrityReportOut(BaseModel):
     # evidence is never the safer default).
     risk: IntegrityRiskOut | None = None
     events: list[IntegrityEventOut]
+
+
+# --------------------------------------------------------------------------- #
+# Organisations (X01)                                                           #
+# --------------------------------------------------------------------------- #
+
+
+class OrganizationOut(BaseModel):
+    id: int
+    name: str
+    # The caller's own role and the size of the roster, so the SPA can decide
+    # what to show without a second request for a page that mostly renders
+    # "you are an admin of Acme, 3 people".
+    role: str
+    member_count: int
+
+
+# Stripped before the length check, so "   " is rejected as the blank name it is
+# rather than stored as one — an organisation with an empty name renders as an
+# empty heading, and as "You've been invited to " in the invitation subject.
+OrgName = Annotated[str, AfterValidator(lambda v: v.strip()), Field(min_length=1, max_length=120)]
+
+
+class OrganizationUpdate(BaseModel):
+    name: OrgName
+
+
+class OrganizationCreate(BaseModel):
+    name: OrgName
+
+
+class MemberOut(BaseModel):
+    interviewer_id: int
+    email: str
+    name: str
+    role: str
+    joined_at: datetime
+
+
+class MemberRoleUpdate(BaseModel):
+    role: OrgRole
+
+
+class OrgInviteCreate(BaseModel):
+    email: EmailStr
+    role: OrgRole = "member"
+
+
+class OrgInviteOut(BaseModel):
+    id: int
+    email: str
+    role: str
+    url: str
+    expires_at: datetime | None = None
+    accepted_at: datetime | None = None
+    # Whether the invite mail actually went out, and why not. Stored on the row
+    # (like the per-recipient outcome on a candidate invite, A4) rather than only
+    # returned here, so the warning survives a page reload — an admin who stops
+    # being told the mail bounced waits for someone who was never written to.
+    sent: bool = True
+    error: str | None = None
+
+
+class OrgInvitePublicOut(BaseModel):
+    """What the join page may read before anyone has signed in.
+
+    Token-gated and deliberately thin: the organisation's name, so the page can
+    say what the link is for, and the address it was sent to, so the recipient
+    knows which account to use. No roster, no member emails — holding a link
+    must not enumerate a company.
+    """
+
+    org_name: str
+    email: str
+    role: str

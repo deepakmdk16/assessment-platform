@@ -10,6 +10,11 @@ import type {
   InviteStartResponse,
   InviteStatusResponse,
   LoginResponse,
+  Member,
+  Organization,
+  OrgInvite,
+  OrgInvitePublic,
+  OrgRole,
   OverviewAnalytics,
   Page,
   QuestionAnalytics,
@@ -67,6 +72,25 @@ let unauthorizedHandler: (() => void) | null = null
 
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler
+}
+
+let noOrganizationHandler: (() => void) | null = null
+
+/** Called when the API refuses because the account belongs to no organisation
+ *  (X01). Reachable whenever an admin removes someone: every data route then
+ *  403s, so without a central handler that person sees the same bare error on
+ *  every page and no sign that `/team` is where they can start again — the same
+ *  reason a 401 is handled here rather than by each caller. */
+export function setNoOrganizationHandler(handler: (() => void) | null): void {
+  noOrganizationHandler = handler
+}
+
+/** The API's own 403 for an account with no membership. Matched on the message
+ *  because the platform sends no error code; it is the only 403 phrased this
+ *  way, and misreading another 403 costs a redirect to a page that then loads
+ *  normally. Keep in step with `get_current_membership` in `auth.py`. */
+function isNoOrganization(status: number, detail: unknown): boolean {
+  return status === 403 && typeof detail === 'string' && detail.includes('no organisation')
 }
 
 interface RequestOptions {
@@ -132,6 +156,7 @@ async function request<T>(
 
   if (!res.ok) {
     let message = res.statusText
+    let noOrganization = false
     try {
       const data = await res.json()
       // A schema failure (422) carries pydantic's list of {loc, msg} objects; join
@@ -145,8 +170,14 @@ async function request<T>(
         : null
       // An empty join would blank the alert entirely, so keep the fallback.
       message = joined || (typeof detail === 'string' ? detail : null) || data.message || message
+      if (isNoOrganization(res.status, detail)) {
+        noOrganization = true
+      }
     } catch {
       // response had no JSON body
+    }
+    if (noOrganization) {
+      noOrganizationHandler?.()
     }
     throw new ApiError(res.status, message)
   }
@@ -159,7 +190,14 @@ async function request<T>(
 }
 
 export const api = {
-  register: (data: { email: string; password: string; name: string }) =>
+  register: (data: {
+    email: string
+    password: string
+    name: string
+    // Present only when signing up from an invitation link: it admits the
+    // account to that organisation and stands in for the registration code.
+    org_invite_token?: string
+  }) =>
     request<{ id: string; email: string; name: string }>('/auth/register', {
       method: 'POST',
       body: data,
@@ -196,6 +234,46 @@ export const api = {
 
   deleteAccount: (password: string) =>
     request<void>('/auth/me', { method: 'DELETE', body: { password }, auth: true }),
+
+  // --- Organisations (X01) -------------------------------------------------
+
+  getOrg: () => request<Organization>('/orgs/current', { auth: true }),
+
+  createOrg: (name: string) =>
+    request<Organization>('/orgs', { method: 'POST', body: { name }, auth: true }),
+
+  renameOrg: (name: string) =>
+    request<Organization>('/orgs/current', { method: 'PATCH', body: { name }, auth: true }),
+
+  listMembers: () => request<Member[]>('/orgs/current/members', { auth: true }),
+
+  setMemberRole: (interviewerId: number, role: OrgRole) =>
+    request<Member>(`/orgs/current/members/${interviewerId}`, {
+      method: 'PATCH',
+      body: { role },
+      auth: true,
+    }),
+
+  removeMember: (interviewerId: number) =>
+    request<void>(`/orgs/current/members/${interviewerId}`, { method: 'DELETE', auth: true }),
+
+  listOrgInvites: () => request<OrgInvite[]>('/orgs/current/invites', { auth: true }),
+
+  createOrgInvite: (email: string, role: OrgRole) =>
+    request<OrgInvite>('/orgs/current/invites', {
+      method: 'POST',
+      body: { email, role },
+      auth: true,
+    }),
+
+  revokeOrgInvite: (inviteId: number) =>
+    request<void>(`/orgs/current/invites/${inviteId}`, { method: 'DELETE', auth: true }),
+
+  // Public: the join page reads this before anyone has signed in.
+  readOrgInvite: (token: string) => request<OrgInvitePublic>(`/org-invites/${token}`),
+
+  acceptOrgInvite: (token: string) =>
+    request<Organization>(`/org-invites/${token}/accept`, { method: 'POST', auth: true }),
 
   listQuestions: (includeArchived = false, offset = 0, limit = 100) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })

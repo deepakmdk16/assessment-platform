@@ -119,7 +119,8 @@ Resend) with a verified sending domain.
 
 ## Endpoints
 
-Interviewer routes require a `Bearer` JWT and are owner-scoped. `/auth/login`
+Interviewer routes require a `Bearer` JWT and are organisation-scoped: every
+resource belongs to an `Organization`, and everyone in it shares the library. `/auth/login`
 returns a short-lived access token **and** sets an httpOnly `refresh_token`
 cookie (path `/auth`); `POST /auth/refresh` trades the cookie for a new access
 token, which is how the SPA resumes a session on page load. Every token carries
@@ -144,7 +145,7 @@ forwarded link, not deliberate impersonation.
 | POST   | `/auth/logout`                    | none        | Clears this browser's refresh cookie (204).                   |
 | GET    | `/auth/me`                        | bearer      | Current interviewer.                                          |
 | PATCH  | `/auth/me`                        | bearer      | Update workspace defaults (branding).                         |
-| DELETE | `/auth/me`                        | bearer      | Delete the account and everything it owns; body `{password}` (403 wrong password). |
+| DELETE | `/auth/me`                        | bearer      | Delete the account. Takes the organisation with it only if you are its last member; 409 if you are its only admin and others remain. Body `{password}` (403 wrong password). |
 | POST   | `/auth/change-password`           | bearer      | `{current_password,new_password}` → fresh session; every other device is signed out. |
 | POST   | `/auth/forgot-password`           | none        | `{email}` → 202 either way; emails a one-hour, single-use reset link if the address has an account. |
 | POST   | `/auth/reset-password`            | none        | `{token,new_password}` → 204 (400 bad/used/expired link). Signs out every device. |
@@ -152,16 +153,27 @@ forwarded link, not deliberate impersonation.
 | POST   | `/auth/resend-verification`       | bearer      | Re-send the confirmation link (202).                          |
 | POST   | `/questions`                      | bearer      | Create a question (owned by caller).                         |
 | POST   | `/questions/draft`                | bearer      | Draft a question from a brief via the agent. **Stores nothing** — the interviewer reviews/edits, then saves via `POST /questions`. |
-| GET    | `/questions`                      | bearer      | List the caller's own questions (active only; `?include_archived=true` to include archived). |
-| GET    | `/questions/{id}`                 | bearer      | Get one (403 if not owner, 404 if missing).                  |
-| PUT    | `/questions/{id}`                 | bearer      | Full replace (owner only).                                   |
+| POST   | `/orgs`                           | bearer      | Found an organisation, for an account that belongs to none (409 if it already does). |
+| GET    | `/orgs/current`                   | bearer      | The caller's organisation, their role in it, and its size.   |
+| PATCH  | `/orgs/current`                   | bearer      | Rename it (admin only).                                      |
+| GET    | `/orgs/current/members`           | bearer      | The roster (any member).                                     |
+| PATCH  | `/orgs/current/members/{id}`      | bearer      | Change a role (admin only); **409** for the last admin.      |
+| DELETE | `/orgs/current/members/{id}`      | bearer      | Remove someone (admin only); their work stays with the organisation. |
+| GET    | `/orgs/current/invites`           | bearer      | Invitations sent but not yet accepted (admin only).          |
+| POST   | `/orgs/current/invites`           | bearer      | Invite one address (admin only); emails the link and records whether it sent. |
+| DELETE | `/orgs/current/invites/{id}`      | bearer      | Withdraw a pending invitation (admin only).                  |
+| GET    | `/org-invites/{token}`            | public      | What the join page shows: organisation name, invited address, role. |
+| POST   | `/org-invites/{token}/accept`     | bearer      | Accept as an existing account (403 wrong address; 409 if your current organisation has members or work). |
+| GET    | `/questions`                      | bearer      | List the organisation's questions (active only; `?include_archived=true` to include archived). |
+| GET    | `/questions/{id}`                 | bearer      | Get one (403 if another organisation's, 404 if missing).     |
+| PUT    | `/questions/{id}`                 | bearer      | Full replace (the organisation's own).                       |
 | POST   | `/questions/{id}/archive`         | bearer      | Retire a question: hidden from the default list, submissions kept. The path for a question with submissions (DELETE 409s on those). |
 | POST   | `/questions/{id}/unarchive`       | bearer      | Restore an archived question to the active list.             |
-| DELETE | `/questions/{id}`                 | bearer      | Delete (owner only); **409** once it has submissions — archive it instead. |
+| DELETE | `/questions/{id}`                 | bearer      | Delete (the organisation's own); **409** once it has submissions — archive it instead. |
 | POST   | `/questions/{id}/invites`         | bearer      | Create a candidate invite link → `{token,url,deliveries[],...}`. **At least one recipient is required** — the link only works for those addresses. |
 | GET    | `/questions/{id}/invites`         | bearer      | List invites for a question.                                 |
 | POST   | `/questions/{id}/invites/{token}/revoke` | bearer | Deactivate an invite; its link then 410s.                 |
-| GET    | `/questions/{id}/submissions`     | bearer      | Dashboard: submissions for that question (owner only).       |
+| GET    | `/questions/{id}/submissions`     | bearer      | Dashboard: submissions for that question (the organisation's own). |
 | GET    | `/invite/{token}`                 | public      | **Liveness probe only** — `{"status":"active"}`. Carries no question data. 404 invalid / 410 revoked-or-expired. |
 | POST   | `/invite/{token}/start`           | public      | Candidate identifies as an invited recipient → the question + languages. 403 if not invited, 409 if they already submitted. **This is the only route that hands out the question.** |
 | POST   | `/invite/{token}/run`             | public      | Run their code against their own stdin → stdout/stderr/timing. Not a submission. |
@@ -186,13 +198,21 @@ Interactive docs at `/docs` when running.
 
 - **Interviewer** — `id` (PK), `email` (unique), `password_hash` (bcrypt),
   `name`, `created_at`.
-- **Question** — `id` (PK), `owner_id` (FK → Interviewer), `title`, `prompt`,
+- **Organization** — `id` (PK), `name`. The tenant: what every owned row below
+  is scoped to.
+- **Membership** — `org_id`, `interviewer_id` (**unique** — one organisation per
+  person, deliberately), `role` (`admin` | `member`), `invited_by`.
+- **OrgInvite** — `org_id`, `token` (unique), `email`, `role`, `invited_by`,
+  `expires_at`, `accepted_at`, `sent` / `send_error`. Kept after acceptance as
+  the record of who joined, when, and at whose invitation.
+- **Question** — `id` (PK), `org_id` (FK → Organization, the access scope),
+  `owner_id` (FK → Interviewer, nullable — who authored it), `title`, `prompt`,
   `constraints`, `time_limit_s` (2.0), `pass_threshold` (0.9),
   `required_complexity?`, `example_input?`, `example_output?`, `created_at`,
   `updated_at`, and a child list of **QuestionTestCase** (`name`, `stdin`,
   `expected`, `category` `correctness|performance`, `weight`).
 - **Invite** — `id` (PK), `token` (unique, url-safe random), `question_id` (FK),
-  `created_by` (FK → Interviewer), `recipients` (JSON list of emails),
+  `created_by` (FK → Interviewer, nullable — who sent it), `recipients` (JSON list of emails),
   `expires_at?`, `status` (`active`), `created_at`.
 - **Submission** — `id` (uuid), `question_id` (FK), `invite_id?` (FK, set for
   candidate submissions), `candidate` (name), `candidate_email?`, `language`,

@@ -52,10 +52,12 @@ from .auth import (
     create_reset_token,
     create_verify_token,
     get_current_interviewer,
+    get_current_membership,
     hash_password,
     interviewer_from_action_token,
     interviewer_from_refresh,
     is_breached_password,
+    membership_for,
     set_refresh_cookie,
     verify_password,
 )
@@ -71,6 +73,9 @@ from .models import (
     IntegrityEvent,
     Interviewer,
     Invite,
+    Membership,
+    Organization,
+    OrgInvite,
     Question,
     QuestionTestCase,
     Submission,
@@ -120,7 +125,15 @@ from .schemas import (
     InvitePublicOut,
     InviteStatusOut,
     LoginIn,
+    MemberOut,
+    MemberRoleUpdate,
     MessageOut,
+    OrganizationCreate,
+    OrganizationOut,
+    OrganizationUpdate,
+    OrgInviteCreate,
+    OrgInviteOut,
+    OrgInvitePublicOut,
     OverviewAnalyticsOut,
     Page,
     QuestionAnalyticsOut,
@@ -551,17 +564,26 @@ def _send_verification(interviewer: Interviewer, background: BackgroundTasks) ->
     )
 
 
-def _purge_interviewer(owner_id: int, session: Session) -> None:
-    """Hard-delete an interviewer and every row that hangs off them, children
-    first so no foreign key is ever left dangling: results → submissions →
-    sitting rows (attempts, slot variants, integrity events, drafts) → invites →
-    assessment slots → assessments → test cases → questions → variant sets → the
-    account. This is the one path that removes recorded submissions: the account
-    holder is the record's owner, and taking their data with them is what
-    deleting an account means (and what a data-subject request requires)."""
-    question_ids = select(Question.id).where(Question.owner_id == owner_id)
-    assessment_ids = select(Assessment.id).where(Assessment.owner_id == owner_id)
-    invite_ids = select(Invite.id).where(Invite.created_by == owner_id)
+def _purge_org(org_id: int, session: Session) -> None:
+    """Hard-delete an organisation and every row that hangs off it, children first
+    so no foreign key is ever left dangling: results → submissions → sitting rows
+    (attempts, slot variants, integrity events, drafts) → invites → assessment
+    slots → assessments → test cases → questions → variant sets → the roster and
+    its pending org invites → the organisation. This is the one path that removes
+    recorded submissions.
+
+    Invites are reached through the question or assessment they point at, not
+    through `created_by`: an invite belongs to the organisation and may well have
+    been sent by someone who has since left.
+    """
+    question_ids = select(Question.id).where(Question.org_id == org_id)
+    assessment_ids = select(Assessment.id).where(Assessment.org_id == org_id)
+    invite_ids = select(Invite.id).where(
+        or_(
+            col(Invite.question_id).in_(question_ids),
+            col(Invite.assessment_id).in_(assessment_ids),
+        )
+    )
     submission_ids = select(Submission.id).where(
         or_(
             col(Submission.question_id).in_(question_ids),
@@ -575,16 +597,87 @@ def _purge_interviewer(owner_id: int, session: Session) -> None:
         (CandidateSlotVariant, col(CandidateSlotVariant.invite_id).in_(invite_ids)),
         (IntegrityEvent, col(IntegrityEvent.invite_id).in_(invite_ids)),
         (CandidateDraft, col(CandidateDraft.invite_id).in_(invite_ids)),
-        (Invite, col(Invite.created_by) == owner_id),
+        (Invite, col(Invite.id).in_(invite_ids)),
         (AssessmentQuestion, col(AssessmentQuestion.assessment_id).in_(assessment_ids)),
-        (Assessment, col(Assessment.owner_id) == owner_id),
+        (Assessment, col(Assessment.org_id) == org_id),
         (QuestionTestCase, col(QuestionTestCase.question_id).in_(question_ids)),
-        (Question, col(Question.owner_id) == owner_id),
-        (VariantSet, col(VariantSet.owner_id) == owner_id),
-        (Interviewer, col(Interviewer.id) == owner_id),
+        (Question, col(Question.org_id) == org_id),
+        (VariantSet, col(VariantSet.org_id) == org_id),
+        (OrgInvite, col(OrgInvite.org_id) == org_id),
+        (Membership, col(Membership.org_id) == org_id),
+        (Organization, col(Organization.id) == org_id),
     ]
     for table, condition in steps:
         session.execute(delete(table).where(condition))
+
+
+def _disown(interviewer_id: int, session: Session) -> None:
+    """Cut every reference to an account that is about to be deleted, without
+    touching the rows themselves — for the case where the organisation lives on.
+
+    Authorship is the only thing that points at the person; nulling it leaves the
+    question, the invite and the audit row exactly as they were, attributed to a
+    deleted account. (Every one of these columns is nullable for this reason.)
+    """
+    for stmt in (
+        update(Question).where(col(Question.owner_id) == interviewer_id).values(owner_id=None),
+        update(VariantSet).where(col(VariantSet.owner_id) == interviewer_id).values(owner_id=None),
+        update(Assessment).where(col(Assessment.owner_id) == interviewer_id).values(owner_id=None),
+        update(Invite).where(col(Invite.created_by) == interviewer_id).values(created_by=None),
+        update(OrgInvite).where(col(OrgInvite.invited_by) == interviewer_id).values(invited_by=None),
+        update(Membership).where(col(Membership.invited_by) == interviewer_id).values(invited_by=None),
+    ):
+        session.execute(stmt)
+
+
+def _purge_account(interviewer_id: int, session: Session) -> None:
+    """Delete an account — and the organisation's data only when nobody is left.
+
+    One button, two genuinely different situations. A sole trader deleting their
+    account is deleting the whole workspace: the questions, the invites, and the
+    submissions candidates made against them. That is what deleting an account
+    has always meant here, and what a data-subject request requires.
+
+    Someone leaving a team is not that. The question bank and the candidate
+    record belong to the organisation and stay — deleting them would destroy
+    colleagues' work and other people's submissions on one person's say-so. What
+    leaves is the person: their login, their seat, and their name against the
+    rows they authored.
+
+    Raises 409 if the caller is the last admin of an organisation other people
+    are still in: leaving would strand them with a roster nobody can change and
+    no way to found another organisation. Promoting someone else first makes the
+    deletion go through, so this delays a data-subject request by one click
+    rather than refusing it.
+    """
+    membership = session.exec(
+        select(Membership).where(Membership.interviewer_id == interviewer_id)
+    ).first()
+    others = (
+        session.exec(
+            select(Membership).where(
+                Membership.org_id == membership.org_id,
+                col(Membership.interviewer_id) != interviewer_id,
+            )
+        ).first()
+        if membership is not None
+        else None
+    )
+    if membership is not None and others is not None:
+        _last_admin_guard(membership.org_id, interviewer_id, session)
+    if membership is not None and others is None:
+        _purge_org(membership.org_id, session)
+    else:
+        session.execute(
+            delete(Membership).where(col(Membership.interviewer_id) == interviewer_id)
+        )
+    # Unconditional, and after the purge: an account can have authored rows in an
+    # organisation it no longer belongs to (removed from one, founded another),
+    # and those references outlive whichever branch ran above. Skipping this on
+    # the purge branch left the account permanently undeletable behind a foreign
+    # key — enforced in both engines, so a 500, not a silent orphan.
+    _disown(interviewer_id, session)
+    session.execute(delete(Interviewer).where(col(Interviewer.id) == interviewer_id))
 
 
 @app.post("/auth/register", response_model=InterviewerOut, status_code=201)
@@ -600,13 +693,25 @@ def register(
     limiter.check(
         "register", client_ip(request), config.REGISTER_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
+    # Stored and compared lower-cased, so Jane@x.io and jane@x.io are one account.
+    email = _normalize_email(body.email)
+    # Joining an existing organisation (X01): the invitation is addressed to this
+    # address and is itself the proof of admission, so it stands in for the
+    # registration code rather than being demanded on top of it. Resolved before
+    # the account is created so a bad link fails without leaving a stray login.
+    org_invite = None
+    if body.org_invite_token:
+        org_invite = _open_org_invite(body.org_invite_token, session)
+        if org_invite.email != email:
+            raise HTTPException(
+                status_code=403,
+                detail=f"this invitation was sent to {org_invite.email!r}.",
+            )
     # Gated sign-up: when a registration code is configured, require a match.
-    if config.REGISTRATION_CODE and not _secret_matches(
+    elif config.REGISTRATION_CODE and not _secret_matches(
         body.registration_code, config.REGISTRATION_CODE
     ):
         raise HTTPException(status_code=403, detail="invalid or missing registration code.")
-    # Stored and compared lower-cased, so Jane@x.io and jane@x.io are one account.
-    email = _normalize_email(body.email)
     existing = session.exec(select(Interviewer).where(Interviewer.email == email)).first()
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"email {email!r} already registered.")
@@ -617,6 +722,15 @@ def register(
         name=body.name,
     )
     session.add(interviewer)
+    session.flush()  # need the interviewer id for the membership below
+    # Every account belongs to exactly one organisation from the moment it exists
+    # — either the one that invited it, or a fresh one it founds. That is what
+    # keeps "the caller's organisation" total rather than a null check at every
+    # scoped route.
+    if org_invite is not None:
+        _join_org(interviewer, org_invite, session)
+    else:
+        _found_org(interviewer, None, session)
     session.commit()
     session.refresh(interviewer)
     # Best-effort, like invite mail: a mailer outage must not block sign-up. The
@@ -761,11 +875,14 @@ def delete_me(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> None:
-    """Delete the caller's account and everything it owns (see
-    `_purge_interviewer`). Irreversible; the password is required again."""
+    """Delete the caller's account. If they are the last member of their
+    organisation this takes the organisation and everything in it with them;
+    otherwise the organisation keeps its work and only the person leaves (see
+    `_purge_account`, which 409s if that would leave colleagues with no admin).
+    Irreversible; the password is required again."""
     if not verify_password(body.password, current.password_hash):
         raise HTTPException(status_code=403, detail="password is incorrect.")
-    _purge_interviewer(_require_id(current.id), session)
+    _purge_account(_require_id(current.id), session)
     session.commit()
     clear_refresh_cookie(response)
 
@@ -798,26 +915,481 @@ def update_me(
 
 
 # --------------------------------------------------------------------------- #
+# Organisations: the roster, and the invites that fill it (X01)                 #
+# --------------------------------------------------------------------------- #
+
+# Long enough that an admin can send it on a Friday and have it work on Monday,
+# short enough that a forwarded mail isn't a standing key to the question bank.
+ORG_INVITE_TTL = timedelta(days=7)
+
+
+def _require_admin(org: Membership) -> None:
+    """Managing the roster is the one thing a plain member may not do."""
+    if org.role != "admin":
+        raise HTTPException(
+            status_code=403, detail="only an organisation admin can manage the team."
+        )
+
+
+def _org_invite_url(token: str) -> str:
+    return f"{config.FRONTEND_BASE_URL}/join?token={token}"
+
+
+def _member_count(org_id: int, session: Session) -> int:
+    return int(
+        session.exec(
+            select(func.count()).select_from(Membership).where(Membership.org_id == org_id)
+        ).one()
+    )
+
+
+def _organization_out(org: Membership, session: Session) -> OrganizationOut:
+    organization = session.get(Organization, org.org_id)
+    if organization is None:  # FK-enforced, so this is a corrupted database
+        raise HTTPException(status_code=500, detail="organisation row is missing.")
+    return OrganizationOut(
+        id=org.org_id,
+        name=organization.name,
+        role=org.role,
+        member_count=_member_count(org.org_id, session),
+    )
+
+
+def _admin_count(org_id: int, session: Session) -> int:
+    return int(
+        session.exec(
+            select(func.count())
+            .select_from(Membership)
+            .where(Membership.org_id == org_id, Membership.role == "admin")
+        ).one()
+    )
+
+
+def _last_admin_guard(org_id: int, interviewer_id: int, session: Session) -> None:
+    """Refuse the change that would leave an organisation with nobody who can
+    manage it — a state with no way out except a database edit."""
+    target = session.exec(
+        select(Membership).where(
+            Membership.org_id == org_id, Membership.interviewer_id == interviewer_id
+        )
+    ).first()
+    if target is not None and target.role == "admin" and _admin_count(org_id, session) <= 1:
+        raise HTTPException(
+            status_code=409,
+            detail="this is the organisation's only admin; promote someone else first.",
+        )
+
+
+def _org_invite_out(invite: OrgInvite) -> OrgInviteOut:
+    return OrgInviteOut(
+        id=_require_id(invite.id),
+        email=invite.email,
+        role=invite.role,
+        url=_org_invite_url(invite.token),
+        expires_at=invite.expires_at,
+        accepted_at=invite.accepted_at,
+        sent=invite.sent,
+        error=invite.send_error,
+    )
+
+
+def _open_org_invite(token: str, session: Session) -> OrgInvite:
+    """Resolve a join token, or 404. Expired, already-accepted and never-existed
+    all answer the same way: a link that no longer works, with nothing said about
+    which organisation it was for."""
+    invite = session.exec(select(OrgInvite).where(OrgInvite.token == token)).first()
+    expired = (
+        invite is not None
+        and invite.expires_at is not None
+        and as_utc(invite.expires_at) <= datetime.now(timezone.utc)
+    )
+    if invite is None or invite.accepted_at is not None or expired:
+        raise HTTPException(status_code=404, detail="this invitation link is no longer valid.")
+    return invite
+
+
+def _join_org(interviewer: Interviewer, invite: OrgInvite, session: Session) -> Membership:
+    """Turn an accepted invitation into a seat. Stamps `accepted_at` so the row
+    becomes the audit record of who joined and when, rather than a live key."""
+    membership = Membership(
+        org_id=invite.org_id,
+        interviewer_id=_require_id(interviewer.id),
+        role=invite.role,
+        invited_by=invite.invited_by,
+    )
+    session.add(membership)
+    invite.accepted_at = datetime.now(timezone.utc)
+    session.add(invite)
+    return membership
+
+
+def _found_org(interviewer: Interviewer, name: str | None, session: Session) -> Membership:
+    """Create an organisation with this account as its first admin.
+
+    Every account has one: sign-up creates it, and the X01 migration gave every
+    pre-existing account its own. That is what keeps "the caller's organisation"
+    a total function rather than a special case at 40 call sites.
+    """
+    chosen = (name or "").strip()
+    who = interviewer.name.strip()
+    organization = Organization(
+        name=chosen or (f"{who}'s organisation" if who else "My organisation")
+    )
+    session.add(organization)
+    session.flush()  # need the id for the membership below
+    membership = Membership(
+        org_id=_require_id(organization.id),
+        interviewer_id=_require_id(interviewer.id),
+        role="admin",
+    )
+    session.add(membership)
+    return membership
+
+
+def _leave_empty_org(membership: Membership, session: Session) -> None:
+    """Give up the organisation this account currently sits in, so it can join
+    another — but only when doing so destroys nothing.
+
+    Sign-up hands every account an organisation, which would otherwise make an
+    invitation unacceptable to anyone who has ever registered: exactly the case
+    of two colleagues who each signed up separately and now want one library.
+    Walking away is free only when that organisation is a shell — nobody else in
+    it, and nothing authored in it. With colleagues in it, an admin there has to
+    remove them; with work in it, refuse rather than quietly delete a question
+    bank the invitation said nothing about.
+    """
+    org_id = membership.org_id
+    if _member_count(org_id, session) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="you belong to an organisation with other members; ask one of its "
+            "admins to remove you first.",
+        )
+    for model in (Question, Assessment, VariantSet):
+        if session.exec(select(model).where(model.org_id == org_id)).first() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="your current organisation still has questions or assessments; "
+                "they cannot be moved between organisations.",
+            )
+    _purge_org(org_id, session)
+    session.flush()  # the seat must be gone before the new one is inserted
+
+
+@app.post("/orgs", response_model=OrganizationOut, status_code=201)
+def create_org(
+    body: OrganizationCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> OrganizationOut:
+    """Found an organisation for an account that has none.
+
+    The recovery path out of the one dead end the roster can produce: an admin
+    removes someone, and that account now belongs nowhere and gets a 403 from
+    every data route. Without this they would have to register again under a
+    different address.
+    """
+    if membership_for(current, session) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="this account already belongs to an organisation.",
+        )
+    membership = _found_org(current, body.name, session)
+    session.commit()
+    session.refresh(membership)
+    return _organization_out(membership, session)
+
+
+@app.get("/orgs/current", response_model=OrganizationOut)
+def get_org(
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> OrganizationOut:
+    return _organization_out(org, session)
+
+
+@app.patch("/orgs/current", response_model=OrganizationOut)
+def update_org(
+    body: OrganizationUpdate,
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> OrganizationOut:
+    _require_admin(org)
+    organization = session.get(Organization, org.org_id)
+    if organization is None:
+        raise HTTPException(status_code=500, detail="organisation row is missing.")
+    organization.name = body.name.strip()
+    session.add(organization)
+    session.commit()
+    return _organization_out(org, session)
+
+
+@app.get("/orgs/current/members", response_model=list[MemberOut])
+def list_members(
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> list[MemberOut]:
+    """The roster, readable by any member — you can see who you work with. Only
+    changing it is admin-only."""
+    rows = session.exec(
+        select(Membership, Interviewer)
+        .join(Interviewer, col(Membership.interviewer_id) == col(Interviewer.id))
+        .where(Membership.org_id == org.org_id)
+        .order_by(col(Membership.created_at))
+    ).all()
+    return [
+        MemberOut(
+            interviewer_id=_require_id(interviewer.id),
+            email=interviewer.email,
+            name=interviewer.name,
+            role=membership.role,
+            joined_at=membership.created_at,
+        )
+        for membership, interviewer in rows
+    ]
+
+
+@app.patch("/orgs/current/members/{interviewer_id}", response_model=MemberOut)
+def update_member_role(
+    interviewer_id: int,
+    body: MemberRoleUpdate,
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> MemberOut:
+    _require_admin(org)
+    membership = session.exec(
+        select(Membership).where(
+            Membership.org_id == org.org_id, Membership.interviewer_id == interviewer_id
+        )
+    ).first()
+    if membership is None:
+        raise HTTPException(status_code=404, detail="no such member of this organisation.")
+    if body.role != "admin":
+        _last_admin_guard(org.org_id, interviewer_id, session)
+    membership.role = body.role
+    session.add(membership)
+    session.commit()
+    session.refresh(membership)
+    interviewer = session.get(Interviewer, interviewer_id)
+    if interviewer is None:
+        raise HTTPException(status_code=500, detail="member row is missing.")
+    return MemberOut(
+        interviewer_id=interviewer_id,
+        email=interviewer.email,
+        name=interviewer.name,
+        role=membership.role,
+        joined_at=membership.created_at,
+    )
+
+
+@app.delete("/orgs/current/members/{interviewer_id}", status_code=204)
+def remove_member(
+    interviewer_id: int,
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> None:
+    """Take someone's seat away. Their account survives — this is a hand-off, not
+    an account deletion — and so does everything they authored, which now belongs
+    to the organisation rather than to them. They can found a fresh organisation
+    (`POST /orgs`) or accept another invitation."""
+    _require_admin(org)
+    membership = session.exec(
+        select(Membership).where(
+            Membership.org_id == org.org_id, Membership.interviewer_id == interviewer_id
+        )
+    ).first()
+    if membership is None:
+        raise HTTPException(status_code=404, detail="no such member of this organisation.")
+    _last_admin_guard(org.org_id, interviewer_id, session)
+    session.delete(membership)
+    session.commit()
+
+
+@app.get("/orgs/current/invites", response_model=list[OrgInviteOut])
+def list_org_invites(
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> list[OrgInviteOut]:
+    """Invitations sent but not yet accepted — who is expected to arrive."""
+    _require_admin(org)
+    pending = session.exec(
+        select(OrgInvite)
+        .where(OrgInvite.org_id == org.org_id, col(OrgInvite.accepted_at).is_(None))
+        .order_by(col(OrgInvite.created_at).desc())
+    ).all()
+    return [_org_invite_out(invite) for invite in pending]
+
+
+@app.post("/orgs/current/invites", response_model=OrgInviteOut, status_code=201)
+def create_org_invite(
+    body: OrgInviteCreate,
+    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> OrgInviteOut:
+    """Invite one person into the organisation.
+
+    This is what replaces `REGISTRATION_CODE` as the way a company adds people: a
+    code is one shared secret that never expires and records nothing, an invite
+    is addressed to one email, expires, and names who sent it.
+    """
+    _require_admin(org)
+    email = _normalize_email(body.email)
+    # Whether that address has an account *elsewhere* is deliberately not checked
+    # here: the answer would leak, and an existing account can accept anyway (see
+    # `accept_org_invite`). Someone already on this roster is different — the
+    # admin can see them in it, so nothing leaks, and an invitation they cannot
+    # meaningfully accept is only a trap.
+    if any(
+        member.email == email
+        for member in session.exec(
+            select(Interviewer)
+            .join(Membership, col(Membership.interviewer_id) == col(Interviewer.id))
+            .where(Membership.org_id == org.org_id)
+        ).all()
+    ):
+        raise HTTPException(
+            status_code=409, detail=f"{email!r} is already a member of this organisation."
+        )
+    # A pending invite for the same address is replaced rather than added to, so
+    # "resend" doesn't leave two live keys for one seat.
+    session.execute(
+        delete(OrgInvite).where(
+            col(OrgInvite.org_id) == org.org_id,
+            col(OrgInvite.email) == email,
+            col(OrgInvite.accepted_at).is_(None),
+        )
+    )
+    organization = session.get(Organization, org.org_id)
+    invite = OrgInvite(
+        org_id=org.org_id,
+        token=secrets.token_urlsafe(32),
+        email=email,
+        role=body.role,
+        invited_by=_require_id(current.id),
+        expires_at=datetime.now(timezone.utc) + ORG_INVITE_TTL,
+    )
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    url = _org_invite_url(invite.token)
+    # Sent inline, not in the background, so the response can say whether it
+    # actually went — an admin who is never told the mail bounced waits for
+    # someone who was never written to. Recorded on the row for the same reason:
+    # a warning that vanishes on the next page load is a warning nobody acts on.
+    delivery = email_client.send_account_email(
+        email,
+        f"You've been invited to {organization.name if organization else 'an organisation'}",
+        f"{current.name} invited you to join "
+        f"{organization.name if organization else 'their organisation'} "
+        "on the coding-assessment platform.\n\n"
+        f"Accept the invitation:\n{url}\n\n"
+        "The link is valid for 7 days. If you weren't expecting this, ignore it.",
+        url,
+    )
+    invite.sent = delivery.sent
+    invite.send_error = delivery.error
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    return _org_invite_out(invite)
+
+
+@app.delete("/orgs/current/invites/{invite_id}", status_code=204)
+def revoke_org_invite(
+    invite_id: int,
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> None:
+    """Withdraw an invitation that hasn't been accepted. An accepted one is an
+    audit record and stays; removing that person is `DELETE .../members/{id}`."""
+    _require_admin(org)
+    invite = session.get(OrgInvite, invite_id)
+    if invite is None or invite.org_id != org.org_id or invite.accepted_at is not None:
+        raise HTTPException(status_code=404, detail="no pending invitation with that id.")
+    session.delete(invite)
+    session.commit()
+
+
+@app.get("/org-invites/{token}", response_model=OrgInvitePublicOut)
+def read_org_invite(
+    token: str, request: Request, session: Session = Depends(get_session)
+) -> OrgInvitePublicOut:
+    """What the join page shows before anyone signs in. Rate-limited like login:
+    the token is unguessable, but an unauthenticated lookup shouldn't be free."""
+    limiter.check(
+        "org-invite", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
+    invite = _open_org_invite(token, session)
+    organization = session.get(Organization, invite.org_id)
+    return OrgInvitePublicOut(
+        org_name=organization.name if organization else "an organisation",
+        email=invite.email,
+        role=invite.role,
+    )
+
+
+@app.post("/org-invites/{token}/accept", response_model=OrganizationOut)
+def accept_org_invite(
+    token: str,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> OrganizationOut:
+    """Accept an invitation as an already-signed-in account.
+
+    The address has to match the one invited: the token alone must not let
+    whoever a forwarded mail reaches into the question bank.
+
+    Sign-up gives every account an organisation of its own, so the ordinary case
+    — two people who each registered last week and now want to work together —
+    arrives here already belonging somewhere. `_leave_empty_org` decides whether
+    that organisation can be walked away from.
+    """
+    invite = _open_org_invite(token, session)
+    if _normalize_email(current.email) != invite.email:
+        raise HTTPException(
+            status_code=403,
+            detail=f"this invitation was sent to {invite.email!r}; sign in as that address.",
+        )
+    existing = membership_for(current, session)
+    if existing is not None and existing.org_id == invite.org_id:
+        # Already in. Reached by re-inviting a colleague, or by opening the same
+        # link twice; answering 409 here would tell someone to leave the
+        # organisation they are being invited to join.
+        raise HTTPException(
+            status_code=409, detail="you are already a member of this organisation."
+        )
+    if existing is not None:
+        _leave_empty_org(existing, session)
+    membership = _join_org(current, invite, session)
+    session.commit()
+    session.refresh(membership)
+    return _organization_out(membership, session)
+
+
+# --------------------------------------------------------------------------- #
 # Questions CRUD                                                                #
 # --------------------------------------------------------------------------- #
 
 
-def _owned_question(question_id: str, current: Interviewer, session: Session) -> Question:
-    """Load a question and enforce ownership: 404 if missing, 403 if not the caller's."""
+def _owned_question(question_id: str, org: Membership, session: Session) -> Question:
+    """Load a question and enforce the organisation scope: 404 if missing, 403 if it
+    belongs to another organisation. Scoped to the org rather than to `owner_id`
+    (X01) — a colleague works the same library, which is the point of a team."""
     q = session.get(Question, question_id)
     if q is None:
         raise HTTPException(status_code=404, detail=f"no question with id {question_id!r}.")
-    if q.owner_id != current.id:
-        raise HTTPException(status_code=403, detail="not your question.")
+    if q.org_id != org.org_id:
+        raise HTTPException(status_code=403, detail="not your organisation's question.")
     return q
 
 
-def _owned_submission(submission_id: str, current: Interviewer, session: Session) -> Submission:
-    """Load a submission and enforce ownership via its question's owner."""
+def _owned_submission(submission_id: str, org: Membership, session: Session) -> Submission:
+    """Load a submission and enforce the scope via its question's organisation."""
     sub = session.get(Submission, submission_id)
     if sub is None:
         raise HTTPException(status_code=404, detail=f"no submission with id {submission_id!r}.")
-    _owned_question(sub.question_id, current, session)  # 403 if not the caller's question
+    _owned_question(sub.question_id, org, session)  # 403 if another org's question
     return sub
 
 
@@ -856,6 +1428,7 @@ def _generate_id(title: str, exists: Callable[[str], bool]) -> str:
 def create_question(
     body: QuestionCreate,
     current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> QuestionOut:
     # An explicit id (agent/CLI authoring path) is honored; the UI omits it and
@@ -871,6 +1444,7 @@ def create_question(
     q = Question(
         id=qid,
         owner_id=_require_id(current.id),
+        org_id=org.org_id,
         title=body.title,
         prompt=body.prompt,
         constraints=body.constraints,
@@ -946,7 +1520,13 @@ def _question_create_from_agent(q: dict) -> QuestionCreate:
 async def draft_question(
     body: QuestionDraftIn,
     request: Request,
-    current: Interviewer = Depends(get_current_interviewer),
+    # Membership, not merely a login: these two routes store nothing, which is
+    # why they were left unscoped — but they are the ones that spend real money,
+    # and an account an admin has just removed still passes a bearer check. It
+    # would be refused by every route that touches data and keep unlimited access
+    # to the LLM. Requiring a seat also makes the spend attributable per
+    # organisation, which X02 billing and X09 per-tenant limits both need.
+    org: Membership = Depends(get_current_membership),
 ) -> QuestionDraftOut:
     """Draft a question from a brief via the agent. Stateless: stores NOTHING —
     the interviewer reviews/edits the returned draft and then saves it through the
@@ -997,11 +1577,11 @@ async def draft_question(
 _VARIANT_LABELS = "ABCDEFGH"
 
 
-def _owned_variant_set(set_id: str, current: Interviewer, session: Session) -> VariantSet:
-    """Load a variant set and enforce ownership (404 if missing/not the caller's —
-    a single status so one owner can't probe another's ids)."""
+def _owned_variant_set(set_id: str, org: Membership, session: Session) -> VariantSet:
+    """Load a variant set and enforce the organisation scope (404 if missing or
+    another org's — a single status so one org can't probe another's ids)."""
     vs = session.get(VariantSet, set_id)
-    if vs is None or vs.owner_id != current.id:
+    if vs is None or vs.org_id != org.org_id:
         raise HTTPException(status_code=404, detail=f"no variant set with id {set_id!r}.")
     return vs
 
@@ -1040,7 +1620,13 @@ def _set_variants(set_id: str, session: Session) -> list[Question]:
 async def draft_variant_set(
     body: VariantSetDraftIn,
     request: Request,
-    current: Interviewer = Depends(get_current_interviewer),
+    # Membership, not merely a login: these two routes store nothing, which is
+    # why they were left unscoped — but they are the ones that spend real money,
+    # and an account an admin has just removed still passes a bearer check. It
+    # would be refused by every route that touches data and keep unlimited access
+    # to the LLM. Requiring a seat also makes the spend attributable per
+    # organisation, which X02 billing and X09 per-tenant limits both need.
+    org: Membership = Depends(get_current_membership),
 ) -> VariantSetDraftOut:
     """Draft a SET of sibling variants from one brief via the agent. Stateless:
     stores NOTHING — the interviewer reviews the variants (and the parity warnings)
@@ -1098,6 +1684,7 @@ async def draft_variant_set(
 def create_variant_set(
     body: VariantSetCreate,
     current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> VariantSetOut:
     """Persist a reviewed variant set: the set row plus one Question per variant,
@@ -1113,6 +1700,7 @@ def create_variant_set(
     vs = VariantSet(
         id=set_id,
         owner_id=owner,
+        org_id=org.org_id,
         title=body.title,
         brief=body.brief,
         language=body.language,
@@ -1138,6 +1726,7 @@ def create_variant_set(
         q = Question(
             id=qid,
             owner_id=owner,
+            org_id=org.org_id,
             title=v.title,
             prompt=v.prompt,
             constraints=v.constraints,
@@ -1178,10 +1767,10 @@ def list_variant_sets(
     include_archived: bool = False,
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> Page[VariantSetSummaryOut]:
-    where = [VariantSet.owner_id == current.id]
+    where = [VariantSet.org_id == org.org_id]
     if not include_archived:
         where.append(VariantSet.status == "active")
     total = session.exec(select(func.count()).select_from(VariantSet).where(*where)).one()
@@ -1215,10 +1804,10 @@ def list_variant_sets(
 @app.get("/variant-sets/{set_id}", response_model=VariantSetOut)
 def get_variant_set(
     set_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> VariantSetOut:
-    vs = _owned_variant_set(set_id, current, session)
+    vs = _owned_variant_set(set_id, org, session)
     return _variant_set_out(vs, _set_variants(set_id, session))
 
 
@@ -1228,10 +1817,10 @@ def list_questions(
     include_variants: bool = False,
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> Page[QuestionOut]:
-    where: list[Any] = [Question.owner_id == current.id]
+    where: list[Any] = [Question.org_id == org.org_id]
     if not include_archived:
         # Archived questions are retired: hidden from the dashboard by default but
         # still reachable (and their submissions kept) via ?include_archived=true.
@@ -1259,20 +1848,20 @@ def list_questions(
 @app.get("/questions/{question_id}", response_model=QuestionOut)
 def get_question(
     question_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> QuestionOut:
-    return _question_out(_owned_question(question_id, current, session))
+    return _question_out(_owned_question(question_id, org, session))
 
 
 @app.put("/questions/{question_id}", response_model=QuestionOut)
 def update_question(
     question_id: str,
     body: QuestionUpdate,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> QuestionOut:
-    q = _owned_question(question_id, current, session)
+    q = _owned_question(question_id, org, session)
     _enforce_case_floor(body.test_cases)
     q.title = body.title
     q.prompt = body.prompt
@@ -1308,7 +1897,7 @@ def update_question(
 @app.post("/questions/{question_id}/archive", response_model=QuestionOut)
 def archive_question(
     question_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> QuestionOut:
     """Retire a question: hide it from the dashboard while keeping its submissions.
@@ -1316,7 +1905,7 @@ def archive_question(
     This is the path for a question with recorded attempts — DELETE 409s on those
     because the submissions are the record. Idempotent.
     """
-    q = _owned_question(question_id, current, session)
+    q = _owned_question(question_id, org, session)
     q.status = "archived"
     q.updated_at = datetime.now(timezone.utc)
     session.add(q)
@@ -1328,11 +1917,11 @@ def archive_question(
 @app.post("/questions/{question_id}/unarchive", response_model=QuestionOut)
 def unarchive_question(
     question_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> QuestionOut:
     """Restore an archived question to the active dashboard. Idempotent."""
-    q = _owned_question(question_id, current, session)
+    q = _owned_question(question_id, org, session)
     q.status = "active"
     q.updated_at = datetime.now(timezone.utc)
     session.add(q)
@@ -1344,7 +1933,7 @@ def unarchive_question(
 @app.delete("/questions/{question_id}", status_code=204)
 def delete_question(
     question_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> None:
     """Delete a question and its invites/test cases. 409 if anyone has submitted.
@@ -1354,7 +1943,7 @@ def delete_question(
     question with recorded attempts is not deletable; the invites can be revoked
     instead. Invites and test cases carry no independent record and go with it.
     """
-    q = _owned_question(question_id, current, session)
+    q = _owned_question(question_id, org, session)
     # COUNT, not a fetch: the rows carry the candidates' full code blobs and we
     # only need to know whether any exist.
     submission_count = session.exec(
@@ -1452,12 +2041,12 @@ def delete_question(
 # --------------------------------------------------------------------------- #
 
 
-def _owned_assessment(assessment_id: str, current: Interviewer, session: Session) -> Assessment:
+def _owned_assessment(assessment_id: str, org: Membership, session: Session) -> Assessment:
     a = session.get(Assessment, assessment_id)
     if a is None:
         raise HTTPException(status_code=404, detail=f"no assessment with id {assessment_id!r}.")
-    if a.owner_id != current.id:
-        raise HTTPException(status_code=403, detail="not your assessment.")
+    if a.org_id != org.org_id:
+        raise HTTPException(status_code=403, detail="not your organisation's assessment.")
     return a
 
 
@@ -1502,10 +2091,10 @@ def _assessment_out(a: Assessment, session: Session) -> AssessmentOut:
 
 
 def _membership_rows(
-    slots: list[AssessmentSlotIn], current: Interviewer, session: Session
+    slots: list[AssessmentSlotIn], org: Membership, session: Session
 ) -> list[AssessmentQuestion]:
     """Validate an ordered slot list and build the membership rows. Each slot is a
-    fixed question OR a variant set (VS2), both owner-scoped (404/403 via
+    fixed question OR a variant set (VS2), both org-scoped (404/403 via
     `_owned_question` / `_owned_variant_set`). A question or variant set may appear
     at most once — reported as a clean 400 (the join's unique key also backs the
     question case, but not the set case, so this is the real guard)."""
@@ -1518,11 +2107,11 @@ def _membership_rows(
     rows: list[AssessmentQuestion] = []
     for i, s in enumerate(slots):
         if s.question_id is not None:
-            _owned_question(s.question_id, current, session)  # 404/403
+            _owned_question(s.question_id, org, session)  # 404/403
             rows.append(AssessmentQuestion(question_id=s.question_id, position=i))
         else:
             assert s.variant_set_id is not None  # slot validator guarantees exactly one
-            _owned_variant_set(s.variant_set_id, current, session)  # 404/403
+            _owned_variant_set(s.variant_set_id, org, session)  # 404/403
             rows.append(AssessmentQuestion(variant_set_id=s.variant_set_id, position=i))
     return rows
 
@@ -1541,6 +2130,7 @@ def _assessment_has_invite(assessment_id: str, session: Session) -> bool:
 def create_assessment(
     body: AssessmentCreate,
     current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> AssessmentOut:
     explicit_id = (body.id or "").strip()
@@ -1555,12 +2145,13 @@ def create_assessment(
     a = Assessment(
         id=aid,
         owner_id=_require_id(current.id),
+        org_id=org.org_id,
         title=body.title,
         duration_minutes=body.duration_minutes,
         org_name=body.org_name,
         logo_url=body.logo_url,
         proctored=body.proctored,
-        questions=_membership_rows(body.ordered_slots(), current, session),
+        questions=_membership_rows(body.ordered_slots(), org, session),
     )
     session.add(a)
     session.commit()
@@ -1573,10 +2164,10 @@ def list_assessments(
     include_archived: bool = False,
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> Page[AssessmentOut]:
-    where = [Assessment.owner_id == current.id]
+    where = [Assessment.org_id == org.org_id]
     if not include_archived:
         where.append(Assessment.status == "active")
     total = session.exec(select(func.count()).select_from(Assessment).where(*where)).one()
@@ -1594,10 +2185,10 @@ def list_assessments(
 @app.get("/assessments/{assessment_id}", response_model=AssessmentOut)
 def get_assessment(
     assessment_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> AssessmentOut:
-    return _assessment_out(_owned_assessment(assessment_id, current, session), session)
+    return _assessment_out(_owned_assessment(assessment_id, org, session), session)
 
 
 @app.put("/assessments/{assessment_id}", response_model=AssessmentOut)
@@ -1605,9 +2196,10 @@ def update_assessment(
     assessment_id: str,
     body: AssessmentUpdate,
     current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> AssessmentOut:
-    a = _owned_assessment(assessment_id, current, session)
+    a = _owned_assessment(assessment_id, org, session)
     # A9: once an invite has gone out (or, transitively, a submission exists),
     # two candidates in the "same" assessment must sit the same slots in the same
     # order — lock the SET, not the whole record. Title/duration/branding stay
@@ -1643,7 +2235,7 @@ def update_assessment(
         # its own old row on the (assessment_id, question_id) unique key.
         a.questions.clear()
         session.flush()
-        a.questions.extend(_membership_rows(new_slots, current, session))
+        a.questions.extend(_membership_rows(new_slots, org, session))
     session.add(a)
     session.commit()
     session.refresh(a)
@@ -1653,11 +2245,11 @@ def update_assessment(
 @app.post("/assessments/{assessment_id}/archive", response_model=AssessmentOut)
 def archive_assessment(
     assessment_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> AssessmentOut:
     """Retire an assessment: hide it by default while keeping its invites. Idempotent."""
-    a = _owned_assessment(assessment_id, current, session)
+    a = _owned_assessment(assessment_id, org, session)
     a.status = "archived"
     a.updated_at = datetime.now(timezone.utc)
     session.add(a)
@@ -1669,11 +2261,11 @@ def archive_assessment(
 @app.post("/assessments/{assessment_id}/unarchive", response_model=AssessmentOut)
 def unarchive_assessment(
     assessment_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> AssessmentOut:
     """Restore an archived assessment. Idempotent."""
-    a = _owned_assessment(assessment_id, current, session)
+    a = _owned_assessment(assessment_id, org, session)
     a.status = "active"
     a.updated_at = datetime.now(timezone.utc)
     session.add(a)
@@ -1685,13 +2277,13 @@ def unarchive_assessment(
 @app.delete("/assessments/{assessment_id}", status_code=204)
 def delete_assessment(
     assessment_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> None:
     """Delete an assessment (and its membership rows). 409 if any invite points at
     it — those invites are live links, so archive instead. The member questions
     are shared and never touched."""
-    a = _owned_assessment(assessment_id, current, session)
+    a = _owned_assessment(assessment_id, org, session)
     invite_count = session.exec(
         select(func.count()).select_from(Invite).where(Invite.assessment_id == assessment_id)
     ).one()
@@ -1717,9 +2309,10 @@ def create_invite(
     question_id: str,
     body: InviteCreate,
     current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> InviteOut:
-    question = _owned_question(question_id, current, session)  # 404/403 guard
+    question = _owned_question(question_id, org, session)  # 404/403 guard
     invite = Invite(
         token=secrets.token_urlsafe(32),
         question_id=question_id,
@@ -1751,10 +2344,10 @@ def create_invite(
 @app.get("/questions/{question_id}/invites", response_model=list[InviteOut])
 def list_invites(
     question_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> list[InviteOut]:
-    _owned_question(question_id, current, session)
+    _owned_question(question_id, org, session)
     invites = session.exec(
         select(Invite).where(Invite.question_id == question_id)
     ).all()
@@ -1766,11 +2359,12 @@ def create_assessment_invite(
     assessment_id: str,
     body: InviteCreate,
     current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> InviteOut:
     """Invite candidates to a whole assessment (T4). Same shape as the per-question
     invite, but the link opens the ordered multi-question flow."""
-    assessment = _owned_assessment(assessment_id, current, session)
+    assessment = _owned_assessment(assessment_id, org, session)
     if not assessment.questions:
         raise HTTPException(
             status_code=400, detail="cannot invite to an assessment with no questions."
@@ -1803,10 +2397,10 @@ def create_assessment_invite(
 @app.get("/assessments/{assessment_id}/invites", response_model=list[InviteOut])
 def list_assessment_invites(
     assessment_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> list[InviteOut]:
-    _owned_assessment(assessment_id, current, session)
+    _owned_assessment(assessment_id, org, session)
     invites = session.exec(select(Invite).where(Invite.assessment_id == assessment_id)).all()
     return [_invite_out(inv) for inv in invites]
 
@@ -1816,6 +2410,7 @@ def create_variant_set_invites(
     set_id: str,
     body: VariantSetInviteCreate,
     current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> list[InviteOut]:
     """Invite candidates to a variant set: ONE invite per recipient, each handed a
@@ -1825,7 +2420,7 @@ def create_variant_set_invites(
     question id) pins a recipient to a chosen variant instead of the rotation. Each
     invite carries `question_id` = its assigned variant, so the candidate flow
     resolves it exactly like a single-question invite."""
-    vs = _owned_variant_set(set_id, current, session)
+    vs = _owned_variant_set(set_id, org, session)
     variants = _set_variants(set_id, session)
     if not variants:
         raise HTTPException(status_code=400, detail="cannot invite to a variant set with no variants.")
@@ -1877,10 +2472,10 @@ def create_variant_set_invites(
 @app.get("/variant-sets/{set_id}/invites", response_model=list[InviteOut])
 def list_variant_set_invites(
     set_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> list[InviteOut]:
-    _owned_variant_set(set_id, current, session)
+    _owned_variant_set(set_id, org, session)
     label_of = {q.id: q.variant_label for q in _set_variants(set_id, session)}
     invites = session.exec(select(Invite).where(Invite.variant_set_id == set_id)).all()
     return [
@@ -1892,7 +2487,7 @@ def list_variant_set_invites(
 @app.get("/assessments/{assessment_id}/attempts", response_model=list[AssessmentAttemptOut])
 def list_assessment_attempts(
     assessment_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> list[AssessmentAttemptOut]:
     """One row per candidate who has started this assessment (A3): every
@@ -1901,7 +2496,7 @@ def list_assessment_attempts(
     recipient who never opened the link has no row here (nothing to attempt
     yet); that's still visible via the invite list.
     """
-    a = _owned_assessment(assessment_id, current, session)
+    a = _owned_assessment(assessment_id, org, session)
     return _assessment_attempt_rows(a, session)
 
 
@@ -2059,7 +2654,7 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
 
 
 # --------------------------------------------------------------------------- #
-# Analytics (AR1) — aggregate stats over the caller's own questions/results.   #
+# Analytics (AR1) — aggregate stats over the organisation's questions/results.   #
 # Read-only rollups; the maths lives in `analytics.py` (DB-free, unit-tested). #
 # --------------------------------------------------------------------------- #
 
@@ -2103,10 +2698,10 @@ def _attempt_starts(
 @app.get("/analytics/overview", response_model=OverviewAnalyticsOut)
 def analytics_overview(
     days: int | None = Query(default=None, ge=1, le=3650),
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> OverviewAnalyticsOut:
-    """Workspace rollup across all of the caller's questions: headline counts,
+    """Workspace rollup across all of the organisation's questions: headline counts,
     overall pass rate / average score, and a daily submission trend. `days`
     windows the submission-derived stats (counts/rate/score/trend) to the last N
     days; the question count is the current library size, not time-scoped."""
@@ -2114,7 +2709,7 @@ def analytics_overview(
         select(func.count())
         .select_from(Question)
         .where(
-            Question.owner_id == current.id,
+            Question.org_id == org.org_id,
             Question.status == "active",
             col(Question.variant_set_id).is_(None),
         )
@@ -2122,7 +2717,7 @@ def analytics_overview(
     cutoff = _since_cutoff(days)
     subs = _within(
         session.exec(
-            select(Submission).join(Question).where(Question.owner_id == current.id)
+            select(Submission).join(Question).where(Question.org_id == org.org_id)
         ).all(),
         cutoff,
     )
@@ -2163,7 +2758,7 @@ def analytics_questions(
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     days: int | None = Query(default=None, ge=1, le=3650),
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> Page[QuestionAnalyticsOut]:
     """Per-question stats (the numbers the plain question list lacked). Scoped to
@@ -2172,7 +2767,7 @@ def analytics_questions(
     days (the question rows themselves are the whole library). Paginated like
     `/submissions`."""
     where = (
-        Question.owner_id == current.id,
+        Question.org_id == org.org_id,
         Question.status == "active",
         col(Question.variant_set_id).is_(None),
     )
@@ -2248,14 +2843,14 @@ def analytics_questions(
 @app.get("/analytics/assessments/{assessment_id}", response_model=AssessmentAnalyticsOut)
 def analytics_assessment(
     assessment_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> AssessmentAnalyticsOut:
     """Cross-candidate rollup for one assessment: each candidate's standing
     (rank/percentile over graded candidates, whole-sitting time-to-solve) plus
     completion and a score distribution. Reuses the attempts assembly so the
     per-candidate scores stay consistent with the results view."""
-    a = _owned_assessment(assessment_id, current, session)
+    a = _owned_assessment(assessment_id, org, session)
     rows = _assessment_attempt_rows(a, session)
 
     invite_ids = session.exec(
@@ -2332,11 +2927,11 @@ def analytics_assessment(
 def revoke_invite(
     question_id: str,
     token: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> InviteOut:
     """Deactivate an invite so its link stops working (candidate view/submit 410)."""
-    _owned_question(question_id, current, session)  # 404/403 guard
+    _owned_question(question_id, org, session)  # 404/403 guard
     invite = session.exec(
         select(Invite).where(Invite.token == token, Invite.question_id == question_id)
     ).first()
@@ -3199,10 +3794,10 @@ async def _reaper_loop() -> None:
 @app.post("/submissions", response_model=SubmissionOut, status_code=201)
 async def create_submission(
     body: SubmissionCreate,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> SubmissionOut:
-    question = _owned_question(body.question_id, current, session)  # 404/403 guard
+    question = _owned_question(body.question_id, org, session)  # 404/403 guard
 
     sub = Submission(
         id=uuid.uuid4().hex,
@@ -3223,7 +3818,7 @@ async def create_submission(
 @app.post("/submissions/{submission_id}/retry", response_model=SubmissionOut)
 async def retry_submission(
     submission_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> SubmissionOut:
     """Re-trigger the agent for a submission in "error" (the reaper gave up on it,
@@ -3233,7 +3828,7 @@ async def retry_submission(
     create a new one. Only allowed from "error"; other states are a 409 (pending
     and running rows are the reaper's to re-trigger).
     """
-    sub = _owned_submission(submission_id, current, session)  # 404/403 guard
+    sub = _owned_submission(submission_id, org, session)  # 404/403 guard
     if sub.status != "error":
         raise HTTPException(
             status_code=409,
@@ -3254,22 +3849,22 @@ async def retry_submission(
 def list_submissions(
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> Page[SubmissionSummaryOut]:
-    # Only submissions for the caller's own questions. Lean rows: the full `code`
+    # Only submissions for the organisation's questions. Lean rows: the full `code`
     # and `full_result` blobs are fetched per-id via GET /submissions/{id}, so a
     # page here stays small even at hundreds of rows.
     total = session.exec(
         select(func.count())
         .select_from(Submission)
         .join(Question)
-        .where(Question.owner_id == current.id)
+        .where(Question.org_id == org.org_id)
     ).one()
     subs = session.exec(
         select(Submission)
         .join(Question)  # FK Submission.question_id -> Question.id infers the ON clause
-        .where(Question.owner_id == current.id)
+        .where(Question.org_id == org.org_id)
         .order_by(col(Submission.created_at).desc(), col(Submission.id))
         .offset(offset)
         .limit(limit)
@@ -3288,10 +3883,10 @@ def list_submissions(
 
 @app.get("/submissions/export")
 def export_submissions(
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> Response:
-    """Owner-scoped CSV of every submission across the caller's questions.
+    """Org-scoped CSV of every submission across the organisation's questions.
 
     A full export (not paginated) for spreadsheets / ATS import — the lean summary
     columns plus the question title, so a row is readable without a second lookup.
@@ -3301,14 +3896,14 @@ def export_submissions(
     subs = session.exec(
         select(Submission)
         .join(Question)
-        .where(Question.owner_id == current.id)
+        .where(Question.org_id == org.org_id)
         .order_by(col(Submission.created_at).desc(), col(Submission.id))
     ).all()
     results = _results_by_submission(subs, session)
     integrity = _integrity_by_submission(subs, session)
     titles = {
         q.id: q.title
-        for q in session.exec(select(Question).where(Question.owner_id == current.id)).all()
+        for q in session.exec(select(Question).where(Question.org_id == org.org_id)).all()
     }
 
     buf = io.StringIO()
@@ -3347,10 +3942,10 @@ def export_submissions(
 @app.get("/submissions/{submission_id}", response_model=SubmissionOut)
 def get_submission(
     submission_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> SubmissionOut:
-    sub = _owned_submission(submission_id, current, session)  # 404/403 guard
+    sub = _owned_submission(submission_id, org, session)  # 404/403 guard
     result = session.exec(
         select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
     ).first()
@@ -3360,7 +3955,7 @@ def get_submission(
 @app.get("/submissions/{submission_id}/integrity", response_model=IntegrityReportOut)
 def get_submission_integrity(
     submission_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> IntegrityReportOut:
     """The integrity signals recorded during the sitting this submission came from.
@@ -3371,9 +3966,9 @@ def get_submission_integrity(
     An interviewer's direct `POST /submissions` (no invite, no candidate) has no
     sitting at all and reports unmonitored with nothing in it.
     """
-    sub = _owned_submission(submission_id, current, session)  # 404/403 guard
+    sub = _owned_submission(submission_id, org, session)  # 404/403 guard
     if sub.invite_id is None or sub.candidate_email is None:
-        return _integrity_report(monitored=False, events=[], session=session)
+        return _integrity_report(monitored=False, events=[], org=org, session=session)
 
     invite = session.get(Invite, sub.invite_id)
     monitored = invite.proctored if invite is not None else True
@@ -3385,19 +3980,26 @@ def get_submission_integrity(
         )
         .order_by(col(IntegrityEvent.offset_ms), col(IntegrityEvent.id))
     ).all()
-    return _integrity_report(monitored=monitored, events=list(rows), session=session)
+    return _integrity_report(monitored=monitored, events=list(rows), org=org, session=session)
 
 
 def _integrity_report(
-    *, monitored: bool, events: list[IntegrityEvent], session: Session
+    *, monitored: bool, events: list[IntegrityEvent], org: Membership, session: Session
 ) -> IntegrityReportOut:
     """Shape stored signals into the interviewer's view: the summary counts first,
     then the timeline. The counts are derived here rather than stored so a new
-    signal kind can't leave a stale total behind."""
+    signal kind can't leave a stale total behind.
+
+    Titles are resolved only within the caller's organisation. `question_id` on an
+    event is whatever the candidate's browser reported and is never validated on
+    the way in (STATUS P06), so an id belonging to another organisation would
+    otherwise have its *title* rendered into this organisation's timeline — a
+    one-field cross-tenant echo. The id still shows; only the title is withheld.
+    """
     titles: dict[str, str] = {}
     for qid in {e.question_id for e in events if e.question_id}:
         question = session.get(Question, qid)
-        if question is not None:
+        if question is not None and question.org_id == org.org_id:
             titles[question.id] = question.title
     summary = IntegritySummaryOut(
         total=len(events),
@@ -3440,7 +4042,7 @@ def _integrity_report(
 @app.get("/submissions/{submission_id}/report")
 async def submission_report(
     submission_id: str,
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> Response:
     """Download a PDF report for a graded submission.
@@ -3451,7 +4053,7 @@ async def submission_report(
     the rendered PDF back as an attachment. The agent renders; the platform only
     assembles and serves — it never derives anything from the result here.
     """
-    sub = _owned_submission(submission_id, current, session)  # 404/403 guard
+    sub = _owned_submission(submission_id, org, session)  # 404/403 guard
     result = session.exec(
         select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
     ).first()
@@ -3492,10 +4094,10 @@ def question_submissions(
     question_id: str,
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    current: Interviewer = Depends(get_current_interviewer),
+    org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> Page[DashboardSubmissionOut]:
-    _owned_question(question_id, current, session)  # 404/403 guard
+    _owned_question(question_id, org, session)  # 404/403 guard
     total = session.exec(
         select(func.count())
         .select_from(Submission)

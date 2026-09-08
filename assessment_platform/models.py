@@ -40,6 +40,21 @@ def _updated_at() -> Any:
     return Field(default_factory=_utcnow, sa_column_kwargs={"onupdate": _utcnow})
 
 
+class Organization(SQLModel, table=True):
+    """The tenant: the unit every interviewer-owned resource belongs to (X01).
+
+    Questions, variant sets and assessments are scoped to an organisation rather
+    than to the person who typed them in, so a second hiring manager sees the
+    same library and the work survives whoever authored it leaving. `Interviewer`
+    stays the login; `Membership` joins the two and carries the role.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
+
+
 class Interviewer(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
@@ -62,9 +77,80 @@ class Interviewer(SQLModel, table=True):
     updated_at: datetime = _updated_at()
 
 
+class Membership(SQLModel, table=True):
+    """Who belongs to which organisation, and with what powers.
+
+    `interviewer_id` is UNIQUE: a person belongs to exactly one organisation.
+    That is a deliberate simplification, not an oversight — it removes the org
+    switcher, the "which organisation is this request about" claim in the JWT,
+    and the stale-claim problem that comes with putting it there. Relaxing it
+    later is dropping this constraint plus a switcher; nothing else assumes 1:1.
+
+    Roles are two, not a permission matrix: "admin" manages the roster (invite,
+    change roles, remove people, and is the only role that can delete the last
+    membership) and "member" does everything an interviewer could always do.
+    Resources are org-wide, so the only genuine question is who may change who
+    has access to them.
+    """
+
+    __table_args__ = (UniqueConstraint("interviewer_id", name="uq_membership_interviewer"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    org_id: int = Field(foreign_key="organization.id", index=True)
+    interviewer_id: int = Field(foreign_key="interviewer.id", index=True)
+    role: str = Field(default="member")
+    # Which admin's invite this membership came from — null for the founder of an
+    # organisation, and for every row the X01 migration backfilled.
+    invited_by: int | None = Field(default=None, foreign_key="interviewer.id")
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
+
+
+class OrgInvite(SQLModel, table=True):
+    """A pending invitation to join an organisation — the replacement for the
+    shared `REGISTRATION_CODE` as the way a company adds people.
+
+    A registration code is one secret, shared with everyone, that never expires
+    and records nothing. An invite is addressed to one email, expires, and names
+    the admin who sent it. `token` is the bearer credential the emailed link
+    carries, minted exactly like a candidate invite token.
+
+    Kept after acceptance (with `accepted_at` set) rather than deleted: who was
+    let into the organisation, by whom, and when is precisely the audit trail
+    X01 records as missing.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    org_id: int = Field(foreign_key="organization.id", index=True)
+    token: str = Field(unique=True, index=True)
+    # Lower-cased at the route, like every other email the platform stores, so
+    # the address that accepts is matched against the address that was invited.
+    email: str = Field(index=True)
+    role: str = Field(default="member")
+    invited_by: int | None = Field(default=None, foreign_key="interviewer.id", index=True)
+    expires_at: datetime | None = None
+    accepted_at: datetime | None = None
+    # Whether the invitation mail actually went out, and why not. Stored rather
+    # than only returned from the create call: a delivery warning that vanishes
+    # on the next page load is a warning nobody acts on, and the admin is then
+    # waiting on someone who was never written to.
+    sent: bool = True
+    send_error: str | None = None
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
+
+
 class Question(SQLModel, table=True):
     id: str = Field(primary_key=True)
-    owner_id: int = Field(foreign_key="interviewer.id", index=True)
+    # Who authored this row. Nullable because an account can be deleted while the
+    # organisation it belonged to lives on: the work stays, the person does not,
+    # and NULL reads as "a deleted account" rather than pointing at nobody. Since
+    # X01 this is provenance only — `org_id` below is what grants access.
+    owner_id: int | None = Field(default=None, foreign_key="interviewer.id", index=True)
+    # The organisation this belongs to (X01) — the scope every interviewer-facing
+    # query filters on. `owner_id` above stays, and stays meaning exactly what it
+    # says: who authored the row. It is no longer what grants access.
+    org_id: int = Field(foreign_key="organization.id", index=True)
     title: str
     prompt: str
     constraints: str
@@ -124,7 +210,15 @@ class VariantSet(SQLModel, table=True):
     """
 
     id: str = Field(primary_key=True)  # short slug, like Question.id
-    owner_id: int = Field(foreign_key="interviewer.id", index=True)
+    # Who authored this row. Nullable because an account can be deleted while the
+    # organisation it belonged to lives on: the work stays, the person does not,
+    # and NULL reads as "a deleted account" rather than pointing at nobody. Since
+    # X01 this is provenance only — `org_id` below is what grants access.
+    owner_id: int | None = Field(default=None, foreign_key="interviewer.id", index=True)
+    # The organisation this belongs to (X01) — the scope every interviewer-facing
+    # query filters on. `owner_id` above stays, and stays meaning exactly what it
+    # says: who authored the row. It is no longer what grants access.
+    org_id: int = Field(foreign_key="organization.id", index=True)
     title: str
     brief: str
     language: str
@@ -162,7 +256,15 @@ class Assessment(SQLModel, table=True):
     """
 
     id: str = Field(primary_key=True)  # short slug, like Question.id
-    owner_id: int = Field(foreign_key="interviewer.id", index=True)
+    # Who authored this row. Nullable because an account can be deleted while the
+    # organisation it belonged to lives on: the work stays, the person does not,
+    # and NULL reads as "a deleted account" rather than pointing at nobody. Since
+    # X01 this is provenance only — `org_id` below is what grants access.
+    owner_id: int | None = Field(default=None, foreign_key="interviewer.id", index=True)
+    # The organisation this belongs to (X01) — the scope every interviewer-facing
+    # query filters on. `owner_id` above stays, and stays meaning exactly what it
+    # says: who authored the row. It is no longer what grants access.
+    org_id: int = Field(foreign_key="organization.id", index=True)
     title: str
     duration_minutes: int | None = None  # None = untimed; per-assessment total
     # Per-assessment branding (A12): shown on the candidate IDE header as
@@ -237,7 +339,9 @@ class Invite(SQLModel, table=True):
     # the interviewer-side assignment UI (which variant went to whom, round-robin)
     # needs this provenance. Null for ordinary question/assessment invites.
     variant_set_id: str | None = Field(default=None, foreign_key="variantset.id", index=True)
-    created_by: int = Field(foreign_key="interviewer.id", index=True)
+    # Who sent it. Nullable for the same reason as `Question.owner_id`: the
+    # invite belongs to the organisation and outlives whoever clicked send.
+    created_by: int | None = Field(default=None, foreign_key="interviewer.id", index=True)
     recipients: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     # Per-recipient send outcome captured at creation, so who-was-emailed is an
     # audit trail rather than a value that vanishes with the create response. Each

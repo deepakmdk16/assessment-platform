@@ -25,12 +25,12 @@ vi.mock('../../api', () => {
       this.status = status
     }
   }
-  return { api: { register: vi.fn() }, ApiError }
+  return { api: { register: vi.fn(), readOrgInvite: vi.fn() }, ApiError }
 })
 
-function renderRegisterPage() {
+function renderRegisterPage(url = '/register') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[url]}>
       <RegisterPage />
     </MemoryRouter>,
   )
@@ -90,5 +90,65 @@ describe('RegisterPage', () => {
     )
     expect(loginMock).not.toHaveBeenCalled()
     expect(navigateMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('RegisterPage · from an organisation invitation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // clearAllMocks keeps implementations, and the suite above leaves `register`
+    // rejecting — restore the happy path explicitly.
+    vi.mocked(api.register).mockResolvedValue({
+      id: '2',
+      email: 'sam@acme.io',
+      name: 'Sam Okafor',
+    })
+    vi.mocked(api.readOrgInvite).mockResolvedValue({
+      org_name: 'Acme Corp',
+      email: 'sam@acme.io',
+      role: 'member',
+    })
+  })
+
+  it('fixes the address and names the organisation being joined', async () => {
+    // Typing the address by hand is the one way to fail an invitation that was
+    // going to work, so the form doesn't offer the chance.
+    renderRegisterPage('/register?invite=abc')
+    await waitFor(() => expect(screen.getByLabelText('Email')).toHaveValue('sam@acme.io'))
+    expect(screen.getByLabelText('Email')).toHaveAttribute('readonly')
+    expect(screen.getByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /create account and join/i })).toBeInTheDocument()
+  })
+
+  it('sends the token with the sign-up and lands on the team', async () => {
+    const user = userEvent.setup()
+    renderRegisterPage('/register?invite=abc')
+    await waitFor(() => expect(screen.getByLabelText('Email')).toHaveValue('sam@acme.io'))
+
+    await user.type(screen.getByLabelText('Name'), 'Sam Okafor')
+    await user.type(screen.getByLabelText('Password'), 'pw-long-enough-12')
+    await user.click(screen.getByRole('button', { name: /create account and join/i }))
+
+    await waitFor(() =>
+      expect(api.register).toHaveBeenCalledWith({
+        name: 'Sam Okafor',
+        email: 'sam@acme.io',
+        password: 'pw-long-enough-12',
+        org_invite_token: 'abc',
+      }),
+    )
+    // The redirect lands after login resolves, so it needs its own wait — the
+    // register assertion above is satisfied one await earlier.
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/team'))
+  })
+
+  it('falls back to an ordinary sign-up when the link is dead', async () => {
+    // A stale link shouldn't block someone from registering at all.
+    vi.mocked(api.readOrgInvite).mockRejectedValue(new ApiError(404, 'no longer valid.'))
+    renderRegisterPage('/register?invite=stale')
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument(),
+    )
+    expect(screen.getByLabelText('Email')).not.toHaveAttribute('readonly')
   })
 })

@@ -10,7 +10,9 @@ that column (password change or reset) voids every token minted before it —
 the revocation switch a stateless JWT otherwise lacks.
 
 `get_current_interviewer` is the FastAPI dependency that guards the
-interviewer-only routes — a missing/invalid token is a 401.
+interviewer-only routes — a missing/invalid token is a 401. `get_current_membership`
+adds the second half of the answer: which organisation the caller's data requests
+are scoped to, and what they may do to its roster (X01).
 """
 
 from __future__ import annotations
@@ -25,11 +27,11 @@ import httpx
 import jwt
 from fastapi import Depends, HTTPException, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from . import config
 from .db import get_session
-from .models import Interviewer
+from .models import Interviewer, Membership
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +175,41 @@ def get_current_interviewer(
     if interviewer is None:
         raise HTTPException(status_code=401, detail="invalid or expired token.")
     return interviewer
+
+
+def membership_for(interviewer: Interviewer, session: Session) -> Membership | None:
+    """The caller's one membership, or None for an account that has none.
+
+    `Membership.interviewer_id` is unique, so "the" is exact — see the model for
+    why one-org-per-person is deliberate.
+    """
+    return session.exec(
+        select(Membership).where(Membership.interviewer_id == interviewer.id)
+    ).first()
+
+
+def get_current_membership(
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> Membership:
+    """Which organisation this request may see, and the caller's role in it.
+
+    Resolved from the database on every request rather than carried as a JWT
+    claim. Membership is precisely the thing that changes when someone is
+    removed from an organisation, and a claim minted before that would keep
+    working until the access token expired — which is to say, an ex-colleague
+    would keep reading the question bank for the rest of the token's life.
+
+    FastAPI caches `get_current_interviewer` within a request, so a route
+    depending on both pays one extra query, not a second token decode.
+    """
+    membership = membership_for(current, session)
+    if membership is None:
+        # Registration creates one and the X01 migration backfilled the rest, so
+        # reaching here means a hand-edited or half-migrated row, not a state a
+        # user can get into. Refuse rather than invent a scope.
+        raise HTTPException(status_code=403, detail="account belongs to no organisation.")
+    return membership
 
 
 def interviewer_from_refresh(token: str | None, session: Session) -> Interviewer | None:

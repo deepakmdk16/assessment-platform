@@ -278,9 +278,13 @@ export function SettingsPage() {
           </p>
         )}
         <p className="draft-hint">
-          Deletes your account and everything it owns: questions, variant sets, assessments,
-          invites, and every candidate submission and result. Candidates&rsquo; links stop working
-          immediately. This can&rsquo;t be undone.
+          Deletes your login. What happens to the work depends on who else is in your
+          organisation: if you are its last member, the questions, variant sets, assessments,
+          invites and every candidate submission and result go with you, and candidates&rsquo;
+          links stop working immediately. If colleagues remain, all of that stays with the
+          organisation and only your account and your name against it are removed &mdash; and if
+          you are its only admin, promote someone else first or this will be refused. This
+          can&rsquo;t be undone.
         </p>
         <div className="grid2">
           <div className="field">
