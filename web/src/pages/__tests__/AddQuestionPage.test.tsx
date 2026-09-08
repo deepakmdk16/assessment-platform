@@ -8,9 +8,11 @@ import type { QuestionDraftOut, QuestionOut } from '../../types'
 
 const navigateMock = vi.fn()
 
+const routeParams = vi.hoisted(() => ({ current: {} as { id?: string } }))
+
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>()
-  return { ...actual, useNavigate: () => navigateMock }
+  return { ...actual, useNavigate: () => navigateMock, useParams: () => routeParams.current }
 })
 
 vi.mock('../../api', () => {
@@ -22,7 +24,12 @@ vi.mock('../../api', () => {
     }
   }
   return {
-    api: { createQuestion: vi.fn(), draftQuestion: vi.fn() },
+    api: {
+      createQuestion: vi.fn(),
+      draftQuestion: vi.fn(),
+      updateQuestion: vi.fn(),
+      getQuestion: vi.fn(),
+    },
     ApiError,
   }
 })
@@ -30,6 +37,7 @@ vi.mock('../../api', () => {
 describe('AddQuestionPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    routeParams.current = {}
   })
 
   const next = (user: ReturnType<typeof userEvent.setup>) =>
@@ -216,5 +224,91 @@ describe('AddQuestionPage', () => {
 
     await user.click(screen.getAllByRole('button', { name: /remove/i })[0])
     expect(screen.getAllByLabelText(/test case \d+ name/i)).toHaveLength(1)
+  })
+})
+
+describe('AddQuestionPage — edit mode (UI-B)', () => {
+  const drafted: QuestionOut = {
+    id: 'longest-run',
+    title: 'Longest increasing run',
+    prompt: 'Return the longest strictly increasing run.',
+    constraints: '1 <= n <= 100000',
+    time_limit_s: 3,
+    pass_threshold: 0.8,
+    required_complexity: 'O(n)',
+    example_input: '[1,2,1]',
+    example_output: '2',
+    status: 'active',
+    difficulty: 'hard',
+    duration_minutes: 45,
+    // The oracle every expected output was derived from. The wizard has no
+    // control for it, which is exactly why an edit could destroy it.
+    reference_solution: 'def solve(nums): ...',
+    reference_language: 'python',
+    test_cases: [
+      {
+        id: 'tc1',
+        name: 'basic',
+        stdin: '[1,2,1]',
+        expected: '2',
+        category: 'correctness',
+        weight: 1,
+      },
+    ],
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    routeParams.current = { id: 'longest-run' }
+    vi.mocked(api.getQuestion).mockResolvedValue(drafted)
+  })
+
+  it('saves an AI-drafted question without destroying its reference solution or difficulty', async () => {
+    vi.mocked(api.updateQuestion).mockResolvedValue(drafted)
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <AddQuestionPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Longest increasing run')).toBeInTheDocument()
+
+    // Straight through the wizard, changing nothing.
+    for (let i = 0; i < 4; i++) {
+      await user.click(screen.getByRole('button', { name: /^next$/i }))
+    }
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() => expect(api.updateQuestion).toHaveBeenCalled())
+    const [id, payload] = vi.mocked(api.updateQuestion).mock.calls[0]
+    expect(id).toBe('longest-run')
+    // The whole point of the slice: a no-op edit must be a no-op.
+    expect(payload.reference_solution).toBe('def solve(nums): ...')
+    expect(payload.reference_language).toBe('python')
+    expect(payload.difficulty).toBe('hard')
+    expect(payload.duration_minutes).toBe(45)
+    expect(payload.pass_threshold).toBeCloseTo(0.8)
+    expect(payload.test_cases).toHaveLength(1)
+    expect(api.createQuestion).not.toHaveBeenCalled()
+  })
+
+  it('exposes difficulty outside the AI panel, since edit mode never drafts', async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <AddQuestionPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Longest increasing run')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^next$/i }))
+
+    // Without this control a save would write back the panel's default, silently
+    // demoting a hard question to medium.
+    const select = screen.getByLabelText(/difficulty/i)
+    expect(select).toHaveValue('hard')
   })
 })

@@ -70,6 +70,17 @@ export function App() {
           </ProtectedRoute>
         }
       />
+      {/* Same wizard as /questions/new, seeded from the existing question. */}
+      <Route
+        path="/questions/:id/edit"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <AddQuestionPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
 
       <Route
         path="/assessments"

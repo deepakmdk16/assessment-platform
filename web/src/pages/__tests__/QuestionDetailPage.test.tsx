@@ -21,6 +21,7 @@ vi.mock('../../api', () => {
       listSubmissions: vi.fn(),
       revokeInvite: vi.fn(),
       createInvite: vi.fn(),
+      deleteQuestion: vi.fn(),
     },
     ApiError,
   }
@@ -250,5 +251,72 @@ describe('QuestionDetailPage', () => {
     const flagged = await screen.findByTitle('2 signals recorded during this sitting')
     expect(flagged).toHaveTextContent('2')
     expect(screen.getByText('Not monitored')).toBeInTheDocument() // null ≠ 0
+  })
+})
+
+describe('QuestionDetailPage — review and correction (UI-B)', () => {
+  const withCases: QuestionOut = {
+    ...question,
+    duration_minutes: 30,
+    test_cases: [
+      {
+        id: 'tc1',
+        name: 'basic',
+        stdin: '2 7 11 15\n9',
+        expected: '0 1',
+        category: 'correctness',
+        weight: 1,
+      },
+      {
+        id: 'tc2',
+        name: 'big_case',
+        stdin: 'huge-input',
+        expected: 'huge-expected',
+        category: 'performance',
+        weight: 3,
+      },
+    ],
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.getQuestion).mockResolvedValue(withCases)
+    vi.mocked(api.listInvites).mockResolvedValue([])
+    vi.mocked(api.listSubmissions).mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 })
+  })
+
+  it('shows the test cases and the time allowed, both already returned by the API', async () => {
+    renderPage()
+
+    // For an AI-drafted question this is the only way to review what the model
+    // generated as expected output before a candidate is graded against it.
+    expect(await screen.findByText('basic')).toBeInTheDocument()
+    expect(screen.getByText('big_case')).toBeInTheDocument()
+    expect(screen.getByText('performance')).toBeInTheDocument()
+    expect(screen.getByText('30 min')).toBeInTheDocument()
+    expect(screen.getByText(/never sent to the candidate/i)).toBeInTheDocument()
+  })
+
+  it('links Edit to the wizard seeded from this question', async () => {
+    renderPage()
+    expect(await screen.findByRole('link', { name: /^edit$/i })).toHaveAttribute(
+      'href',
+      '/questions/two-sum/edit',
+    )
+  })
+
+  it("shows the server's own refusal when a question has submissions", async () => {
+    vi.mocked(api.deleteQuestion).mockRejectedValue(
+      new ApiError(409, "cannot delete question 'two-sum': 2 submission(s) are recorded against it."),
+    )
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: /^delete$/i }))
+    await user.click(screen.getByRole('button', { name: /delete question/i }))
+
+    // The rule lives server-side and its message names the count; paraphrasing
+    // it here would let the two drift.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/2 submission\(s\) are recorded/i)
   })
 })

@@ -29,6 +29,10 @@ export function QuestionDetailPage() {
   // deliberate act, so the dismiss button goes back to reading "Cancel".
   const [isNudge, setIsNudge] = useState(justCreated)
   const dialogRef = useRef<HTMLDialogElement>(null)
+  const deleteDialogRef = useRef<HTMLDialogElement>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const [recipients, setRecipients] = useState('')
   const [creatingInvite, setCreatingInvite] = useState(false)
@@ -77,6 +81,35 @@ export function QuestionDetailPage() {
     if (inviteOpen && !el.open) el.showModal()
     if (!inviteOpen && el.open) el.close()
   }, [inviteOpen, question])
+
+  useEffect(() => {
+    const el = deleteDialogRef.current
+    if (!el) return
+    if (deleteOpen && !el.open) el.showModal()
+    if (!deleteOpen && el.open) el.close()
+  }, [deleteOpen, question])
+
+  function openDeleteDialog() {
+    setDeleteError(null)
+    setDeleteOpen(true)
+  }
+
+  async function handleDelete() {
+    if (!id) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await api.deleteQuestion(id)
+      navigate('/dashboard')
+    } catch (err) {
+      // The server already refuses when submissions exist, and its message names
+      // the count and the alternative. Showing it verbatim beats paraphrasing a
+      // rule that lives server-side.
+      setDeleteError(err instanceof ApiError ? err.message : 'Failed to delete question')
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   function closeInviteDialog() {
     setInviteOpen(false)
@@ -153,6 +186,14 @@ export function QuestionDetailPage() {
           <h1>{question.title}</h1>
           <div className="sub">Created {new Date(question.created_at).toLocaleDateString()}</div>
         </div>
+        <div className="head-actions">
+          <Link to={`/questions/${question.id}/edit`} className="btn sec">
+            Edit
+          </Link>
+          <button type="button" className="btn danger" onClick={openDeleteDialog}>
+            Delete
+          </button>
+        </div>
       </div>
 
       <div className="detail-grid">
@@ -178,6 +219,47 @@ export function QuestionDetailPage() {
                   </div>
                 )}
               </>
+            )}
+            <h2>Test cases</h2>
+            <p className="muted">
+              The answer key — never sent to the candidate. Only the worked example above is
+              public.
+            </p>
+            {question.test_cases.length === 0 ? (
+              <p className="empty-state">No test cases on this question.</p>
+            ) : (
+              <div className="tbl-wrap">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Category</th>
+                      <th className="th-num">Weight</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {question.test_cases.map((tc) => (
+                      <tr key={tc.id}>
+                        <td>
+                          <details>
+                            <summary className="t-title">{tc.name}</summary>
+                            <div className="io">
+                              <span className="io-label">Input</span>
+                              <pre className="code">{tc.stdin}</pre>
+                            </div>
+                            <div className="io">
+                              <span className="io-label">Expected</span>
+                              <pre className="code">{tc.expected}</pre>
+                            </div>
+                          </details>
+                        </td>
+                        <td>{tc.category}</td>
+                        <td className="num">{tc.weight}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
             {question.reference_solution && (
               <details className="draft-reference">
@@ -385,6 +467,12 @@ export function QuestionDetailPage() {
               <span className="k">Test cases</span>
               <span className="num">{question.test_cases.length}</span>
             </div>
+            {question.duration_minutes != null && (
+              <div className="kv">
+                <span className="k">Time allowed</span>
+                <span className="num">{question.duration_minutes} min</span>
+              </div>
+            )}
             {question.required_complexity && (
               <div className="kv">
                 <span className="k">Complexity</span>
@@ -394,6 +482,44 @@ export function QuestionDetailPage() {
           </div>
         </aside>
       </div>
+
+      <dialog
+        ref={deleteDialogRef}
+        className="modal"
+        aria-labelledby="delete-dialog-title"
+        onClose={() => setDeleteOpen(false)}
+      >
+        <div className="stack">
+          <h2 id="delete-dialog-title">Delete this question?</h2>
+          <p>
+            <b>{question.title}</b> and its {question.test_cases.length} test case
+            {question.test_cases.length === 1 ? '' : 's'} are removed for good, along with any
+            invites that point at it. This can't be undone.
+          </p>
+          <p className="muted">
+            Archiving hides a question from the library and keeps its history. Deleting is for a
+            question that was never really used.
+          </p>
+          {deleteError && (
+            <p role="alert" className="form-error">
+              {deleteError}
+            </p>
+          )}
+          <div className="modal-actions">
+            <button type="button" className="btn sec" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn danger"
+              onClick={() => void handleDelete()}
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting…' : 'Delete question'}
+            </button>
+          </div>
+        </div>
+      </dialog>
 
       <dialog
         ref={dialogRef}

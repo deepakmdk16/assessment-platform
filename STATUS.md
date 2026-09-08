@@ -483,11 +483,13 @@ mypy strict gap; tests unchecked.**
   the companion repo. Fix: copy the agent's two-tier pre-commit config; delete dead
   noqa; type the dicts.
   _Verified: cited lines read in this audit; source: quality._
-- **W15 · P3 · XS — Dead client code.**
-  Evidence: api.updateQuestion, deleteQuestion, deleteAssessment
-  (api.ts:150-155,198-200) have zero non-test callers. Why: unused surface. Fix:
-  delete or wire (question edit/delete exist server-side).
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
+- **W15 · P3 · XS — Dead client code: `api.deleteAssessment` has no caller.**
+  Evidence: `DELETE /assessments/{id}` exists and is owner-scoped, and the client
+  method is written, but AssessmentDetailPage offers only Edit. Why: unused
+  surface, and the question flow now has the delete affordance the assessment
+  flow still lacks. Fix: mirror the question delete dialog in the assessment edit
+  dialog's danger row.
+  _Verified: single-audit claim. `updateQuestion`/`deleteQuestion` were wired 2026-09-08._
 - **W20 · P3 · XS — TS strict not pinned; eslint not type-checked; no jsx-a11y;
 layout shift while analytics load.**
   Evidence: tsconfig.app.json does not set "strict": true (only true via the TS 6
