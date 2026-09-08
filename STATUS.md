@@ -323,14 +323,6 @@ gate.**
   build→invite→multi-question sitting→attempts grid; variant set → set-slot;
   integrity gate).
   _Verified: cited lines read in this audit; source: frontend._
-- **X17 · P2 · S — No tax collection on subscriptions.**
-  Evidence: `stripe_client.create_checkout_session` does not pass `automatic_tax`,
-  and no customer address is collected; nothing in the org model holds a VAT/GST
-  number. Why: selling to EU/UK customers without charging and remitting VAT is a
-  liability that grows silently with revenue, and retro-fitting it means reissuing
-  invoices. Fix: enable Stripe Tax (`automatic_tax={"enabled": True}` +
-  `customer_update={"address": "auto"}`), register where thresholds are crossed.
-  _Verified: read in the X02 branch; source: X02 follow-up._
 - **X18 · P2 · S — Nobody is warned before an allowance runs out.**
   Evidence: the only signal is the refusal itself — 402 at invite/draft
   (api.py `_check_invite_capacity`, `billing.consume`), 403 to the candidate at

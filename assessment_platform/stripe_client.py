@@ -25,6 +25,17 @@ from . import config
 logger = logging.getLogger(__name__)
 
 
+class PaymentError(Exception):
+    """A call to Stripe that failed.
+
+    Stripe's own exception types stop here, like every other piece of its
+    vocabulary. The message is passed through to the admin who triggered it —
+    "you cannot use automatic_tax without activating Stripe Tax" is precisely
+    what the person configuring the deployment needs to read, and these routes
+    are admin-only.
+    """
+
+
 class WebhookError(Exception):
     """A webhook that could not be trusted: bad signature, or a malformed body.
 
@@ -78,12 +89,15 @@ def create_customer(org_id: int, name: str, email: str) -> str:
     customer id can still find the organisation even if our own
     `stripe_customer_id` column were somehow lost.
     """
-    customer = stripe.Customer.create(
-        api_key=_key(),
-        name=name,
-        email=email,
-        metadata={"org_id": str(org_id)},
-    )
+    try:
+        customer = stripe.Customer.create(
+            api_key=_key(),
+            name=name,
+            email=email,
+            metadata={"org_id": str(org_id)},
+        )
+    except stripe.StripeError as exc:
+        raise PaymentError(str(exc)) from exc
     return str(customer.id)
 
 
@@ -101,16 +115,36 @@ def create_checkout_session(
     price = price_id(plan)
     if not price:  # pragma: no cover — routes guard first
         raise RuntimeError(f"no Stripe price configured for plan {plan!r}")
-    session = stripe.checkout.Session.create(
-        api_key=_key(),
-        mode="subscription",
-        customer=customer_id,
-        client_reference_id=str(org_id),
-        line_items=[{"price": price, "quantity": 1}],
-        success_url=success_url,
-        cancel_url=cancel_url,
-        subscription_data={"metadata": {"org_id": str(org_id), "plan": plan}},
-    )
+    params: dict[str, Any] = {
+        "api_key": _key(),
+        "mode": "subscription",
+        "customer": customer_id,
+        "client_reference_id": str(org_id),
+        "line_items": [{"price": price, "quantity": 1}],
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "subscription_data": {"metadata": {"org_id": str(org_id), "plan": plan}},
+    }
+    if config.STRIPE_AUTOMATIC_TAX:
+        # X02/X17. VAT and sales tax are charged and remitted by Stripe Tax,
+        # which needs somewhere to charge them *to*: an address is collected and
+        # written back to the customer (`customer_update`, which Stripe requires
+        # when automatic tax runs against an existing customer). `tax_id_collection`
+        # lets a business enter its VAT number, which is what makes an EU B2B sale
+        # reverse-charge instead of taxed twice.
+        #
+        # Requires Stripe Tax to be active on the account: if it isn't, session
+        # creation fails loudly at the first checkout rather than quietly selling
+        # untaxed — which is the failure X17 describes, and the reason this
+        # defaults on.
+        params["automatic_tax"] = {"enabled": True}
+        params["customer_update"] = {"address": "auto", "name": "auto"}
+        params["tax_id_collection"] = {"enabled": True}
+        params["billing_address_collection"] = "required"
+    try:
+        session = stripe.checkout.Session.create(**params)
+    except stripe.StripeError as exc:
+        raise PaymentError(str(exc)) from exc
     return str(session.url)
 
 
@@ -118,9 +152,12 @@ def create_portal_session(*, customer_id: str, return_url: str) -> str:
     """Open Stripe's customer portal — where a subscription is changed or
     cancelled and invoices are downloaded. Building any of that ourselves would
     be re-implementing a product Stripe gives away with the payment."""
-    session = stripe.billing_portal.Session.create(
-        api_key=_key(), customer=customer_id, return_url=return_url
-    )
+    try:
+        session = stripe.billing_portal.Session.create(
+            api_key=_key(), customer=customer_id, return_url=return_url
+        )
+    except stripe.StripeError as exc:
+        raise PaymentError(str(exc)) from exc
     return str(session.url)
 
 

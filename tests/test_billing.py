@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 import pytest
+import stripe
 from conftest import async_raise, async_return, register_interviewer
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -72,6 +73,13 @@ def auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _org() -> Organization:
+    with Session(db_module.engine) as s:
+        org = s.get(Organization, _org_id())
+        assert org is not None
+        return org
+
+
 def _org_id() -> int:
     with Session(db_module.engine) as s:
         return s.exec(select(Membership)).one().org_id
@@ -86,10 +94,13 @@ def _set_usage(**counts: Any) -> None:
     """Put the organisation's current month at a chosen point, the way a month of
     real activity would have."""
     org_id = _org_id()
+    period = billing.period_key()
     with Session(db_module.engine) as s:
-        row = s.exec(select(OrgUsage).where(OrgUsage.org_id == org_id)).first() or OrgUsage(
-            org_id=org_id, period=billing.period_key()
-        )
+        # Filtered by period: once a test seeds a previous month too, an
+        # unfiltered `.first()` silently edits the wrong row.
+        row = s.exec(
+            select(OrgUsage).where(OrgUsage.org_id == org_id, OrgUsage.period == period)
+        ).first() or OrgUsage(org_id=org_id, period=period)
         for name, value in counts.items():
             setattr(row, name, value)
         s.add(row)
@@ -912,3 +923,202 @@ def test_a_stripe_outage_cannot_block_a_deletion(client, stripe_configured, monk
     assert client.request(
         "DELETE", "/auth/me", json={"password": "pw-long-enough-12"}
     ).status_code == 204
+
+
+# --------------------------------------------------------------------------- #
+# Overage carried into the next period                                          #
+# --------------------------------------------------------------------------- #
+
+
+def _usage_row(period: str, **counts: Any) -> None:
+    """Write a finished period's counters, the way a month of activity leaves them."""
+    org_id = _org_id()
+    with Session(db_module.engine) as s:
+        row = s.exec(
+            select(OrgUsage).where(OrgUsage.org_id == org_id, OrgUsage.period == period)
+        ).first() or OrgUsage(org_id=org_id, period=period)
+        for name, value in counts.items():
+            setattr(row, name, value)
+        s.add(row)
+        s.commit()
+
+
+def _start_a_sitting(client: TestClient, email: str = "cand@x.io", qid: str = "q1"):
+    """The metered event: a candidate beginning. Creating an invite only CHECKS
+    the allowance, so it is not what settles a period."""
+    token = _invite(client, qid=qid, email=email)
+    return client.post(f"/invite/{token}/start", json={"candidate_email": email})
+
+
+def test_last_month_over_the_allowance_is_deducted_from_this_one(client, enforced) -> None:
+    """A plan downgraded mid-month leaves the month over its new limit. The
+    overrun is settled at the boundary rather than forgiven."""
+    _usage_row(billing.previous_period(billing.period_key()), sittings=13)  # free is 10
+
+    assert _start_a_sitting(client).status_code == 200
+
+    row = _usage()
+    assert row.sittings_carried == 3
+    assert billing.allowance(_org(), "sittings", row) == 7
+    assert row.sittings == 1
+
+
+def test_the_carried_debt_is_what_the_month_can_no_longer_use(client, enforced) -> None:
+    _usage_row(billing.previous_period(billing.period_key()), sittings=13)
+    assert _start_a_sitting(client).status_code == 200  # settles the period
+    # Minted while there was still room; the allowance runs out afterwards.
+    token = _invite(client, qid="q2", email="other@x.io")
+    _set_usage(sittings=7)  # 10 - 3 carried, fully used
+
+    refused = client.post(f"/invite/{token}/start", json={"candidate_email": "other@x.io"})
+    assert refused.status_code == 503  # the candidate-facing refusal, not a 402
+
+
+def test_an_invite_refusal_names_the_reduced_allowance(client, enforced) -> None:
+    _usage_row(billing.previous_period(billing.period_key()), sittings=13)
+    assert _start_a_sitting(client).status_code == 200  # settles: 10 - 3 = 7
+    _set_usage(sittings=7)
+
+    assert client.post("/questions", json=_question("q3")).status_code == 201
+    resp = client.post("/questions/q3/invites", json={"recipients": ["x@x.io"]})
+    assert resp.status_code == 402
+    assert "limit of 7 candidate sittings" in resp.json()["detail"]
+
+
+def test_a_refusal_names_the_allowance_actually_given(client, enforced, monkeypatch) -> None:
+    """A message naming a limit the organisation did not get is a support ticket."""
+    monkeypatch.setattr(agent_client, "draft_question", async_return(_draft_payload()))
+    _usage_row(billing.previous_period(billing.period_key()), drafts=8)  # free is 5
+    assert client.post(
+        "/questions/draft", json={"brief": "b", "language": "python"}
+    ).status_code == 200  # settles the period: 5 - 3 carried = 2 allowed
+    _set_usage(drafts=2)
+
+    resp = client.post("/questions/draft", json={"brief": "b", "language": "python"})
+    assert resp.status_code == 402
+    assert "limit of 2 AI question drafts" in resp.json()["detail"]
+
+
+def test_a_debt_is_never_charged_twice(client, enforced) -> None:
+    """The previous period is measured against ITS own reduced allowance, or a
+    debt served in one month is carried into the next one as well, and an
+    organisation never climbs out."""
+    previous = billing.previous_period(billing.period_key())
+    _usage_row(previous, sittings=7, sittings_carried=3)  # used exactly what it had
+
+    assert _start_a_sitting(client).status_code == 200
+
+    assert _usage().sittings_carried == 0
+
+
+def test_a_debt_bigger_than_a_month_does_not_compound(client, enforced) -> None:
+    _usage_row(billing.previous_period(billing.period_key()), sittings=40)  # 30 over
+
+    # Nothing is allowed through, but the period is still settled on the way.
+    assert _start_a_sitting(client).status_code == 503
+
+    row = _usage()
+    assert row.sittings_carried == 30
+    # Floored at zero: this month is stopped, but the debt doesn't roll on again.
+    assert billing.allowance(_org(), "sittings", row) == 0
+    assert row.sittings == 0
+
+
+def test_metering_a_cost_settles_the_period_too(client, monkeypatch) -> None:
+    """Whichever event happens to be first in a month creates its row, so the
+    settlement can't live only in the paths that claim an allowance."""
+    _usage_row(billing.previous_period(billing.period_key()), sittings=13)
+    sub_id = _graded(client, monkeypatch)
+    client.post("/assessments/callback", json=_callback("job-1"))
+
+    assert sub_id
+    assert _usage().sittings_carried == 3
+
+
+# --------------------------------------------------------------------------- #
+# Cost per submission, and tax                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_export_carries_what_each_grade_cost(client, monkeypatch) -> None:
+    """Per-month spend answers "what do we spend"; the column answers "on whom",
+    which is the question an interviewer works out cost-per-hire from."""
+    _graded(client, monkeypatch)
+    client.post("/assessments/callback", json=_callback("job-1"))
+
+    body = client.get("/submissions/export").text
+    header, row = body.splitlines()[0], body.splitlines()[1]
+    assert "judge_cost_usd" in header.split(",")
+    assert "0.009400" in row
+
+
+def test_an_unpriced_grade_exports_blank_not_zero(client, monkeypatch) -> None:
+    _graded(client, monkeypatch)
+    client.post("/assessments/callback", json=_callback("job-1", cost=None))
+
+    row = client.get("/submissions/export").text.splitlines()[1].split(",")
+    assert row[-2] == ""  # the cost column, before created_at
+
+
+def test_the_session_asks_stripe_for_automatic_tax(monkeypatch) -> None:
+    """X17: selling into the EU/UK without charging and remitting VAT is a
+    liability that grows silently with revenue, and retro-fitting it means
+    reissuing invoices. Checked on the boundary itself, because the routes mock
+    it away and the whole point is the shape of what reaches Stripe."""
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(config, "STRIPE_SECRET_KEY", "sk_test_x")
+    monkeypatch.setattr(config, "STRIPE_PRICE_IDS", {"starter": "price_s", "growth": "price_g"})
+    monkeypatch.setattr(config, "STRIPE_AUTOMATIC_TAX", True)
+
+    def _create(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(url="https://checkout.stripe.test/s")
+
+    monkeypatch.setattr(stripe.checkout.Session, "create", _create)
+
+    stripe_client.create_checkout_session(
+        customer_id="cus_1", plan="growth", org_id=1, success_url="s", cancel_url="c"
+    )
+
+    assert captured["automatic_tax"] == {"enabled": True}
+    # Stripe requires the address to be written back when taxing an existing
+    # customer, and a VAT number is what makes an EU B2B sale reverse-charge.
+    assert captured["customer_update"]["address"] == "auto"
+    assert captured["tax_id_collection"] == {"enabled": True}
+    assert captured["billing_address_collection"] == "required"
+
+
+def test_tax_can_be_turned_off_for_a_single_jurisdiction_deployment(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(config, "STRIPE_SECRET_KEY", "sk_test_x")
+    monkeypatch.setattr(config, "STRIPE_PRICE_IDS", {"growth": "price_g"})
+    monkeypatch.setattr(config, "STRIPE_AUTOMATIC_TAX", False)
+    monkeypatch.setattr(
+        stripe.checkout.Session,
+        "create",
+        lambda **kw: (captured.update(kw), SimpleNamespace(url="u"))[1],
+    )
+
+    stripe_client.create_checkout_session(
+        customer_id="cus_1", plan="growth", org_id=1, success_url="s", cancel_url="c"
+    )
+
+    assert "automatic_tax" not in captured
+
+
+def test_a_stripe_refusal_reaches_the_admin_in_stripes_own_words(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """A deployment whose Stripe Tax isn't activated fails at session creation.
+    "Payments are unavailable" would send whoever is configuring it looking in
+    entirely the wrong place."""
+
+    def _boom(**_k: Any) -> str:
+        raise stripe_client.PaymentError("You cannot use automatic_tax without activating it")
+
+    monkeypatch.setattr(stripe_client, "create_customer", lambda *_a, **_k: "cus_new")
+    monkeypatch.setattr(stripe_client, "create_checkout_session", _boom)
+
+    resp = client.post("/billing/checkout", json={"plan": "growth"})
+    assert resp.status_code == 502
+    assert "activating it" in resp.json()["detail"]

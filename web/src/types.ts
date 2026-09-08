@@ -659,6 +659,11 @@ export interface BillingUsage {
   drafts: number
   /** A standing headcount (members plus open invitations), not a monthly count. */
   seats: number
+  /** What the previous period overran by, charged against this one's allowance.
+   *  Zero almost always — non-zero after a mid-month downgrade, or a spell of
+   *  metering without enforcement. */
+  sittings_carried: number
+  drafts_carried: number
   judge_cost_usd: number
   draft_cost_usd: number
 }

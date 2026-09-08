@@ -313,6 +313,15 @@ BILLING_ENFORCED = (
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY") or None
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET") or None
 
+# Charge VAT / sales tax on subscriptions via Stripe Tax (X17). ON by default:
+# selling into the EU/UK without charging and remitting it is a liability that
+# grows silently with revenue, and retro-fitting it means reissuing invoices.
+# Requires Stripe Tax to be ACTIVATED on the Stripe account and a registration
+# in each jurisdiction where a threshold is crossed — without that, checkout
+# fails at session creation, which is the loud failure rather than the silent
+# one. Turn off only for a deployment that genuinely sells in one untaxed place.
+STRIPE_AUTOMATIC_TAX = os.getenv("STRIPE_AUTOMATIC_TAX", "true").lower() != "false"
+
 # The Stripe Price id backing each paid plan key in `billing.PLANS`. Prices live
 # in Stripe (that is where they are versioned and where a currency lives); this
 # is only the mapping from our plan name to theirs.

@@ -1508,6 +1508,8 @@ def get_billing(
             sittings=row.sittings,
             drafts=row.drafts,
             seats=_seats_used(org.org_id, session),
+            sittings_carried=row.sittings_carried,
+            drafts_carried=row.drafts_carried,
             judge_cost_usd=round(row.judge_cost_usd, 4),
             draft_cost_usd=round(row.draft_cost_usd, 4),
         ),
@@ -1582,13 +1584,19 @@ def start_checkout(
                 "change the plan in the payment portal."
             ),
         )
-    url = stripe_client.create_checkout_session(
-        customer_id=_stripe_customer(organization, current, session),
-        plan=body.plan,
-        org_id=org.org_id,
-        success_url=f"{config.FRONTEND_BASE_URL}/settings?billing=success",
-        cancel_url=f"{config.FRONTEND_BASE_URL}/settings?billing=cancelled",
-    )
+    try:
+        url = stripe_client.create_checkout_session(
+            customer_id=_stripe_customer(organization, current, session),
+            plan=body.plan,
+            org_id=org.org_id,
+            success_url=f"{config.FRONTEND_BASE_URL}/settings?billing=success",
+            cancel_url=f"{config.FRONTEND_BASE_URL}/settings?billing=cancelled",
+        )
+    except stripe_client.PaymentError as exc:
+        # Stripe's own words, to an admin: a deployment whose Stripe Tax is not
+        # activated fails right here, and "payments are unavailable" would send
+        # whoever is configuring it looking in entirely the wrong place.
+        raise HTTPException(status_code=502, detail=f"Stripe refused the request: {exc}") from exc
     return CheckoutOut(url=url)
 
 
@@ -1607,12 +1615,14 @@ def open_billing_portal(
         raise HTTPException(
             status_code=409, detail="this organisation has no subscription to manage yet."
         )
-    return CheckoutOut(
-        url=stripe_client.create_portal_session(
+    try:
+        url = stripe_client.create_portal_session(
             customer_id=organization.stripe_customer_id,
             return_url=f"{config.FRONTEND_BASE_URL}/settings",
         )
-    )
+    except stripe_client.PaymentError as exc:
+        raise HTTPException(status_code=502, detail=f"Stripe refused the request: {exc}") from exc
+    return CheckoutOut(url=url)
 
 
 def _org_for_stripe(obj: dict[str, Any], session: Session) -> Organization | None:
@@ -2708,8 +2718,13 @@ def _check_invite_capacity(org: Membership, session: Session, n: int) -> None:
     if not config.BILLING_ENFORCED:
         return
     organization = _organization(org.org_id, session)
-    if billing.remaining(session, organization, "sittings") < n:
-        raise billing.quota_error(organization, "sittings")
+    row = billing.usage(session, org.org_id)
+    # The allowance actually given, which is the plan's less anything last
+    # period overran by — a refusal naming a limit they did not get is a
+    # support ticket.
+    limit = billing.allowance(organization, "sittings", row)
+    if limit - row.sittings < n:
+        raise billing.quota_error(organization, "sittings", limit)
 
 
 @app.post("/questions/{question_id}/invites", response_model=InviteOut, status_code=201)
@@ -4361,7 +4376,9 @@ def export_submissions(
     """Org-scoped CSV of every submission across the organisation's questions.
 
     A full export (not paginated) for spreadsheets / ATS import — the lean summary
-    columns plus the question title, so a row is readable without a second lookup.
+    columns plus the question title, so a row is readable without a second lookup,
+    and what the agent's judge cost to grade the row (X02) so cost-per-hire can be
+    worked out per question or per candidate rather than only per month.
     Declared BEFORE `/submissions/{submission_id}` so "export" isn't swallowed as
     an id by the path-param route.
     """
@@ -4385,7 +4402,7 @@ def export_submissions(
             "submission_id", "question_id", "question_title", "candidate",
             "candidate_email", "language", "status", "verdict", "score_pct", "late",
             "integrity_signals", "integrity_blocked_pastes", "integrity_risk",
-            "created_at",
+            "judge_cost_usd", "created_at",
         ]
     )
     for sub in subs:
@@ -4401,6 +4418,9 @@ def export_submissions(
                 signals if signals is not None else "",
                 blocked_pastes if signals is not None else "",
                 risk or "",
+                # Blank rather than 0 when the agent priced nothing (a local
+                # model, or a job that errored): an unknown cost is not zero cost.
+                "" if sub.judge_cost_usd is None else f"{sub.judge_cost_usd:.6f}",
                 sub.created_at.isoformat(),
             ]
         )

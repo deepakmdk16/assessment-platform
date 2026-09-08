@@ -94,6 +94,14 @@ class OrgUsage(SQLModel, table=True):
     period: str = Field(index=True)
     sittings: int = 0
     drafts: int = 0
+    # What the PREVIOUS period overran its allowance by, charged against this
+    # one. An overage is possible even though `billing.consume` refuses to go
+    # over — a plan downgraded mid-month lands under a smaller limit than the
+    # month has already used, and a deployment that meters before it enforces
+    # has no ceiling at all. Settling it at the boundary is what keeps the
+    # overrun from being simply forgiven each month.
+    sittings_carried: int = 0
+    drafts_carried: int = 0
     judge_cost_usd: float = 0.0
     draft_cost_usd: float = 0.0
     created_at: datetime = _created_at()

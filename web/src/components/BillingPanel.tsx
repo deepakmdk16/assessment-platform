@@ -41,23 +41,43 @@ function money(usd: number): string {
   return `$${usd.toFixed(2)}`
 }
 
+/** What the month actually allows: the plan's entitlement less what the last
+ *  one overran by. Mirrors `billing.allowance` on the server, including its
+ *  floor at zero — a debt bigger than a month's allowance stops that month
+ *  rather than compounding into the next. */
+function allowanceOf(planLimit: number, carried: number): number {
+  return Math.max(0, planLimit - carried)
+}
+
 function UsageRow({
   name,
   hint,
   used,
   limit,
+  carried = 0,
 }: {
   name: string
   hint?: string
   used: number
   limit: number
+  /** What last period overran by, already subtracted from `limit`. Named here
+   *  so a month that starts with less than the plan's headline number says why
+   *  rather than looking like a mistake. */
+  carried?: number
 }) {
   const width = limit > 0 ? Math.min(100, (used / limit) * 100) : 100
+  const over = used - limit
   return (
     <div className="usage-row">
       <div className="usage-name">
         {name}
-        {hint && <small>{hint}</small>}
+        {carried > 0 ? (
+          <small>{carried} carried over from last month</small>
+        ) : over > 0 ? (
+          <small>{over} over the plan</small>
+        ) : (
+          hint && <small>{hint}</small>
+        )}
       </div>
       <svg className="usage-meter" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true">
         <rect className="meter-track" x={0} y={0} width={100} height={6} rx={3} />
@@ -253,13 +273,15 @@ export function BillingPanel() {
             name="Candidate sittings"
             hint="one candidate opening one invite"
             used={usage.sittings}
-            limit={plan.sittings}
+            limit={allowanceOf(plan.sittings, usage.sittings_carried)}
+            carried={usage.sittings_carried}
           />
           <UsageRow
             name="AI question drafts"
             hint="a variant set of 3 costs 3"
             used={usage.drafts}
-            limit={plan.drafts}
+            limit={allowanceOf(plan.drafts, usage.drafts_carried)}
+            carried={usage.drafts_carried}
           />
           <UsageRow
             name="Seats"

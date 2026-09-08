@@ -103,6 +103,24 @@ def period_key(now: datetime | None = None) -> str:
     return (now or datetime.now(timezone.utc)).strftime("%Y-%m")
 
 
+def previous_period(period: str) -> str:
+    """The period before this one — "2026-01" goes back to "2025-12"."""
+    year, month = (int(part) for part in period.split("-"))
+    return f"{year - 1}-12" if month == 1 else f"{year}-{month - 1:02d}"
+
+
+def allowance(org: Organization, metric: str, row: OrgUsage) -> int:
+    """What this organisation may actually use this period.
+
+    The plan's entitlement less whatever the previous period overran by. Never
+    negative: a debt bigger than a month's allowance stops that month rather
+    than compounding into the next, which would take an organisation months to
+    climb out of over a single mistake.
+    """
+    plan_limit = cast(int, getattr(plan_for(org), metric))
+    return max(0, plan_limit - cast(int, getattr(row, f"{metric}_carried")))
+
+
 def usage(session: Session, org_id: int, period: str | None = None) -> OrgUsage:
     """This period's counters for an organisation.
 
@@ -116,10 +134,53 @@ def usage(session: Session, org_id: int, period: str | None = None) -> OrgUsage:
     return row or OrgUsage(org_id=org_id, period=period)
 
 
-def _ensure_row(session: Session, org_id: int, period: str) -> None:
-    """Insert this period's counter row, tolerating a sibling worker's insert."""
+def _carried_from(session: Session, org: Organization | None, org_id: int, period: str) -> dict[str, int]:
+    """What the previous period overran, to be charged against this one.
+
+    Settled lazily, when the new period's row is first created, because there is
+    no scheduler to settle it on the stroke of the month — and the first metered
+    event of a period is exactly when the answer is first needed.
+
+    The overage is measured against the plan in force *now*, not the one that
+    was in force then (nothing stores a plan's history). That errs in the
+    customer's favour: an organisation that has since upgraded carries less, and
+    one that has downgraded is the case this exists to catch anyway.
+    """
+    if org is None:
+        return {}
+    previous = session.exec(
+        select(OrgUsage).where(
+            OrgUsage.org_id == org_id, OrgUsage.period == previous_period(period)
+        )
+    ).first()
+    if previous is None:
+        return {}
+    plan = plan_for(org)
+    carried = {}
+    for metric in MONTHLY_METRICS:
+        # Against the previous period's own effective allowance, so a debt that
+        # was already served there is not charged twice.
+        served = max(0, cast(int, getattr(plan, metric)) - cast(int, getattr(previous, f"{metric}_carried")))
+        over = cast(int, getattr(previous, metric)) - served
+        if over > 0:
+            carried[f"{metric}_carried"] = over
+    return carried
+
+
+def _ensure_row(
+    session: Session, org_id: int, period: str, org: Organization | None = None
+) -> None:
+    """Insert this period's counter row, tolerating a sibling worker's insert.
+
+    Creating the row is also when the previous period is settled — see
+    `_carried_from`. The organisation is looked up when the caller hasn't
+    already got it (`record` has only an id): a month whose first event is a
+    cost record rather than a claim must still settle the previous one, or the
+    debt is silently forgiven by whichever event happened to come first.
+    """
+    org = org or session.get(Organization, org_id)
     try:
-        session.add(OrgUsage(org_id=org_id, period=period))
+        session.add(OrgUsage(org_id=org_id, period=period, **_carried_from(session, org, org_id, period)))
         session.commit()
     except IntegrityError:
         session.rollback()
@@ -128,13 +189,22 @@ def _ensure_row(session: Session, org_id: int, period: str) -> None:
 def remaining(session: Session, org: Organization, metric: str, used: int | None = None) -> int:
     """How many more units of `metric` this organisation may use this period.
 
-    Never negative: usage can exceed a limit (a sitting already under way is
-    always finished, and a plan can be downgraded mid-month), and "how much is
-    left" is nought in that case, not a negative allowance.
+    Never negative: usage can exceed an allowance (a plan downgraded mid-month,
+    a deployment that meters without enforcing), and "how much is left" is
+    nought in that case, not a negative allowance — the overrun is settled by
+    `_carried_from` at the period boundary instead.
+
+    `used` must be supplied for `seats`, which is a live headcount rather than
+    a column on the usage row.
     """
-    limit = cast(int, getattr(plan_for(org), metric))
+    row = usage(session, _org_id(org))
+    limit = (
+        cast(int, getattr(plan_for(org), metric))
+        if metric not in MONTHLY_METRICS
+        else allowance(org, metric, row)
+    )
     if used is None:
-        used = cast(int, getattr(usage(session, _org_id(org)), metric))
+        used = cast(int, getattr(row, metric))
     return max(0, limit - used)
 
 
@@ -144,14 +214,18 @@ def _org_id(org: Organization) -> int:
     return org.id
 
 
-def quota_error(org: Organization, metric: str) -> HTTPException:
+def quota_error(org: Organization, metric: str, limit: int | None = None) -> HTTPException:
     """The 402 an interviewer-facing route raises when an allowance is spent.
 
     402 Payment Required is the whole point of the status code, and it is what
     lets the web client show an upgrade prompt without parsing the message.
+    `limit` is the effective allowance where that differs from the plan's — a
+    message naming a limit the organisation did not actually get is a support
+    ticket.
     """
     plan = plan_for(org)
-    limit = cast(int, getattr(plan, metric))
+    if limit is None:
+        limit = cast(int, getattr(plan, metric))
     noun = {"sittings": "candidate sittings", "drafts": "AI question drafts", "seats": "seats"}[
         metric
     ]
@@ -180,9 +254,16 @@ def consume(session: Session, org: Organization, metric: str, n: int = 1) -> Non
     if not config.BILLING_ENFORCED:
         record(session, _org_id(org), **{metric: n})
         return
-    limit = cast(int, getattr(plan_for(org), metric))
     org_id = _org_id(org)
     period = period_key()
+    # The row has to exist before the claim, because the allowance depends on
+    # what it carries from last period. Settled once per period, so reading it
+    # here and using it in the conditional UPDATE below stays race-free.
+    row = usage(session, org_id, period)
+    if row.id is None:
+        _ensure_row(session, org_id, period, org)
+        row = usage(session, org_id, period)
+    limit = allowance(org, metric, row)
     column = getattr(OrgUsage, metric)
     claim = (
         update(OrgUsage)
@@ -194,12 +275,9 @@ def consume(session: Session, org: Organization, metric: str, n: int = 1) -> Non
         .values(**{metric: col(column) + n})
     )
     if not cast(CursorResult[object], session.execute(claim)).rowcount:
-        # No row updated: either this period has no counters yet, or the
-        # allowance is spent. Create the row and try once more before refusing.
-        _ensure_row(session, org_id, period)
-        if not cast(CursorResult[object], session.execute(claim)).rowcount:
-            session.rollback()
-            raise quota_error(org, metric)
+        # The row exists (created above), so this is the allowance being spent.
+        session.rollback()
+        raise quota_error(org, metric, limit)
     session.commit()
 
 

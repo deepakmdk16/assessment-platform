@@ -1009,6 +1009,12 @@ class UsageOut(BaseModel):
     sittings: int
     drafts: int
     seats: int
+    # What the previous period overran by, charged against this one's allowance
+    # (X02). Zero almost always; non-zero after a mid-month downgrade, or after
+    # a spell of metering without enforcement. Sent so the page can say *why*
+    # the month started with less than the plan's headline number.
+    sittings_carried: int = 0
+    drafts_carried: int = 0
     # The organisation's LLM spend this period, rolled up from what the agent
     # priced: grading (judge) and question authoring (drafts).
     judge_cost_usd: float

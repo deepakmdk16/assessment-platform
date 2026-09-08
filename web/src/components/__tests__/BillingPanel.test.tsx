@@ -36,6 +36,8 @@ function billing(over: Partial<Billing> = {}): Billing {
       sittings: 7,
       drafts: 2,
       seats: 1,
+      sittings_carried: 0,
+      drafts_carried: 0,
       judge_cost_usd: 3.81,
       draft_cost_usd: 0.94,
     },
@@ -128,6 +130,46 @@ describe('BillingPanel', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(/couldn’t take the last payment/i)
     expect(screen.getByText('Payment failed')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /update payment method/i })).toBeInTheDocument()
+  })
+
+  it('says why a month starts with less than the plan says', async () => {
+    // A downgrade mid-month leaves the previous one over its allowance; the
+    // debt is settled here rather than forgiven, so the number has to explain
+    // itself or it reads as a bug.
+    mount({
+      usage: {
+        period: '2026-09',
+        sittings: 4,
+        drafts: 0,
+        seats: 1,
+        sittings_carried: 3,
+        drafts_carried: 0,
+        judge_cost_usd: 0,
+        draft_cost_usd: 0,
+      },
+    })
+
+    expect(await screen.findByText('/ 7')).toBeInTheDocument() // 10 - 3
+    expect(screen.getByText('3 carried over from last month')).toBeInTheDocument()
+  })
+
+  it('says plainly when the roster is over the seat cap', async () => {
+    // Two people accepting the last seat at once can both get in; the answer is
+    // to show it, not to throw one of them out afterwards.
+    mount({
+      usage: {
+        period: '2026-09',
+        sittings: 0,
+        drafts: 0,
+        seats: 3,
+        sittings_carried: 0,
+        drafts_carried: 0,
+        judge_cost_usd: 0,
+        draft_cost_usd: 0,
+      },
+    })
+
+    expect(await screen.findByText('1 over the plan')).toBeInTheDocument()
   })
 
   it('says so when limits are measured but not enforced', async () => {
