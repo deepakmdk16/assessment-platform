@@ -131,23 +131,32 @@ def usage(session: Session, org_id: int, period: str | None = None) -> OrgUsage:
     row = session.exec(
         select(OrgUsage).where(OrgUsage.org_id == org_id, OrgUsage.period == period)
     ).first()
-    return row or OrgUsage(org_id=org_id, period=period)
+    if row is not None:
+        return row
+    # Not stored yet, but not blank either: the debt the previous period leaves
+    # applies from the first of the month, whether or not anything has been
+    # metered since. Without this the billing page and the invite check would
+    # both offer a full plan's allowance on the 1st and then have `consume`
+    # refuse — as a 503 to a candidate, which is the worst place to find out.
+    return OrgUsage(
+        org_id=org_id, period=period, **carried_from_previous(session, org_id, period)
+    )
 
 
-def _carried_from(session: Session, org: Organization | None, org_id: int, period: str) -> dict[str, int]:
-    """What the previous period overran, to be charged against this one.
+def carried_from_previous(session: Session, org_id: int, period: str) -> dict[str, int]:
+    """What the previous period recorded going over, to be charged against this one.
 
-    Settled lazily, when the new period's row is first created, because there is
-    no scheduler to settle it on the stroke of the month — and the first metered
-    event of a period is exactly when the answer is first needed.
+    A copy of a figure that was written down at the time (`<metric>_over`), not a
+    reconstruction: an overrun can only be judged against the allowance that was
+    in force when it happened. Comparing last month's usage to this month's plan
+    instead would read a downgrade as a debt — 400 sittings of a Growth plan's
+    500, then a move to Starter, would bill 300 of entitled usage as an overrun.
 
-    The overage is measured against the plan in force *now*, not the one that
-    was in force then (nothing stores a plan's history). That errs in the
-    customer's favour: an organisation that has since upgraded carries less, and
-    one that has downgraded is the case this exists to catch anyway.
+    Settled lazily, when the new period is first looked at, because there is no
+    scheduler to do it on the stroke of the month. A month with no row at all
+    used none of its allowance, so a debt deducted from it was served in full and
+    nothing carries past it.
     """
-    if org is None:
-        return {}
     previous = session.exec(
         select(OrgUsage).where(
             OrgUsage.org_id == org_id, OrgUsage.period == previous_period(period)
@@ -155,32 +164,29 @@ def _carried_from(session: Session, org: Organization | None, org_id: int, perio
     ).first()
     if previous is None:
         return {}
-    plan = plan_for(org)
-    carried = {}
-    for metric in MONTHLY_METRICS:
-        # Against the previous period's own effective allowance, so a debt that
-        # was already served there is not charged twice.
-        served = max(0, cast(int, getattr(plan, metric)) - cast(int, getattr(previous, f"{metric}_carried")))
-        over = cast(int, getattr(previous, metric)) - served
-        if over > 0:
-            carried[f"{metric}_carried"] = over
-    return carried
+    return {
+        f"{metric}_carried": cast(int, getattr(previous, f"{metric}_over"))
+        for metric in MONTHLY_METRICS
+        if cast(int, getattr(previous, f"{metric}_over")) > 0
+    }
 
 
-def _ensure_row(
-    session: Session, org_id: int, period: str, org: Organization | None = None
-) -> None:
+def _ensure_row(session: Session, org_id: int, period: str) -> None:
     """Insert this period's counter row, tolerating a sibling worker's insert.
 
-    Creating the row is also when the previous period is settled — see
-    `_carried_from`. The organisation is looked up when the caller hasn't
-    already got it (`record` has only an id): a month whose first event is a
-    cost record rather than a claim must still settle the previous one, or the
-    debt is silently forgiven by whichever event happened to come first.
+    Creating the row is also when the previous period is settled onto it — see
+    `carried_from_previous`. Whichever metered event of the month happens to be
+    first does this, cost records included, so the settlement cannot be lost to
+    an ordering accident.
     """
-    org = org or session.get(Organization, org_id)
     try:
-        session.add(OrgUsage(org_id=org_id, period=period, **_carried_from(session, org, org_id, period)))
+        session.add(
+            OrgUsage(
+                org_id=org_id,
+                period=period,
+                **carried_from_previous(session, org_id, period),
+            )
+        )
         session.commit()
     except IntegrityError:
         session.rollback()
@@ -224,18 +230,26 @@ def quota_error(org: Organization, metric: str, limit: int | None = None) -> HTT
     ticket.
     """
     plan = plan_for(org)
+    published = cast(int, getattr(plan, metric))
     if limit is None:
-        limit = cast(int, getattr(plan, metric))
+        limit = published
     noun = {"sittings": "candidate sittings", "drafts": "AI question drafts", "seats": "seats"}[
         metric
     ]
     period = "" if metric == "seats" else " this month"
+    if limit < published:
+        # Saying "the Free plan's limit of 7" when the pricing page says 10 reads
+        # as a bug in the product; the difference has to explain itself.
+        used_up = (
+            f"the {plan.label} plan allows {published} {noun} a month, and "
+            f"{published - limit} carried over from last month, so this month's "
+            f"limit of {limit} is used up. "
+        )
+    else:
+        used_up = f"the {plan.label} plan's limit of {limit} {noun}{period} is used up. "
     return HTTPException(
         status_code=402,
-        detail=(
-            f"the {plan.label} plan's limit of {limit} {noun}{period} is used up. "
-            "Upgrade the plan in Settings → Billing to continue."
-        ),
+        detail=used_up + "Upgrade the plan in Settings → Billing to continue.",
     )
 
 
@@ -251,9 +265,6 @@ def consume(session: Session, org: Organization, metric: str, n: int = 1) -> Non
     """
     if n <= 0:
         return
-    if not config.BILLING_ENFORCED:
-        record(session, _org_id(org), **{metric: n})
-        return
     org_id = _org_id(org)
     period = period_key()
     # The row has to exist before the claim, because the allowance depends on
@@ -261,9 +272,19 @@ def consume(session: Session, org: Organization, metric: str, n: int = 1) -> Non
     # here and using it in the conditional UPDATE below stays race-free.
     row = usage(session, org_id, period)
     if row.id is None:
-        _ensure_row(session, org_id, period, org)
+        _ensure_row(session, org_id, period)
         row = usage(session, org_id, period)
     limit = allowance(org, metric, row)
+
+    if not config.BILLING_ENFORCED:
+        # Metering without enforcing: nothing is refused, but whatever goes past
+        # the allowance is written down as it happens — measured against the
+        # limit in force at this moment, which is the only fair measure of an
+        # overrun and the one thing a later downgrade cannot distort.
+        over = min(n, max(0, cast(int, getattr(row, metric)) + n - limit))
+        record(session, org_id, **{metric: n, f"{metric}_over": over})
+        return
+
     column = getattr(OrgUsage, metric)
     claim = (
         update(OrgUsage)
@@ -300,6 +321,8 @@ def record(
     *,
     sittings: int = 0,
     drafts: int = 0,
+    sittings_over: int = 0,
+    drafts_over: int = 0,
     judge_cost_usd: float = 0.0,
     draft_cost_usd: float = 0.0,
 ) -> None:
@@ -312,6 +335,8 @@ def record(
     deltas = {
         "sittings": sittings,
         "drafts": drafts,
+        "sittings_over": sittings_over,
+        "drafts_over": drafts_over,
         "judge_cost_usd": judge_cost_usd,
         "draft_cost_usd": draft_cost_usd,
     }

@@ -94,12 +94,15 @@ class OrgUsage(SQLModel, table=True):
     period: str = Field(index=True)
     sittings: int = 0
     drafts: int = 0
-    # What the PREVIOUS period overran its allowance by, charged against this
-    # one. An overage is possible even though `billing.consume` refuses to go
-    # over — a plan downgraded mid-month lands under a smaller limit than the
-    # month has already used, and a deployment that meters before it enforces
-    # has no ceiling at all. Settling it at the boundary is what keeps the
-    # overrun from being simply forgiven each month.
+    # What THIS period went past its allowance by, recorded at the moment it
+    # happened. Only reachable while enforcement is off (`consume` refuses
+    # otherwise), and recorded rather than reconstructed later because the
+    # allowance in force at the time is the only fair measure of an overrun — a
+    # plan downgraded afterwards would otherwise turn entitled usage into debt.
+    sittings_over: int = 0
+    drafts_over: int = 0
+    # What the PREVIOUS period went over by, carried onto this one and deducted
+    # from its allowance, so an overrun is settled rather than forgiven.
     sittings_carried: int = 0
     drafts_carried: int = 0
     judge_cost_usd: float = 0.0

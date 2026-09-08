@@ -20,6 +20,7 @@ import httpx
 import pytest
 import stripe
 from conftest import async_raise, async_return, register_interviewer
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlmodel import Session, select
@@ -100,7 +101,13 @@ def _set_usage(**counts: Any) -> None:
         # unfiltered `.first()` silently edits the wrong row.
         row = s.exec(
             select(OrgUsage).where(OrgUsage.org_id == org_id, OrgUsage.period == period)
-        ).first() or OrgUsage(org_id=org_id, period=period)
+        ).first() or OrgUsage(
+            org_id=org_id,
+            period=period,
+            # Created the way production creates one, or seeding a period would
+            # quietly forgive the debt the test just set up.
+            **billing.carried_from_previous(s, org_id, period),
+        )
         for name, value in counts.items():
             setattr(row, name, value)
         s.add(row)
@@ -936,7 +943,13 @@ def _usage_row(period: str, **counts: Any) -> None:
     with Session(db_module.engine) as s:
         row = s.exec(
             select(OrgUsage).where(OrgUsage.org_id == org_id, OrgUsage.period == period)
-        ).first() or OrgUsage(org_id=org_id, period=period)
+        ).first() or OrgUsage(
+            org_id=org_id,
+            period=period,
+            # Created the way production creates one, or seeding a period would
+            # quietly forgive the debt the test just set up.
+            **billing.carried_from_previous(s, org_id, period),
+        )
         for name, value in counts.items():
             setattr(row, name, value)
         s.add(row)
@@ -953,7 +966,7 @@ def _start_a_sitting(client: TestClient, email: str = "cand@x.io", qid: str = "q
 def test_last_month_over_the_allowance_is_deducted_from_this_one(client, enforced) -> None:
     """A plan downgraded mid-month leaves the month over its new limit. The
     overrun is settled at the boundary rather than forgiven."""
-    _usage_row(billing.previous_period(billing.period_key()), sittings=13)  # free is 10
+    _usage_row(billing.previous_period(billing.period_key()), sittings=13, sittings_over=3)
 
     assert _start_a_sitting(client).status_code == 200
 
@@ -964,7 +977,7 @@ def test_last_month_over_the_allowance_is_deducted_from_this_one(client, enforce
 
 
 def test_the_carried_debt_is_what_the_month_can_no_longer_use(client, enforced) -> None:
-    _usage_row(billing.previous_period(billing.period_key()), sittings=13)
+    _usage_row(billing.previous_period(billing.period_key()), sittings=13, sittings_over=3)
     assert _start_a_sitting(client).status_code == 200  # settles the period
     # Minted while there was still room; the allowance runs out afterwards.
     token = _invite(client, qid="q2", email="other@x.io")
@@ -975,20 +988,20 @@ def test_the_carried_debt_is_what_the_month_can_no_longer_use(client, enforced) 
 
 
 def test_an_invite_refusal_names_the_reduced_allowance(client, enforced) -> None:
-    _usage_row(billing.previous_period(billing.period_key()), sittings=13)
+    _usage_row(billing.previous_period(billing.period_key()), sittings=13, sittings_over=3)
     assert _start_a_sitting(client).status_code == 200  # settles: 10 - 3 = 7
     _set_usage(sittings=7)
 
     assert client.post("/questions", json=_question("q3")).status_code == 201
     resp = client.post("/questions/q3/invites", json={"recipients": ["x@x.io"]})
     assert resp.status_code == 402
-    assert "limit of 7 candidate sittings" in resp.json()["detail"]
+    assert "this month's limit of 7 is used up" in resp.json()["detail"]
 
 
 def test_a_refusal_names_the_allowance_actually_given(client, enforced, monkeypatch) -> None:
     """A message naming a limit the organisation did not get is a support ticket."""
     monkeypatch.setattr(agent_client, "draft_question", async_return(_draft_payload()))
-    _usage_row(billing.previous_period(billing.period_key()), drafts=8)  # free is 5
+    _usage_row(billing.previous_period(billing.period_key()), drafts=8, drafts_over=3)
     assert client.post(
         "/questions/draft", json={"brief": "b", "language": "python"}
     ).status_code == 200  # settles the period: 5 - 3 carried = 2 allowed
@@ -996,26 +1009,80 @@ def test_a_refusal_names_the_allowance_actually_given(client, enforced, monkeypa
 
     resp = client.post("/questions/draft", json={"brief": "b", "language": "python"})
     assert resp.status_code == 402
-    assert "limit of 2 AI question drafts" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "allows 5 AI question drafts a month" in detail
+    assert "3 carried over" in detail
+    assert "limit of 2 is used up" in detail
 
 
-def test_a_debt_is_never_charged_twice(client, enforced) -> None:
-    """The previous period is measured against ITS own reduced allowance, or a
-    debt served in one month is carried into the next one as well, and an
-    organisation never climbs out."""
+def test_a_debt_served_is_not_carried_again(client, enforced) -> None:
+    """A month that paid last month's debt and stayed inside what was left
+    recorded no overrun of its own, so nothing carries on — otherwise an
+    organisation never climbs out of one bad month."""
     previous = billing.previous_period(billing.period_key())
-    _usage_row(previous, sittings=7, sittings_carried=3)  # used exactly what it had
+    _usage_row(previous, sittings=7, sittings_carried=3, sittings_over=0)
 
     assert _start_a_sitting(client).status_code == 200
 
     assert _usage().sittings_carried == 0
 
 
-def test_a_debt_bigger_than_a_month_does_not_compound(client, enforced) -> None:
-    _usage_row(billing.previous_period(billing.period_key()), sittings=40)  # 30 over
+def test_a_downgrade_does_not_turn_entitled_usage_into_debt(client, enforced) -> None:
+    """400 sittings of a Growth plan's 500 is not an overrun. It only looks like
+    one if last month is measured against this month's plan — which is why the
+    overrun is written down when it happens instead of reconstructed later."""
+    _usage_row(billing.previous_period(billing.period_key()), sittings=400, sittings_over=0)
+    _set_plan(plan="starter")
 
-    # Nothing is allowed through, but the period is still settled on the way.
-    assert _start_a_sitting(client).status_code == 503
+    assert _start_a_sitting(client).status_code == 200
+
+    row = _usage()
+    assert row.sittings_carried == 0
+    assert billing.allowance(_org(), "sittings", row) == 100
+
+
+def test_an_unenforced_overrun_is_written_down_as_it_happens(client) -> None:
+    """The only way past an allowance: metering with enforcement off. The excess
+    is recorded against the limit in force at that moment, so a plan change
+    afterwards cannot rewrite what was owed."""
+    with Session(db_module.engine) as s:
+        org = s.get(Organization, _org_id())
+        assert org is not None
+        for _ in range(12):  # free allows 10
+            billing.consume(s, org, "sittings", 1)
+
+    row = _usage()
+    assert row.sittings == 12
+    assert row.sittings_over == 2
+
+
+def test_the_allowance_is_already_reduced_before_the_months_first_event(
+    client, enforced
+) -> None:
+    """On the 1st there is no usage row yet. If the read paths offered a full
+    plan's allowance until something happened to create one, an interviewer
+    would send invites the claim then refuses — as a 503 to a candidate, which
+    is the worst possible place to find out."""
+    _usage_row(billing.previous_period(billing.period_key()), sittings=13, sittings_over=3)
+
+    body = client.get("/billing").json()
+    assert body["usage"]["sittings_carried"] == 3
+
+    assert client.post("/questions", json=_question("q9")).status_code == 201
+    _set_usage(sittings=7)  # the reduced allowance, fully used
+    refused = client.post("/questions/q9/invites", json={"recipients": ["x@x.io"]})
+    assert refused.status_code == 402
+
+
+def test_a_debt_bigger_than_a_month_does_not_compound(client, enforced) -> None:
+    _usage_row(billing.previous_period(billing.period_key()), sittings=40, sittings_over=30)
+
+    with Session(db_module.engine) as s:
+        org = s.get(Organization, _org_id())
+        assert org is not None
+        with pytest.raises(HTTPException) as refused:
+            billing.consume(s, org, "sittings", 1)
+    assert refused.value.status_code == 402
 
     row = _usage()
     assert row.sittings_carried == 30
@@ -1027,7 +1094,7 @@ def test_a_debt_bigger_than_a_month_does_not_compound(client, enforced) -> None:
 def test_metering_a_cost_settles_the_period_too(client, monkeypatch) -> None:
     """Whichever event happens to be first in a month creates its row, so the
     settlement can't live only in the paths that claim an allowance."""
-    _usage_row(billing.previous_period(billing.period_key()), sittings=13)
+    _usage_row(billing.previous_period(billing.period_key()), sittings=13, sittings_over=3)
     sub_id = _graded(client, monkeypatch)
     client.post("/assessments/callback", json=_callback("job-1"))
 

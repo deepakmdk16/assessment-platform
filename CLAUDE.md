@@ -65,12 +65,17 @@ deterministic grade.
   conditional UPDATE *before* the money is spent, `record` counts what happened
   and never refuses. `Organization.plan` + `plan_status` decide the limits, and
   a lapsed subscription falls back to free rather than to zero.
-  **An overrun is settled, not forgiven:** whatever a period went over is
-  carried onto the next one's row when it is created and deducted from that
-  month's allowance (floored at zero, so a debt never compounds). Seats are the
-  exception — a live headcount, not a monthly counter — so an organisation that
-  ends up over its seat cap is *shown* as over and refused new invitations,
-  rather than having a member removed after the fact.
+  **An overrun is settled, not forgiven:** an overrun is written down when it
+  happens (`<metric>_over`, measured against the allowance in force at that
+  moment — only reachable while `BILLING_ENFORCED` is off, since `consume`
+  otherwise refuses) and carried onto the next period's row as
+  `<metric>_carried`, which is deducted from that month's allowance. Floored at
+  zero so a debt never compounds. **Never reconstruct an overrun by comparing an
+  old period's usage against today's plan** — that reads a downgrade as a debt
+  and bills entitled usage. Seats are the exception to all of it — a live
+  headcount, not a monthly counter — so an organisation that ends up over its
+  seat cap is *shown* as over and refused new invitations, rather than having a
+  member removed after the fact.
 - `stripe_client.py` — the payment boundary (mocked in tests, like
   `agent_client`). Hosted Checkout + Stripe's portal, so no card detail reaches
   this server. The **signed webhook is the only thing that grants a plan** — a
