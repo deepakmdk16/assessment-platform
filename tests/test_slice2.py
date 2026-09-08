@@ -42,17 +42,17 @@ def test_register_gate_requires_code_when_set(anon_client: TestClient, monkeypat
 
     # Missing / wrong code -> 403.
     assert anon_client.post(
-        "/auth/register", json={"email": "g@x.io", "password": "pw", "name": "G"}
+        "/auth/register", json={"email": "g@x.io", "password": "pw-long-enough-12", "name": "G"}
     ).status_code == 403
     assert anon_client.post(
         "/auth/register",
-        json={"email": "g@x.io", "password": "pw", "name": "G", "registration_code": "nope"},
+        json={"email": "g@x.io", "password": "pw-long-enough-12", "name": "G", "registration_code": "nope"},
     ).status_code == 403
 
     # Correct code -> 201.
     assert anon_client.post(
         "/auth/register",
-        json={"email": "g@x.io", "password": "pw", "name": "G", "registration_code": "s3cret"},
+        json={"email": "g@x.io", "password": "pw-long-enough-12", "name": "G", "registration_code": "s3cret"},
     ).status_code == 201
 
 
@@ -63,15 +63,15 @@ def test_register_gate_requires_code_when_set(anon_client: TestClient, monkeypat
 
 def test_login_rate_limited(anon_client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(config, "LOGIN_RATE_LIMIT_MAX", 2)
-    anon_client.post("/auth/register", json={"email": "rl@x.io", "password": "pw", "name": "RL"})
-    body = {"email": "rl@x.io", "password": "pw"}
+    anon_client.post("/auth/register", json={"email": "rl@x.io", "password": "pw-long-enough-12", "name": "RL"})
+    body = {"email": "rl@x.io", "password": "pw-long-enough-12"}
     assert anon_client.post("/auth/login", json=body).status_code == 200
     assert anon_client.post("/auth/login", json=body).status_code == 200
     assert anon_client.post("/auth/login", json=body).status_code == 429
 
 
 def _register_body(n: int) -> dict[str, str]:
-    return {"email": f"bulk{n}@x.io", "password": "pw", "name": "Bulk"}
+    return {"email": f"bulk{n}@x.io", "password": "pw-long-enough-12", "name": "Bulk"}
 
 
 def test_register_rate_limited(anon_client: TestClient, monkeypatch) -> None:

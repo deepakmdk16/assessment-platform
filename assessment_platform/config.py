@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+from typing import Literal, cast
 
 from dotenv import load_dotenv
 
@@ -35,6 +36,18 @@ TESTING = os.getenv("PLATFORM_TESTING", "").lower() in {"1", "true"}
 # verbatim. OFF by default so production log aggregation never ingests it; turn ON
 # locally (LOG_PII=true) to get the copy-pasteable invite link when SMTP is unset.
 LOG_PII = os.getenv("LOG_PII", "").lower() in {"1", "true"}
+
+# Root log level for the server process (see api.configure_logging). Uvicorn only
+# configures its own loggers, so this is what makes the package's INFO
+# breadcrumbs (callback correlation, the stale-running reaper) actually print.
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# Hard ceiling on any request body, enforced from Content-Length before the JSON
+# is parsed. The per-field caps in schemas.py bound what we STORE; this bounds
+# what we are willing to READ, so an unauthenticated candidate route can't make
+# the server buffer a multi-megabyte blob just to 422 it. Generous enough for a
+# variant set of eight hand-authored questions with many test cases.
+MAX_BODY_BYTES = int(os.getenv("MAX_BODY_BYTES", str(4 * 1024 * 1024)))
 
 # Create tables on startup via SQLModel.metadata.create_all. OFF by default:
 # production runs the Alembic migrations, and an unconditional create_all silently
@@ -96,7 +109,33 @@ if not JWT_SECRET:
         "survive a restart). Set JWT_SECRET in production."
     )
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "720"))
+# Access-token lifetime. Short on purpose: it is the token an XSS could lift from
+# the page, so it must be worthless within minutes. Sessions outlive it through
+# the refresh cookie below, which script on the page can't read.
+JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "15"))
+# Refresh-token lifetime (an httpOnly cookie scoped to /auth): how long a browser
+# stays signed in without re-entering the password. Sliding — every refresh
+# re-issues it.
+REFRESH_EXPIRE_DAYS = int(os.getenv("REFRESH_EXPIRE_DAYS", "30"))
+# Cookie attributes. Secure defaults to ON whenever the API is served over https
+# (from PLATFORM_BASE_URL) and off for plain-http dev — a browser drops a Secure
+# cookie set over http, which would make sign-in silently not stick. SameSite
+# `lax` covers the SPA and the API on one site (127.0.0.1:5173 → :9000, or
+# app./api. subdomains of one domain); set `none` (Secure required) only when
+# they live on unrelated domains.
+COOKIE_SECURE = (
+    os.getenv("COOKIE_SECURE", str(PLATFORM_BASE_URL.startswith("https://"))).lower() == "true"
+)
+_samesite = os.getenv("COOKIE_SAMESITE", "lax").lower()
+if _samesite not in ("lax", "strict", "none"):
+    raise RuntimeError(f"COOKIE_SAMESITE must be lax, strict or none (got {_samesite!r})")
+COOKIE_SAMESITE = cast(Literal["lax", "strict", "none"], _samesite)
+# Check every new password against Have I Been Pwned (k-anonymity range API —
+# only a 5-char hash prefix leaves the machine; fails open when the service is
+# unreachable). Off under test so the suite never touches the network.
+PASSWORD_BREACH_CHECK = (
+    False if TESTING else os.getenv("PASSWORD_BREACH_CHECK", "true").lower() == "true"
+)
 
 # Base URL of the interviewer/candidate frontend, used to build candidate invite
 # links (f"{FRONTEND_BASE_URL}/t/{token}").
@@ -166,14 +205,32 @@ DRAFT_SAVE_RATE_LIMIT_MAX = int(os.getenv("DRAFT_SAVE_RATE_LIMIT_MAX", "60"))
 # someone reverse-engineer the test suite one guess at a time.
 RUN_RATE_LIMIT_MAX = int(os.getenv("RUN_RATE_LIMIT_MAX", "60"))
 
-# A submission sits in "running" from the agent's 202 until its callback lands.
-# If that callback never arrives (agent crash, dropped network, lost job) the row
-# would be stranded forever — and retry only accepts "error", so nothing could
-# recover it. When an interviewer reads their submissions, any that have been
-# "running" longer than this are reaped to "error" so the existing retry path
-# works. Generous by default so a merely-slow job isn't reaped mid-grade; set to
-# 0 to disable reaping.
+# Grading durability. A submission is "pending" from its insert until the agent
+# 202s the trigger, then "running" until the agent's callback lands. A background
+# reaper (one task per worker process, see `api._reaper_loop`) re-triggers rows
+# that sit too long in either state — a trigger that failed because the agent was
+# down at submit, a job the agent lost to a crash or deploy, a callback that never
+# arrived — and once MAX_TRIGGER_ATTEMPTS triggers have been made gives up with an
+# ERROR log, leaving the row in "error" for the interviewer's manual retry.
+#
+# How often the reaper runs. <= 0 disables the background task entirely; forced
+# off under test, where the suite drives `api._reap_tick` directly.
+REAP_INTERVAL_S = 0 if TESTING else int(os.getenv("REAP_INTERVAL_S", "60"))
+# A "running" row (accepted, no callback yet) older than this is re-triggered.
+# Generous so a merely-slow grade isn't re-run mid-job; <= 0 leaves running rows
+# alone.
 REAP_RUNNING_AFTER_S = int(os.getenv("REAP_RUNNING_AFTER_S", "900"))
+# A "pending" row (trigger never accepted, or re-queued by the agent's shutdown
+# callback) older than this is re-triggered. Must exceed the longest possible
+# in-flight trigger so a second worker's reaper can't double-trigger a row whose
+# first trigger is still on the wire: AGENT_TRIGGER_TRANSPORT_ATTEMPTS (3) × up to
+# ~3 × AGENT_TIMEOUT_S (httpx applies the timeout per phase — connect, write,
+# read) + the linear backoff between attempts (1 s + 2 s) ≈ 93 s.
+TRIGGER_RETRY_AFTER_S = int(os.getenv("TRIGGER_RETRY_AFTER_S", "120"))
+# Total agent triggers per submission (the first one included) before the reaper
+# gives up. 3 = the original plus two automatic retries, ~4 minutes of agent
+# outage tolerated before a human is needed.
+MAX_TRIGGER_ATTEMPTS = int(os.getenv("MAX_TRIGGER_ATTEMPTS", "3"))
 
 # Grace window past a timed assessment's deadline within which a submit is still
 # accepted. Covers clock skew, network latency, and the round-trip of the client's

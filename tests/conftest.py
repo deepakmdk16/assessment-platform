@@ -113,7 +113,7 @@ def anon_client() -> Iterator[TestClient]:
 
 
 def register_interviewer(
-    client: TestClient, email: str, password: str = "pw", name: str = "Tester"
+    client: TestClient, email: str, password: str = "pw-long-enough-12", name: str = "Tester"
 ) -> str:
     """Register + log in an interviewer; return a bearer token."""
     client.post("/auth/register", json={"email": email, "password": password, "name": name})

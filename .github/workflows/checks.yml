@@ -49,3 +49,47 @@ jobs:
 
       - name: Run checkpoints (pytest, ruff, mypy, web gates, secret scan)
         run: bash scripts/checkpoints.sh
+
+  # The unit suite runs on in-memory SQLite by design (fast, offline). This job is
+  # the only place the driver, the migration chain and a real boot are exercised
+  # against the production database — the 2026-09-06 audit found "Postgres-ready"
+  # was true of the migrations but the driver wasn't even a dependency.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:ci@localhost:5432/ci
+      PLATFORM_TESTING: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv (installs Python from pyproject)
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend deps
+        run: uv sync
+
+      - name: Migrate a fresh Postgres to head and assert the models match it
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+
+      - name: Boot the API against Postgres and hit /health (which queries the DB)
+        run: |
+          uv run platform-api &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9000/health && break; sleep 1; done
+          curl -fsS http://127.0.0.1:9000/health | grep -q '"ok"'
+          kill %1

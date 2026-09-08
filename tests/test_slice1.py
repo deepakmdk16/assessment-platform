@@ -49,14 +49,14 @@ def _auth(token: str) -> dict[str, str]:
 
 def test_register_login_me(anon_client: TestClient) -> None:
     resp = anon_client.post(
-        "/auth/register", json={"email": "a@x.io", "password": "pw", "name": "Ann"}
+        "/auth/register", json={"email": "a@x.io", "password": "pw-long-enough-12", "name": "Ann"}
     )
     assert resp.status_code == 201
     body = resp.json()
     assert body["email"] == "a@x.io" and body["name"] == "Ann" and "id" in body
     assert "password" not in body and "password_hash" not in body
 
-    resp = anon_client.post("/auth/login", json={"email": "a@x.io", "password": "pw"})
+    resp = anon_client.post("/auth/login", json={"email": "a@x.io", "password": "pw-long-enough-12"})
     assert resp.status_code == 200
     tok = resp.json()
     assert tok["token_type"] == "bearer" and tok["access_token"]
@@ -67,24 +67,24 @@ def test_register_login_me(anon_client: TestClient) -> None:
 
 
 def test_register_duplicate_email_409(anon_client: TestClient) -> None:
-    anon_client.post("/auth/register", json={"email": "d@x.io", "password": "pw", "name": "D"})
+    anon_client.post("/auth/register", json={"email": "d@x.io", "password": "pw-long-enough-12", "name": "D"})
     resp = anon_client.post(
-        "/auth/register", json={"email": "d@x.io", "password": "pw2", "name": "D2"}
+        "/auth/register", json={"email": "d@x.io", "password": "pw2-long-enough-12", "name": "D2"}
     )
     assert resp.status_code == 409
 
 
 def test_login_bad_credentials_401(anon_client: TestClient) -> None:
-    anon_client.post("/auth/register", json={"email": "b@x.io", "password": "pw", "name": "B"})
+    anon_client.post("/auth/register", json={"email": "b@x.io", "password": "pw-long-enough-12", "name": "B"})
     assert anon_client.post("/auth/login", json={"email": "b@x.io", "password": "nope"}).status_code == 401
 
 
 def test_register_rejects_invalid_email_422(anon_client: TestClient) -> None:
     resp = anon_client.post(
-        "/auth/register", json={"email": "not-an-email", "password": "pw", "name": "X"}
+        "/auth/register", json={"email": "not-an-email", "password": "pw-long-enough-12", "name": "X"}
     )
     assert resp.status_code == 422
-    assert anon_client.post("/auth/login", json={"email": "ghost@x.io", "password": "pw"}).status_code == 401
+    assert anon_client.post("/auth/login", json={"email": "ghost@x.io", "password": "pw-long-enough-12"}).status_code == 401
 
 
 def test_me_requires_auth_401(anon_client: TestClient) -> None:

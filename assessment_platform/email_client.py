@@ -1,8 +1,10 @@
-"""Outbound email for invite links.
+"""Outbound email: invite links, and the account-lifecycle mails (address
+confirmation, password reset).
 
-Deliberately thin: one `send_invite_emails` entry point that the API calls after
-creating an invite. With no SMTP host configured it logs the link instead of
-sending, so dev/tests run offline; tests mock this function.
+Deliberately thin: `send_invite_emails` (called after creating an invite) and
+`send_account_email` (one message to one interviewer) share one delivery path.
+With no SMTP host configured it logs instead of sending, so dev/tests run
+offline; tests mock these functions.
 
 Sending stays best-effort — a failure is reported, never raised, so it can't fail
 invite creation (the link is stored regardless). But the outcome is *returned*
@@ -15,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import smtplib
+from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import EmailMessage
 
@@ -34,18 +37,24 @@ class Delivery:
     error: str | None = None
 
 
-def _build_message(to: str, url: str, question_title: str) -> EmailMessage:
+def _message(to: str, subject: str, body: str) -> EmailMessage:
     msg = EmailMessage()
-    msg["Subject"] = f"Coding assessment invite: {question_title}"
+    msg["Subject"] = subject
     msg["From"] = config.SMTP_FROM
     msg["To"] = to
-    msg.set_content(
+    msg.set_content(body)
+    return msg
+
+
+def _build_message(to: str, url: str, question_title: str) -> EmailMessage:
+    return _message(
+        to,
+        f"Coding assessment invite: {question_title}",
         f"You've been invited to complete a coding assessment ({question_title}).\n\n"
         f"Open your assessment here:\n{url}\n\n"
         "This link is personal to you — you'll be asked to confirm this email\n"
-        "address to begin, and it won't work for anyone else."
+        "address to begin, and it won't work for anyone else.",
     )
-    return msg
 
 
 def _mask_email(addr: str) -> str:
@@ -69,17 +78,38 @@ def send_invite_emails(recipients: list[str], url: str, question_title: str) -> 
     """
     if not recipients:
         return []
+    return _deliver(
+        recipients, url, "invite", lambda to: _build_message(to, url, question_title)
+    )
+
+
+def send_account_email(to: str, subject: str, body: str, url: str) -> Delivery:
+    """Email one account-lifecycle message (confirm address, reset password) to
+    an interviewer. Best-effort; never raises. `url` is the link in the body,
+    named separately so the unconfigured-SMTP path can log it under LOG_PII."""
+    return _deliver([to], url, "account", lambda rcpt: _message(rcpt, subject, body))[0]
+
+
+def _deliver(
+    recipients: list[str], url: str, kind: str, build: Callable[[str], EmailMessage]
+) -> list[Delivery]:
     if config.SMTP_HOST is None:
         # Dev affordance: with LOG_PII on, log the copy-pasteable link. Otherwise
-        # keep emails + link out of the logs — the link is still in the create
-        # response and the interviewer's invite table.
+        # keep emails + link out of the logs — an invite link is still in the
+        # create response and the interviewer's invite table.
         if config.LOG_PII:
-            logger.info("SMTP not configured; invite link for %s: %s", recipients, url)
+            logger.info("SMTP not configured; %s link for %s: %s", kind, recipients, url)
         else:
+            hint = (
+                "retrieve it from the create response / invite table"
+                if kind == "invite"
+                else "LOG_PII=true logs it"
+            )
             logger.info(
-                "SMTP not configured; invite link for %d recipient(s) not emailed "
-                "(retrieve it from the create response / invite table).",
+                "SMTP not configured; %s link for %d recipient(s) not emailed (%s).",
+                kind,
                 len(recipients),
+                hint,
             )
         return [Delivery(r, sent=False, error=_NOT_CONFIGURED) for r in recipients]
 
@@ -89,20 +119,22 @@ def send_invite_emails(recipients: list[str], url: str, question_title: str) -> 
                 smtp.starttls()
             if config.SMTP_USER and config.SMTP_PASSWORD:
                 smtp.login(config.SMTP_USER, config.SMTP_PASSWORD)
-            return [_send_one(smtp, to, url, question_title) for to in recipients]
+            return [_send_one(smtp, to, kind, build) for to in recipients]
     except Exception as exc:
         # Connect/TLS/login failed — nobody was mailed. Report it against every
-        # recipient rather than failing invite creation.
-        logger.exception("invite email: SMTP connection failed for %s", _who(recipients))
+        # recipient rather than failing the caller's operation.
+        logger.exception("%s email: SMTP connection failed for %s", kind, _who(recipients))
         return [Delivery(r, sent=False, error=str(exc)) for r in recipients]
 
 
-def _send_one(smtp: smtplib.SMTP, to: str, url: str, question_title: str) -> Delivery:
+def _send_one(
+    smtp: smtplib.SMTP, to: str, kind: str, build: Callable[[str], EmailMessage]
+) -> Delivery:
     try:
-        smtp.send_message(_build_message(to, url, question_title))
+        smtp.send_message(build(to))
         return Delivery(to, sent=True)
     except Exception as exc:  # one bad address must not block the others
         logger.exception(
-            "invite email: failed to send to %s", to if config.LOG_PII else _mask_email(to)
+            "%s email: failed to send to %s", kind, to if config.LOG_PII else _mask_email(to)
         )
         return Delivery(to, sent=False, error=str(exc))

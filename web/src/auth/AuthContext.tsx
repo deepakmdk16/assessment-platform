@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, clearToken, getToken, setToken, setUnauthorizedHandler } from '../api'
+import { api, clearToken, setToken, setUnauthorizedHandler, tryRefresh } from '../api'
 import type { User } from '../types'
 
 interface AuthContextValue {
@@ -15,10 +15,13 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
-  const [loading, setLoading] = useState(() => Boolean(getToken()))
+  const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
 
   function logout() {
+    // Best-effort: drops this browser's refresh cookie server-side. The
+    // in-memory access token is gone either way.
+    void api.logout().catch(() => undefined)
     clearToken()
     setUser(null)
     navigate('/login')
@@ -31,10 +34,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    if (!getToken()) return
-    api
-      .me()
-      .then(setUser)
+    // Resume the session: the access token is memory-only, so every page load
+    // starts by trading the refresh cookie for a fresh one.
+    tryRefresh()
+      .then((ok) => (ok ? api.me().then(setUser) : undefined))
       .catch(() => clearToken())
       .finally(() => setLoading(false))
   }, [])

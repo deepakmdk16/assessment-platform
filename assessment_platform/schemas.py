@@ -8,10 +8,11 @@ cases and return a submission-plus-result view without leaking ORM internals.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Any, Generic, Literal, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, EmailStr, Field, field_validator, model_validator
 
+from .auth import check_password_policy
 from .models import as_utc
 
 Category = Literal["correctness", "performance"]
@@ -345,11 +346,21 @@ class VariantSetSummaryOut(BaseModel):
     updated_at: datetime
 
 
+# Size caps on candidate-supplied text. `code` matches the agent's own 200 KB cap
+# on submissions, so the platform never stores something the grader would 422;
+# the Run button's `stdin` is bounded well under the agent's 2 MB. Every route a
+# candidate can hit unauthenticated carries one of these — before them a
+# multi-megabyte paste was accepted, stored in Submission.code, and only then
+# rejected by the agent.
+MAX_CODE_CHARS = 200_000
+MAX_STDIN_CHARS = 1_000_000
+
+
 class SubmissionCreate(BaseModel):
     question_id: str
     candidate: str
     language: str
-    code: str = Field(min_length=1)
+    code: str = Field(min_length=1, max_length=MAX_CODE_CHARS)
 
 
 class ResultOut(BaseModel):
@@ -409,9 +420,13 @@ class SubmissionSummaryOut(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
+# Every field that SETS a password: min length + bcrypt's byte ceiling (auth.py).
+PasswordStr = Annotated[str, AfterValidator(check_password_policy)]
+
+
 class RegisterIn(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=1)
+    password: PasswordStr
     name: str
     # Required only when the server sets REGISTRATION_CODE (gated sign-up).
     registration_code: str | None = None
@@ -424,6 +439,38 @@ class InterviewerOut(BaseModel):
     # Workspace-level default branding (A12) — prefills a new assessment's org/logo.
     default_org_name: str | None = None
     default_logo_url: str | None = None
+    # Whether the emailed confirmation link was followed. Informational for now:
+    # nothing is gated on it, the UI just nags.
+    email_verified: bool = False
+
+
+class MessageOut(BaseModel):
+    detail: str
+
+
+class ForgotPasswordIn(BaseModel):
+    # Plain str like LoginIn: a lookup, not data entry (a 422 would be an oracle).
+    email: str
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: PasswordStr
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: PasswordStr
+
+
+class VerifyEmailIn(BaseModel):
+    token: str
+
+
+class DeleteAccountIn(BaseModel):
+    # Re-entering the password is what stops a walked-away-from session (or a
+    # lifted access token) from deleting the account.
+    password: str
 
 
 class InterviewerUpdate(BaseModel):
@@ -583,7 +630,7 @@ class CandidateSubmitIn(BaseModel):
     candidate_name: str
     candidate_email: EmailStr
     language: str
-    code: str = Field(min_length=1)
+    code: str = Field(min_length=1, max_length=MAX_CODE_CHARS)
     # Which question this submits. None (or omitted) targets the invite's single
     # question; required for a multi-question assessment invite.
     question_id: str | None = None
@@ -624,8 +671,8 @@ class CandidateRunIn(BaseModel):
 
     candidate_email: EmailStr
     language: str
-    code: str = Field(min_length=1)
-    stdin: str = ""
+    code: str = Field(min_length=1, max_length=MAX_CODE_CHARS)
+    stdin: str = Field(default="", max_length=MAX_STDIN_CHARS)
     # The question being worked on (None = the invite's single question); used only
     # for the live/invited/not-already-submitted gate — run itself is generic.
     question_id: str | None = None
@@ -645,7 +692,7 @@ class CandidateRunOut(BaseModel):
 class CandidateRunTestsIn(BaseModel):
     candidate_email: EmailStr
     language: str
-    code: str = Field(min_length=1)
+    code: str = Field(min_length=1, max_length=MAX_CODE_CHARS)
     # Which question's tests to run. None = the invite's single question; required
     # for a multi-question assessment invite.
     question_id: str | None = None

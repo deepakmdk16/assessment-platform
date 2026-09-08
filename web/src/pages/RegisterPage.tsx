@@ -63,8 +63,12 @@ export function RegisterPage() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              minLength={12}
               required
             />
+            <p className="field-hint">
+              At least 12 characters. Passwords that appear in known breaches are refused.
+            </p>
           </div>
           <button type="submit" className="btn block" disabled={submitting}>
             {submitting ? 'Creating account…' : 'Create account'}

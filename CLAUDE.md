@@ -66,11 +66,24 @@ deterministic grade.
 
 - **Trigger:** the platform POSTs the full question **inline** + code to
   `{AGENT_BASE_URL}/assessments`, with `callback_url` pointing back to
-  `/assessments/callback`. Auth: `X-Assess-Token: $ASSESS_API_TOKEN` (sent when
-  set).
+  `/assessments/callback` and `job_id` = the submission's own id, **committed
+  before the call** (so a callback can never arrive for an id we haven't stored).
+  The agent echoes it and treats a repeat of an in-flight job as already
+  accepted, so the trigger is retried at the transport level. Auth:
+  `X-Assess-Token: $ASSESS_API_TOKEN` (sent when set).
+- **Grading durability:** a trigger that still fails leaves the submission
+  `pending` — never a 502 to the candidate. A background reaper (`api._reap_tick`,
+  one loop per worker, compare-and-swap claims) re-triggers rows stranded in
+  `pending`/`running` and gives up after `MAX_TRIGGER_ATTEMPTS` with an ERROR log,
+  leaving `error` for the interviewer's manual retry. Deploy the agent before the
+  platform: an older agent mints its own id (tolerated, but the race above stays
+  open for it).
 - **Callback:** the agent POSTs the full result to `/assessments/callback`,
   authenticated with `X-Assess-Token: $CALLBACK_TOKEN` (required when set). The
-  payload is stored verbatim in `AssessmentResult.full_result`.
+  payload is stored verbatim in `AssessmentResult.full_result`. A worker-error
+  payload (no `verdict`) means the job never completed — infrastructure, not the
+  candidate — and re-queues the submission while attempts remain; it never
+  overwrites a stored grade.
 - **Body signing (defense in depth):** on top of the bearer tokens (which travel
   in the clear), when the signing secrets are set the platform signs its outbound
   requests with `ASSESS_SIGNING_SECRET` and verifies the callback with

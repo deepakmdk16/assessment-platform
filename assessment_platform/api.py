@@ -13,6 +13,7 @@ platform<->agent link (see README).
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
@@ -20,22 +21,33 @@ import re
 import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, or_, text
+from fastapi.responses import JSONResponse
+from sqlalchemy import delete, func, or_, text, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, col, select
+from sqlmodel import Session, SQLModel, col, select
 
-from . import agent_client, analytics, config, email_client, integrity, signing
+from . import agent_client, analytics, config, db, email_client, integrity, signing
 from .auth import (
+    REFRESH_COOKIE,
+    clear_refresh_cookie,
     create_access_token,
+    create_refresh_token,
+    create_reset_token,
+    create_verify_token,
     get_current_interviewer,
     hash_password,
+    interviewer_from_action_token,
+    interviewer_from_refresh,
+    is_breached_password,
+    set_refresh_cookie,
     verify_password,
 )
 from .config import PLATFORM_BASE_URL
@@ -81,7 +93,10 @@ from .schemas import (
     CandidateSubmitIn,
     CandidateSubmitOut,
     CandidateTestOutcomeOut,
+    ChangePasswordIn,
     DashboardSubmissionOut,
+    DeleteAccountIn,
+    ForgotPasswordIn,
     IntegrityEventOut,
     IntegrityEventsIn,
     IntegrityReportOut,
@@ -96,6 +111,7 @@ from .schemas import (
     InvitePublicOut,
     InviteStatusOut,
     LoginIn,
+    MessageOut,
     OverviewAnalyticsOut,
     Page,
     QuestionAnalyticsOut,
@@ -105,6 +121,7 @@ from .schemas import (
     QuestionOut,
     QuestionUpdate,
     RegisterIn,
+    ResetPasswordIn,
     ResultOut,
     ScoreBucketOut,
     SubmissionCreate,
@@ -122,6 +139,7 @@ from .schemas import (
     VariantSetInviteCreate,
     VariantSetOut,
     VariantSetSummaryOut,
+    VerifyEmailIn,
 )
 
 logger = logging.getLogger(__name__)
@@ -133,7 +151,16 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # (dev/E2E) so a missing migration surfaces instead of being papered over.
     if config.AUTO_CREATE_TABLES:
         init_db()
-    yield
+    # The grading reaper (`_reap_tick`): one loop per worker process, made safe
+    # by the compare-and-swap claim in `_trigger_agent`. Off under test.
+    reaper = asyncio.create_task(_reaper_loop()) if config.REAP_INTERVAL_S > 0 else None
+    try:
+        yield
+    finally:
+        if reaper is not None:
+            reaper.cancel()
+            with suppress(asyncio.CancelledError):
+                await reaper
 
 
 app = FastAPI(
@@ -148,12 +175,32 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
-    # No credentials cross-origin: the JWT rides in the Authorization header, not
-    # a cookie, so cookie/credential CORS is unnecessary (and can't combine with
-    # a wildcard origin anyway).
+    # The refresh token is an httpOnly cookie, so the SPA's /auth calls must be
+    # credentialed. Only the explicit origins above are ever allowed (credentials
+    # can't combine with a wildcard, and shouldn't).
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _limit_body_size(request: Request, call_next: Any) -> Any:
+    """Refuse oversized bodies before parsing them (413).
+
+    The per-field `max_length` caps in schemas.py bound what gets stored; this
+    bounds what gets read at all. Without it an unauthenticated candidate route
+    would buffer and JSON-parse a multi-megabyte blob just to 422 it. Checked on
+    Content-Length (every JSON client sends it); a chunked body without one still
+    hits the field caps.
+    """
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > config.MAX_BODY_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": f"request body exceeds {config.MAX_BODY_BYTES} bytes."},
+        )
+    return await call_next(request)
 
 
 # --------------------------------------------------------------------------- #
@@ -420,7 +467,79 @@ def _interviewer_out(interviewer: Interviewer) -> InterviewerOut:
         name=interviewer.name,
         default_org_name=interviewer.default_org_name,
         default_logo_url=interviewer.default_logo_url,
+        email_verified=interviewer.email_verified_at is not None,
     )
+
+
+def _reject_breached(password: str) -> None:
+    if is_breached_password(password):
+        raise HTTPException(
+            status_code=422,
+            detail="that password appears in a known data breach; please choose another.",
+        )
+
+
+def _issue_session(interviewer: Interviewer, response: Response) -> TokenOut:
+    """A fresh access token in the body plus a (re)issued refresh cookie."""
+    set_refresh_cookie(response, create_refresh_token(interviewer))
+    return TokenOut(access_token=create_access_token(interviewer))
+
+
+def _set_password(interviewer: Interviewer, new_password: str) -> None:
+    interviewer.password_hash = hash_password(new_password)
+    # Every token minted before this — every device, this one included — is
+    # void from here on. A caller that should stay signed in gets a new session.
+    interviewer.token_version += 1
+    interviewer.updated_at = datetime.now(timezone.utc)
+
+
+def _send_verification(interviewer: Interviewer) -> None:
+    url = f"{config.FRONTEND_BASE_URL}/verify-email?token={create_verify_token(interviewer)}"
+    email_client.send_account_email(
+        interviewer.email,
+        "Confirm your email address",
+        f"Hi {interviewer.name},\n\n"
+        "Confirm this address for your coding-assessment account by opening:\n"
+        f"{url}\n\n"
+        "The link is valid for 3 days. If you didn't create an account, ignore this email.",
+        url,
+    )
+
+
+def _purge_interviewer(owner_id: int, session: Session) -> None:
+    """Hard-delete an interviewer and every row that hangs off them, children
+    first so no foreign key is ever left dangling: results → submissions →
+    sitting rows (attempts, slot variants, integrity events, drafts) → invites →
+    assessment slots → assessments → test cases → questions → variant sets → the
+    account. This is the one path that removes recorded submissions: the account
+    holder is the record's owner, and taking their data with them is what
+    deleting an account means (and what a data-subject request requires)."""
+    question_ids = select(Question.id).where(Question.owner_id == owner_id)
+    assessment_ids = select(Assessment.id).where(Assessment.owner_id == owner_id)
+    invite_ids = select(Invite.id).where(Invite.created_by == owner_id)
+    submission_ids = select(Submission.id).where(
+        or_(
+            col(Submission.question_id).in_(question_ids),
+            col(Submission.invite_id).in_(invite_ids),
+        )
+    )
+    steps: list[tuple[type[SQLModel], Any]] = [
+        (AssessmentResult, col(AssessmentResult.submission_id).in_(submission_ids)),
+        (Submission, col(Submission.id).in_(submission_ids)),
+        (CandidateAttempt, col(CandidateAttempt.invite_id).in_(invite_ids)),
+        (CandidateSlotVariant, col(CandidateSlotVariant.invite_id).in_(invite_ids)),
+        (IntegrityEvent, col(IntegrityEvent.invite_id).in_(invite_ids)),
+        (CandidateDraft, col(CandidateDraft.invite_id).in_(invite_ids)),
+        (Invite, col(Invite.created_by) == owner_id),
+        (AssessmentQuestion, col(AssessmentQuestion.assessment_id).in_(assessment_ids)),
+        (Assessment, col(Assessment.owner_id) == owner_id),
+        (QuestionTestCase, col(QuestionTestCase.question_id).in_(question_ids)),
+        (Question, col(Question.owner_id) == owner_id),
+        (VariantSet, col(VariantSet.owner_id) == owner_id),
+        (Interviewer, col(Interviewer.id) == owner_id),
+    ]
+    for table, condition in steps:
+        session.execute(delete(table).where(condition))
 
 
 @app.post("/auth/register", response_model=InterviewerOut, status_code=201)
@@ -438,35 +557,163 @@ def register(
         body.registration_code, config.REGISTRATION_CODE
     ):
         raise HTTPException(status_code=403, detail="invalid or missing registration code.")
-    existing = session.exec(
-        select(Interviewer).where(Interviewer.email == body.email)
-    ).first()
+    # Stored and compared lower-cased, so Jane@x.io and jane@x.io are one account.
+    email = _normalize_email(body.email)
+    existing = session.exec(select(Interviewer).where(Interviewer.email == email)).first()
     if existing is not None:
-        raise HTTPException(status_code=409, detail=f"email {body.email!r} already registered.")
+        raise HTTPException(status_code=409, detail=f"email {email!r} already registered.")
+    _reject_breached(body.password)
     interviewer = Interviewer(
-        email=body.email,
+        email=email,
         password_hash=hash_password(body.password),
         name=body.name,
     )
     session.add(interviewer)
     session.commit()
     session.refresh(interviewer)
+    # Best-effort, like invite mail: a mailer outage must not block sign-up. The
+    # link can be re-sent from the account.
+    _send_verification(interviewer)
     return _interviewer_out(interviewer)
 
 
 @app.post("/auth/login", response_model=TokenOut)
 def login(
-    body: LoginIn, request: Request, session: Session = Depends(get_session)
+    body: LoginIn,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_session),
 ) -> TokenOut:
     limiter.check(
         "login", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
     interviewer = session.exec(
-        select(Interviewer).where(Interviewer.email == body.email)
+        select(Interviewer).where(Interviewer.email == _normalize_email(body.email))
     ).first()
     if interviewer is None or not verify_password(body.password, interviewer.password_hash):
         raise HTTPException(status_code=401, detail="invalid email or password.")
-    return TokenOut(access_token=create_access_token(_require_id(interviewer.id)))
+    return _issue_session(interviewer, response)
+
+
+@app.post("/auth/refresh", response_model=TokenOut)
+def refresh_session(
+    request: Request, response: Response, session: Session = Depends(get_session)
+) -> TokenOut:
+    """Trade the refresh cookie for a new access token (and a re-issued cookie,
+    so the session slides). How the SPA resumes a session on page load and
+    recovers from an expired access token — the only thing the cookie is for."""
+    interviewer = interviewer_from_refresh(request.cookies.get(REFRESH_COOKIE), session)
+    if interviewer is None:
+        raise HTTPException(status_code=401, detail="not signed in.")
+    return _issue_session(interviewer, response)
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(response: Response) -> None:
+    """Sign this browser out: drop its refresh cookie. Other devices keep their
+    sessions; changing the password is what signs out everywhere."""
+    clear_refresh_cookie(response)
+
+
+@app.post("/auth/forgot-password", response_model=MessageOut, status_code=202)
+def forgot_password(
+    body: ForgotPasswordIn, request: Request, session: Session = Depends(get_session)
+) -> MessageOut:
+    limiter.check(
+        "forgot", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
+    interviewer = session.exec(
+        select(Interviewer).where(Interviewer.email == _normalize_email(body.email))
+    ).first()
+    if interviewer is not None:
+        url = f"{config.FRONTEND_BASE_URL}/reset-password?token={create_reset_token(interviewer)}"
+        email_client.send_account_email(
+            interviewer.email,
+            "Reset your password",
+            f"Hi {interviewer.name},\n\n"
+            "Someone asked to reset the password for this coding-assessment account. "
+            "If that was you, open:\n"
+            f"{url}\n\n"
+            "The link works once and expires in 1 hour. If you didn't ask for it, "
+            "ignore this email — your password is unchanged.",
+            url,
+        )
+    # The same answer whether or not the address has an account, so this can't
+    # be used to find out which emails are registered.
+    return MessageOut(detail="if that address has an account, a reset link has been emailed.")
+
+
+@app.post("/auth/reset-password", status_code=204)
+def reset_password(body: ResetPasswordIn, session: Session = Depends(get_session)) -> None:
+    interviewer = interviewer_from_action_token(body.token, "reset", session)
+    if interviewer is None:
+        raise HTTPException(status_code=400, detail="invalid or expired reset link.")
+    _reject_breached(body.new_password)
+    _set_password(interviewer, body.new_password)
+    # Following a link mailed to the address proves control of it.
+    interviewer.email_verified_at = interviewer.email_verified_at or datetime.now(timezone.utc)
+    session.add(interviewer)
+    session.commit()
+
+
+@app.post("/auth/change-password", response_model=TokenOut)
+def change_password(
+    body: ChangePasswordIn,
+    response: Response,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> TokenOut:
+    """Change the caller's password. Re-entering the current one is what stops a
+    lifted access token from taking the account over. Signs every other device
+    out (token_version) and hands this one a fresh session."""
+    if not verify_password(body.current_password, current.password_hash):
+        raise HTTPException(status_code=403, detail="current password is incorrect.")
+    _reject_breached(body.new_password)
+    _set_password(current, body.new_password)
+    session.add(current)
+    session.commit()
+    session.refresh(current)
+    return _issue_session(current, response)
+
+
+@app.post("/auth/verify-email", status_code=204)
+def verify_email(body: VerifyEmailIn, session: Session = Depends(get_session)) -> None:
+    interviewer = interviewer_from_action_token(body.token, "verify", session)
+    if interviewer is None:
+        raise HTTPException(status_code=400, detail="invalid or expired verification link.")
+    if interviewer.email_verified_at is None:
+        interviewer.email_verified_at = datetime.now(timezone.utc)
+        session.add(interviewer)
+        session.commit()
+
+
+@app.post("/auth/resend-verification", response_model=MessageOut, status_code=202)
+def resend_verification(
+    request: Request, current: Interviewer = Depends(get_current_interviewer)
+) -> MessageOut:
+    limiter.check(
+        "forgot", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
+    if current.email_verified_at is not None:
+        return MessageOut(detail="email already verified.")
+    _send_verification(current)
+    return MessageOut(detail="verification email sent.")
+
+
+@app.delete("/auth/me", status_code=204)
+def delete_me(
+    body: DeleteAccountIn,
+    response: Response,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> None:
+    """Delete the caller's account and everything it owns (see
+    `_purge_interviewer`). Irreversible; the password is required again."""
+    if not verify_password(body.password, current.password_hash):
+        raise HTTPException(status_code=403, detail="password is incorrect.")
+    _purge_interviewer(_require_id(current.id), session)
+    session.commit()
+    clear_refresh_cookie(response)
 
 
 @app.get("/auth/me", response_model=InterviewerOut)
@@ -1067,6 +1314,39 @@ def delete_question(
                 "are recorded against it. Revoke its invites instead."
             ),
         )
+    # A question that is a fixed slot of an assessment, or a variant already
+    # frozen onto a candidate's sitting, is referenced by an FK with no cascade —
+    # deleting it used to 500 on the constraint. Refuse with the same shape as
+    # the other guards, naming what holds the reference.
+    slot_assessments = list(
+        session.exec(
+            select(AssessmentQuestion.assessment_id).where(
+                AssessmentQuestion.question_id == question_id
+            )
+        ).all()
+    )
+    if slot_assessments:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot delete question {question_id!r}: it is a slot in assessment(s) "
+                f"{', '.join(sorted(set(slot_assessments)))}. Remove it from the "
+                "assessment first."
+            ),
+        )
+    assigned = session.exec(
+        select(func.count())
+        .select_from(CandidateSlotVariant)
+        .where(CandidateSlotVariant.question_id == question_id)
+    ).one()
+    if assigned:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot delete question {question_id!r}: it is a variant already "
+                f"assigned to {assigned} candidate sitting(s)."
+            ),
+        )
     # A sitting is a record even before (or without) a submission: an attempt is
     # someone having sat down, and integrity events are evidence — cascading
     # either away would destroy exactly what they exist to keep (deleting
@@ -1296,13 +1576,20 @@ def update_assessment(
     a.logo_url = body.logo_url
     a.proctored = body.proctored
     a.updated_at = datetime.now(timezone.utc)
-    # Full replace of the membership set (PUT). Clear via the relationship and
-    # flush FIRST (delete-orphan removes the old rows), so a question kept across
-    # the update doesn't collide with its own old row on the
-    # (assessment_id, question_id) unique key during a single flush.
-    a.questions.clear()
-    session.flush()
-    a.questions.extend(_membership_rows(new_slots, current, session))
+    # Full replace of the membership set (PUT) — but ONLY when it actually
+    # changed. A settings-only edit (title / timer / branding / monitoring, the
+    # edit dialog's whole job) must leave the AssessmentQuestion rows alone: once
+    # a candidate has started, CandidateSlotVariant rows FK those rows, so
+    # clearing and re-inserting them is an FK violation (a 500) on every VS2
+    # assessment in flight — and without FK enforcement it would silently orphan
+    # the frozen assignments and re-roll every candidate's variant.
+    if new_sig != current_sig:
+        # Clear via the relationship and flush FIRST (delete-orphan removes the
+        # old rows), so a question kept across the update doesn't collide with
+        # its own old row on the (assessment_id, question_id) unique key.
+        a.questions.clear()
+        session.flush()
+        a.questions.extend(_membership_rows(new_slots, current, session))
     session.add(a)
     session.commit()
     session.refresh(a)
@@ -1769,7 +2056,6 @@ def analytics_overview(
     overall pass rate / average score, and a daily submission trend. `days`
     windows the submission-derived stats (counts/rate/score/trend) to the last N
     days; the question count is the current library size, not time-scoped."""
-    _reap_stale_running(session)
     question_count = session.exec(
         select(func.count())
         .select_from(Question)
@@ -1831,7 +2117,6 @@ def analytics_questions(
     (they're hidden from the library, VS1). `days` windows the stats to the last N
     days (the question rows themselves are the whole library). Paginated like
     `/submissions`."""
-    _reap_stale_running(session)
     where = (
         Question.owner_id == current.id,
         Question.status == "active",
@@ -2675,68 +2960,186 @@ def candidate_get_drafts(
 # --------------------------------------------------------------------------- #
 
 
-async def _trigger_agent(session: Session, question: Question, sub: Submission) -> Submission:
-    """Trigger an agent job for `sub` and persist the outcome.
+def _cas(
+    session: Session,
+    sub: Submission,
+    *,
+    expect_status: str,
+    expect_attempts: int,
+    **values: Any,
+) -> bool:
+    """Compare-and-swap on a submission row: apply `values` only if the row still
+    carries the (status, attempts) the caller loaded; return whether it did.
 
-    Shared by the initial submit and the manual retry: on success sets the new
-    agent_job_id and flips status to "running"; on failure flips to "error" and
-    raises 502 (submission left in "error"). The caller must have already looked
-    up the question.
+    `attempts` changes on every claim, so the pair is a real version token: a
+    request and a reaper tick (or two workers' reapers) that both loaded the same
+    row cannot both win. Plain conditional UPDATE + rowcount — portable across
+    SQLite and Postgres, the same pattern as the rate-limit counter. Commits, then
+    refreshes `sub` so the caller sees the database's truth either way (the ORM
+    is told not to guess: synchronize_session=False).
     """
+    stmt = (
+        update(Submission)
+        .where(
+            col(Submission.id) == sub.id,
+            col(Submission.status) == expect_status,
+            col(Submission.attempts) == expect_attempts,
+        )
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    won = bool(cast(CursorResult[object], session.execute(stmt)).rowcount)
+    session.commit()
+    session.refresh(sub)
+    return won
+
+
+async def _trigger_agent(session: Session, question: Question, sub: Submission) -> Submission:
+    """Claim `sub` for one more agent trigger and make it. Never raises for the agent.
+
+    Shared by submit, the manual retry and the reaper. The order is what makes
+    grading durable:
+      1. claim  — CAS the row to "pending" with `agent_job_id` = its own id and
+                  `attempts` + 1, COMMITTED before the agent hears anything, so a
+                  callback can never arrive for an id we haven't stored;
+      2. trigger — `agent_client.trigger_assessment` (with transport retries);
+      3. accept — CAS "pending" -> "running". A callback that beat us here has
+                  already moved the row to done/error; the CAS is then a no-op,
+                  never a regression.
+    A trigger that still fails after its retries leaves the row "pending" for the
+    reaper (re-triggered after TRIGGER_RETRY_AFTER_S), so the caller never 502s
+    the candidate and the attempt is never burned. A lost claim (another worker
+    got there first) returns the row as that worker left it.
+    """
+    attempt = sub.attempts + 1
+    if not _cas(
+        session,
+        sub,
+        expect_status=sub.status,
+        expect_attempts=sub.attempts,
+        status="pending",
+        agent_job_id=sub.id,
+        attempts=attempt,
+    ):
+        logger.info(
+            "submission %s: trigger claim lost to another worker (status=%s)", sub.id, sub.status
+        )
+        return sub
+
     callback_url = f"{PLATFORM_BASE_URL}/assessments/callback"
     try:
         job_id = await agent_client.trigger_assessment(question, sub, callback_url)
-    except Exception as exc:  # agent unreachable / rejected the job
-        sub.status = "error"
-        session.add(sub)
-        session.commit()
-        session.refresh(sub)
-        logger.warning("submission %s: agent trigger failed: %s", sub.id, exc)
-        raise HTTPException(status_code=502, detail=f"agent call failed: {exc}") from exc
+    except Exception as exc:  # agent unreachable / rejected the job, after retries
+        logger.warning(
+            "submission %s: agent trigger failed (attempt %d/%d); left pending for the reaper: %s",
+            sub.id,
+            attempt,
+            config.MAX_TRIGGER_ATTEMPTS,
+            exc,
+        )
+        return sub
 
-    sub.agent_job_id = job_id
-    sub.status = "running"
-    session.add(sub)
-    session.commit()
-    session.refresh(sub)
-    # Correlation breadcrumb: ties this submission to the agent job so a later
-    # callback (or a reap) can be traced back through the logs by either id.
-    logger.info("submission %s triggered agent job %s (status=running)", sub.id, job_id)
+    if job_id != sub.id:
+        # An agent predating the platform-minted id contract minted its own. Store
+        # what it will call back with so the result still lands; only for such an
+        # agent does the callback-before-commit race stay open.
+        logger.warning(
+            "submission %s: agent answered with its own job id %r — deploy the agent "
+            "first for the full durability fix",
+            sub.id,
+            job_id,
+        )
+    if _cas(
+        session,
+        sub,
+        expect_status="pending",
+        expect_attempts=attempt,
+        status="running",
+        agent_job_id=job_id,
+    ):
+        # Correlation breadcrumb: ties this submission to the agent job so a later
+        # callback (or a reap) can be traced back through the logs by either id.
+        logger.info(
+            "submission %s triggered agent job %s (attempt %d, status=running)",
+            sub.id,
+            job_id,
+            attempt,
+        )
+    else:
+        logger.info(
+            "submission %s: callback landed before the 202 was recorded (status=%s)",
+            sub.id,
+            sub.status,
+        )
     return sub
 
 
-def _reap_stale_running(session: Session) -> list[str]:
-    """Flip submissions stuck in "running" past the grace window to "error".
+async def _reap_tick() -> list[str]:
+    """One pass of the grading reaper; returns the submission ids it acted on.
 
-    A submission is "running" from the agent's 202 until its callback lands; if the
-    callback never arrives the row is stranded and retry (error-only) can't recover
-    it. Called on the interviewer read paths, so viewing the dashboard heals
-    stranded attempts. Only `status` changes — `agent_job_id` is left intact, so a
-    late callback still matches and can still land its result. Returns the reaped
-    submission ids. Reaping is disabled when REAP_RUNNING_AFTER_S <= 0.
+    Finds rows stranded in "pending" (trigger never accepted, or re-queued by the
+    agent's worker-error callback) longer than TRIGGER_RETRY_AFTER_S and in
+    "running" (accepted, callback never arrived) longer than REAP_RUNNING_AFTER_S.
+    Each is re-triggered through `_trigger_agent` while it has attempts left, else
+    flipped to "error" with an ERROR log — the alert that a human must retry.
+    Runs in the background (`_reaper_loop`), never on an interviewer's read path,
+    so no request pays for a cross-tenant scan (and `status` is indexed).
+    `agent_job_id` is kept on give-up so a late callback can still land its result.
     """
-    if config.REAP_RUNNING_AFTER_S <= 0:
-        return []
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(seconds=config.REAP_RUNNING_AFTER_S)
-    running = session.exec(
-        select(Submission).where(Submission.status == "running")
-    ).all()
-    reaped: list[str] = []
-    for sub in running:
-        if as_utc(sub.updated_at) < cutoff:
-            sub.status = "error"
-            session.add(sub)
-            reaped.append(sub.id)
-            logger.warning(
-                "reaped stale submission %s (agent_job_id=%s): no callback within %ss",
-                sub.id,
-                sub.agent_job_id,
-                config.REAP_RUNNING_AFTER_S,
+    acted: list[str] = []
+    # Engine resolved at call time (not imported at module load): tests swap
+    # `db.engine` for an in-memory database.
+    with Session(db.engine) as session:
+        stranded = session.exec(
+            select(Submission).where(col(Submission.status).in_(("pending", "running")))
+        ).all()
+        for sub in stranded:
+            grace = (
+                config.TRIGGER_RETRY_AFTER_S
+                if sub.status == "pending"
+                else config.REAP_RUNNING_AFTER_S
             )
-    if reaped:
-        session.commit()
-    return reaped
+            if grace <= 0 or as_utc(sub.updated_at) >= now - timedelta(seconds=grace):
+                continue
+            if sub.attempts < config.MAX_TRIGGER_ATTEMPTS:
+                question = session.get(Question, sub.question_id)
+                if question is not None:
+                    logger.warning(
+                        "submission %s stranded in %s for >%ss (agent_job_id=%s); "
+                        "re-triggering (attempt %d/%d)",
+                        sub.id,
+                        sub.status,
+                        grace,
+                        sub.agent_job_id,
+                        sub.attempts + 1,
+                        config.MAX_TRIGGER_ATTEMPTS,
+                    )
+                    await _trigger_agent(session, question, sub)
+                    acted.append(sub.id)
+                    continue
+            if _cas(
+                session, sub, expect_status=sub.status, expect_attempts=sub.attempts, status="error"
+            ):
+                logger.error(
+                    "submission %s gave up after %d agent trigger(s) (agent_job_id=%s): "
+                    "needs a manual retry",
+                    sub.id,
+                    sub.attempts,
+                    sub.agent_job_id,
+                )
+                acted.append(sub.id)
+    return acted
+
+
+async def _reaper_loop() -> None:
+    """Background task (started by the lifespan): `_reap_tick` every REAP_INTERVAL_S."""
+    while True:
+        await asyncio.sleep(config.REAP_INTERVAL_S)
+        try:
+            await _reap_tick()
+        except Exception:  # keep the loop alive; the next tick retries
+            logger.exception("grading reaper tick failed")
 
 
 @app.post("/submissions", response_model=SubmissionOut, status_code=201)
@@ -2769,10 +3172,12 @@ async def retry_submission(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> SubmissionOut:
-    """Re-trigger the agent for a submission stuck in "error" (its prior trigger failed).
+    """Re-trigger the agent for a submission in "error" (the reaper gave up on it,
+    or the agent reported it could not be graded).
 
     Submissions are immutable; this only re-runs the SAME submission — it does not
-    create a new one. Only allowed from "error"; other states are a 409.
+    create a new one. Only allowed from "error"; other states are a 409 (pending
+    and running rows are the reaper's to re-trigger).
     """
     sub = _owned_submission(submission_id, current, session)  # 404/403 guard
     if sub.status != "error":
@@ -2787,8 +3192,6 @@ async def retry_submission(
             status_code=404, detail=f"no question with id {sub.question_id!r}."
         )
 
-    # Clear the prior failed attempt before re-triggering.
-    sub.agent_job_id = None
     sub = await _trigger_agent(session, question, sub)
     return _submission_out(sub, None)
 
@@ -2800,7 +3203,6 @@ def list_submissions(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> Page[SubmissionSummaryOut]:
-    _reap_stale_running(session)  # heal submissions stranded in "running" on view
     # Only submissions for the caller's own questions. Lean rows: the full `code`
     # and `full_result` blobs are fetched per-id via GET /submissions/{id}, so a
     # page here stays small even at hundreds of rows.
@@ -2842,7 +3244,6 @@ def export_submissions(
     Declared BEFORE `/submissions/{submission_id}` so "export" isn't swallowed as
     an id by the path-param route.
     """
-    _reap_stale_running(session)
     subs = session.exec(
         select(Submission)
         .join(Question)
@@ -2895,7 +3296,6 @@ def get_submission(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> SubmissionOut:
-    _reap_stale_running(session)  # heal a submission stranded in "running" on view
     sub = _owned_submission(submission_id, current, session)  # 404/403 guard
     result = session.exec(
         select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
@@ -3041,7 +3441,6 @@ def question_submissions(
     current: Interviewer = Depends(get_current_interviewer),
     session: Session = Depends(get_session),
 ) -> Page[DashboardSubmissionOut]:
-    _reap_stale_running(session)  # heal submissions stranded in "running" on view
     _owned_question(question_id, current, session)  # 404/403 guard
     total = session.exec(
         select(func.count())
@@ -3149,6 +3548,33 @@ def assessments_callback(
 
     verdict = str(payload.get("verdict") or "ERROR")
     is_error = _is_error_payload(payload, verdict)
+    if is_error and payload.get("verdict") is None:
+        # The worker's exception path ({job_id, status: "error", error}) — the job
+        # never ran to completion (a crash, or the agent's shutdown hook flushing
+        # in-flight jobs on a deploy) — as opposed to a graded ERROR verdict. That
+        # is infrastructure, not the candidate's code: re-queue it for the reaper
+        # while attempts remain, and never let it overwrite a grade that landed.
+        if sub.status == "done":
+            logger.info(
+                "callback for agent job %s: worker error after submission %s was graded; ignored",
+                job_id,
+                sub.id,
+            )
+            return {"status": "ignored", "reason": "already graded"}
+        if sub.status in ("pending", "running") and sub.attempts < config.MAX_TRIGGER_ATTEMPTS:
+            sub.status = "pending"
+            session.add(sub)
+            session.commit()
+            logger.warning(
+                "callback for agent job %s: worker error (%s); submission %s re-queued "
+                "for the reaper (%d/%d attempts used)",
+                job_id,
+                payload.get("error"),
+                sub.id,
+                sub.attempts,
+                config.MAX_TRIGGER_ATTEMPTS,
+            )
+            return {"status": "requeued", "submission_id": sub.id}
     reason = str(payload.get("reason") or payload.get("error") or "")
     score_pct = float(payload.get("score_pct") or 0.0)
 
@@ -3182,12 +3608,28 @@ def assessments_callback(
     return {"status": "ok", "submission_id": sub.id}
 
 
+def configure_logging() -> None:
+    """Root logger for the server process.
+
+    Uvicorn configures only its own loggers, so without this every `logger.info`
+    in this package — the correlation breadcrumbs the agent→callback path is
+    meant to be debugged with, the reaper's notices — was silently dropped in
+    production (only WARNING+ reached stderr via the last-resort handler, with
+    no timestamps). Level comes from LOG_LEVEL (default INFO).
+    """
+    logging.basicConfig(
+        level=config.LOG_LEVEL,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    )
+
+
 def main() -> None:
     """Entry point for `uv run platform-api` — serve on port 9000 by default."""
     import os
 
     import uvicorn
 
+    configure_logging()
     uvicorn.run(
         "assessment_platform.api:app",
         host=os.getenv("HOST", "127.0.0.1"),

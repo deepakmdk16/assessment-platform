@@ -153,6 +153,8 @@ export interface User {
   // Workspace default branding (A12) — prefills a new assessment's org/logo.
   default_org_name: string | null
   default_logo_url: string | null
+  // Whether the emailed confirmation link was followed; nothing is gated on it.
+  email_verified: boolean
 }
 
 export interface LoginResponse {

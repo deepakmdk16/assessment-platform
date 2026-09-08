@@ -242,6 +242,31 @@
   color: var(--color-muted);
 }
 
+/* Full-width banner under the topbar (e.g. "verify your email"). */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.55rem 1.6rem;
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.88rem;
+}
+
+.notice b {
+  font-weight: 650;
+}
+
+.notice .spacer {
+  flex: 1;
+}
+
+.notice.sent {
+  background: var(--color-good-soft);
+  color: var(--color-good);
+}
+
 .content {
   padding: 1.6rem 1.6rem 3rem;
   max-width: var(--content-max);
@@ -448,6 +473,29 @@ textarea {
   gap: 0.4rem;
 }
 
+/* Label line with a trailing link (e.g. "Password" ... "Forgot password?"). */
+.field-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.field-row a {
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.field-hint {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  margin: 0;
+  line-height: 1.4;
+}
+.field-hint .btn-link {
+  font-weight: inherit;
+}
+
 /* A number/short input sitting inline with a unit label (e.g. "30 minutes"). */
 .inline-field {
   display: flex;
@@ -576,9 +624,73 @@ textarea {
   margin-bottom: 0.9rem;
 }
 
+.card.danger {
+  border-color: var(--color-bad);
+  margin-top: 0.9rem;
+}
+
+.card.danger .card-title {
+  color: var(--color-bad);
+}
+
+.card-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  margin-top: 1rem;
+}
+
 .sect-title {
   font-size: 1.05rem;
   margin: 1.7rem 0 0.7rem;
+}
+
+/* Uppercase eyebrow that groups cards on a page (e.g. Settings sections). */
+.section-title {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--color-muted);
+  margin: 1.7rem 0 0.7rem;
+  font-weight: 650;
+}
+
+.section-title:first-of-type {
+  margin-top: 0;
+}
+
+/* Account card definition list (dl > dt + dd). */
+.account-kv {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 0.55rem 1rem;
+  align-items: center;
+  font-size: 0.92rem;
+}
+
+.account-kv dt {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.account-kv .chip {
+  /* The app's chips capitalise their label; the spec copy is a sentence. */
+  text-transform: none;
+}
+.account-kv dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .account-kv {
+    grid-template-columns: 1fr;
+  }
 }
 
 .empty-state {
@@ -1740,6 +1852,27 @@ button.tab:hover {
   font-size: 0.85rem;
   text-align: center;
   margin: 1.1rem 0 0;
+}
+
+/* Round status glyph at the top of an auth-card result (verify / reset). */
+.auth-mark {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  margin: 0 0 0.9rem;
+}
+
+.auth-mark.good {
+  background: var(--color-good-soft);
+  color: var(--color-good);
+}
+
+.auth-mark.bad {
+  background: var(--color-bad-soft);
+  color: var(--color-bad);
 }
 
 .notice-card {

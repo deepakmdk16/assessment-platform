@@ -95,7 +95,7 @@ def _login_interviewer() -> None:
     Interviewer routes (/questions, /submissions) are always JWT-guarded; login
     signs with a dev-default secret when JWT_SECRET is unset, so no secret needed.
     """
-    creds = {"email": "smoke@test.io", "password": "pw", "name": "Smoke"}
+    creds = {"email": "smoke@test.io", "password": "smoke-pw-long-enough", "name": "Smoke"}
     try:
         _req("POST", f"{PLATFORM_URL}/auth/register", creds)
     except Exception:

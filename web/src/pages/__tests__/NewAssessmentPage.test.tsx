@@ -125,6 +125,7 @@ describe('NewAssessmentPage', () => {
       name: 'Owner',
       default_org_name: 'Acme Corp',
       default_logo_url: 'https://acme/logo.png',
+      email_verified: true,
     }
     vi.mocked(api.createAssessment).mockResolvedValue({ id: 'week-1' } as AssessmentOut)
     await renderLoaded([q('two-sum', 'Two Sum')])

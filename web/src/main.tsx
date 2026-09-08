@@ -2,6 +2,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import './index.css'
+// Registers the bundled Monaco build with @monaco-editor/react (no CDN fetch).
+import './monaco-setup.ts'
 import { App } from './App.tsx'
 import { AuthProvider } from './auth/AuthContext.tsx'
 import { ErrorBoundary } from './components/ErrorBoundary.tsx'

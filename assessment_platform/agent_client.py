@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Callable
 
 import httpx
 
@@ -104,6 +105,34 @@ def _draft_is_retryable(exc: Exception) -> bool:
     return isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
 
 
+async def _post_with_retry(
+    url: str,
+    body: dict,
+    *,
+    timeout: float,
+    attempts: int,
+    backoff_s: float,
+    retryable: Callable[[Exception], bool],
+    label: str,
+) -> httpx.Response:
+    """`_signed_post` + `raise_for_status`, retried while `retryable` says a retry
+    could actually fix the failure, with a short linear backoff. The last failure
+    is raised as-is so the caller maps it exactly like an unretried one."""
+    last: Exception
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            resp = await _signed_post(url, body, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:
+            last = exc
+            if attempt >= attempts or not retryable(exc):
+                raise
+            logger.info("%s attempt %d/%d failed (%s); retrying", label, attempt, attempts, exc)
+            await asyncio.sleep(backoff_s * attempt)  # linear backoff
+    raise last  # unreachable; keeps the type checker happy
+
+
 async def draft_question(
     brief: str,
     language: str,
@@ -131,27 +160,17 @@ async def draft_question(
         "difficulty": difficulty,
         "target_complexity": target_complexity,
     }
-    last: Exception
-    for attempt in range(1, max(1, _DRAFT_TRANSPORT_ATTEMPTS) + 1):
-        try:
-            resp = await _signed_post(
-                f"{base_url}/questions/draft", body, timeout=AGENT_DRAFT_TIMEOUT_S
-            )
-            resp.raise_for_status()
-            result: dict = resp.json()
-            return result
-        except Exception as exc:
-            last = exc
-            if attempt == _DRAFT_TRANSPORT_ATTEMPTS or not _draft_is_retryable(exc):
-                raise
-            logger.info(
-                "draft attempt %d/%d failed (%s); retrying",
-                attempt,
-                _DRAFT_TRANSPORT_ATTEMPTS,
-                exc,
-            )
-            await asyncio.sleep(_DRAFT_RETRY_BACKOFF_S * attempt)  # linear backoff
-    raise last  # unreachable; keeps the type checker happy
+    resp = await _post_with_retry(
+        f"{base_url}/questions/draft",
+        body,
+        timeout=AGENT_DRAFT_TIMEOUT_S,
+        attempts=_DRAFT_TRANSPORT_ATTEMPTS,
+        backoff_s=_DRAFT_RETRY_BACKOFF_S,
+        retryable=_draft_is_retryable,
+        label="draft",
+    )
+    result: dict = resp.json()
+    return result
 
 
 async def draft_set(
@@ -180,27 +199,17 @@ async def draft_set(
         "target_complexity": target_complexity,
     }
     timeout = AGENT_DRAFT_TIMEOUT_S * max(1, count)
-    last: Exception
-    for attempt in range(1, max(1, _DRAFT_TRANSPORT_ATTEMPTS) + 1):
-        try:
-            resp = await _signed_post(
-                f"{base_url}/questions/draft-set", body, timeout=timeout
-            )
-            resp.raise_for_status()
-            result: dict = resp.json()
-            return result
-        except Exception as exc:
-            last = exc
-            if attempt == _DRAFT_TRANSPORT_ATTEMPTS or not _draft_is_retryable(exc):
-                raise
-            logger.info(
-                "draft-set attempt %d/%d failed (%s); retrying",
-                attempt,
-                _DRAFT_TRANSPORT_ATTEMPTS,
-                exc,
-            )
-            await asyncio.sleep(_DRAFT_RETRY_BACKOFF_S * attempt)
-    raise last  # unreachable; keeps the type checker happy
+    resp = await _post_with_retry(
+        f"{base_url}/questions/draft-set",
+        body,
+        timeout=timeout,
+        attempts=_DRAFT_TRANSPORT_ATTEMPTS,
+        backoff_s=_DRAFT_RETRY_BACKOFF_S,
+        retryable=_draft_is_retryable,
+        label="draft-set",
+    )
+    result: dict = resp.json()
+    return result
 
 
 async def run_code(
@@ -244,13 +253,37 @@ async def run_tests(
     return result
 
 
+# The trigger is retried more liberally than a draft: it is cheap (the agent 202s
+# after validating; the grade runs later) and idempotent — the body carries the
+# platform-minted job_id and the agent de-duplicates a job it already has in
+# flight — so a lost response (ReadTimeout) or a 503 from an agent mid-restart is
+# safe to retry. A 400 (unsupported language, malformed question) is not.
+_TRIGGER_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+_TRIGGER_TRANSPORT_ATTEMPTS = int(os.getenv("AGENT_TRIGGER_TRANSPORT_ATTEMPTS", "3"))
+_TRIGGER_RETRY_BACKOFF_S = float(os.getenv("AGENT_TRIGGER_RETRY_BACKOFF_S", "1.0"))
+
+
+def _trigger_is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _TRIGGER_RETRY_STATUSES
+    return isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout | httpx.ReadTimeout)
+
+
 async def trigger_assessment(
     question: Question,
     submission: Submission,
     callback_url: str,
     base_url: str = AGENT_BASE_URL,
 ) -> str:
-    """POST the job to the agent and return its job_id. Raises on transport/HTTP error."""
+    """POST the job to the agent and return the job_id it acknowledged.
+
+    The job id is minted by the platform, not the agent: `submission.agent_job_id`
+    is already committed by the caller before this call, so a callback can never
+    arrive for an id the platform hasn't stored yet. The agent echoes it back; an
+    older agent that mints its own is tolerated — the caller stores whatever came
+    back so the result still lands. Retries transient failures (see
+    `_trigger_is_retryable`); raises the final one.
+    """
     body = {
         "question": build_question_payload(question),
         "code": submission.code,
@@ -258,10 +291,19 @@ async def trigger_assessment(
         "candidate": submission.candidate,
         "callback_url": callback_url,
         "email_to": None,
+        "job_id": submission.agent_job_id,
     }
-    resp = await _signed_post(f"{base_url}/assessments", body, timeout=AGENT_TIMEOUT_S)
-    resp.raise_for_status()
-    return resp.json()["job_id"]
+    resp = await _post_with_retry(
+        f"{base_url}/assessments",
+        body,
+        timeout=AGENT_TIMEOUT_S,
+        attempts=_TRIGGER_TRANSPORT_ATTEMPTS,
+        backoff_s=_TRIGGER_RETRY_BACKOFF_S,
+        retryable=_trigger_is_retryable,
+        label=f"trigger for submission {submission.id}",
+    )
+    job_id: str = resp.json()["job_id"]
+    return job_id
 
 
 async def request_report(
