@@ -87,6 +87,7 @@ from .models import (
     Membership,
     Organization,
     OrgInvite,
+    OrgUsage,
     Question,
     QuestionTestCase,
     Submission,
@@ -585,12 +586,17 @@ def _purge_org(org_id: int, session: Session) -> None:
     so no foreign key is ever left dangling: results → submissions → sitting rows
     (attempts, slot variants, integrity events, drafts) → invites → assessment
     slots → assessments → test cases → questions → variant sets → the roster and
-    its pending org invites → the organisation. This is the one path that removes
-    recorded submissions.
+    its pending org invites and its usage counters → the organisation. This is the
+    one path that removes recorded submissions.
 
     Invites are reached through the question or assessment they point at, not
     through `created_by`: an invite belongs to the organisation and may well have
     been sent by someone who has since left.
+
+    Every table with an `org_id` must appear in the list below. A missed one is
+    invisible in dev and in the test suite — SQLite does not enforce foreign keys
+    unless asked — and then aborts the delete on Postgres, which does. That is
+    this route's whole job (P13, and a data-subject request).
     """
     question_ids = select(Question.id).where(Question.org_id == org_id)
     assessment_ids = select(Assessment.id).where(Assessment.org_id == org_id)
@@ -620,9 +626,29 @@ def _purge_org(org_id: int, session: Session) -> None:
         (Question, col(Question.org_id) == org_id),
         (VariantSet, col(VariantSet.org_id) == org_id),
         (OrgInvite, col(OrgInvite.org_id) == org_id),
+        (OrgUsage, col(OrgUsage.org_id) == org_id),
         (Membership, col(Membership.org_id) == org_id),
         (Organization, col(Organization.id) == org_id),
     ]
+    # Stop billing a company that is being deleted. Best-effort and logged, never
+    # fatal: deleting an account is a data-subject right and must not be blocked
+    # by Stripe being unreachable. Done before the deletes because the ids are
+    # about to go — the risk that way round is a subscription cancelled for a
+    # deletion that then fails, which is recoverable in Stripe; the other way
+    # round bills a customer whose account no longer exists and who has no
+    # remaining way to stop it.
+    organization = session.get(Organization, org_id)
+    if organization is not None and organization.stripe_subscription_id:
+        try:
+            stripe_client.cancel_subscription(organization.stripe_subscription_id)
+        except Exception:  # noqa: BLE001 — any Stripe failure, never fatal here
+            logger.exception(
+                "could not cancel stripe subscription %s while deleting organisation %s; "
+                "cancel it by hand",
+                organization.stripe_subscription_id,
+                org_id,
+            )
+
     for table, condition in steps:
         session.execute(delete(table).where(condition))
 
@@ -3539,9 +3565,14 @@ def _claim_sitting(org_id: int, session: Session) -> None:
 
     Only the creation of a sitting is gated — a candidate who has already begun
     is never re-checked — so an allowance running out mid-assessment can never
-    take away someone's work. The 402 `billing.consume` raises names the plan and
-    its limit, which is an interviewer's error; it is translated here into a
-    neutral 403 that tells a candidate nothing about someone else's billing.
+    take away someone's work.
+
+    The 402 `billing.consume` raises names the plan and its limit, which is an
+    interviewer's error, so it is translated here into something that tells a
+    candidate nothing about someone else's billing. 503, deliberately, and not
+    403: every 403 on this route until now meant "you are not one of the invited
+    addresses", and the candidate gate says exactly that, so a quota refusal sent
+    as 403 would tell someone to fix an email address that was never wrong.
     """
     organization = _organization(org_id, session)
     try:
@@ -3550,7 +3581,7 @@ def _claim_sitting(org_id: int, session: Session) -> None:
         if exc.status_code != 402:
             raise
         raise HTTPException(
-            status_code=403,
+            status_code=503,
             detail=(
                 "this assessment link is not available right now; "
                 "please contact whoever invited you."

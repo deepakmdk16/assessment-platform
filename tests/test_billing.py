@@ -20,6 +20,7 @@ import httpx
 import pytest
 from conftest import async_raise, async_return, register_interviewer
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from assessment_platform import agent_client, billing, config, stripe_client
@@ -222,7 +223,10 @@ def test_an_exhausted_plan_turns_a_new_candidate_away_neutrally(client, enforced
     _set_usage(sittings=billing.PLANS["free"].sittings)
 
     resp = client.post(f"/invite/{token}/start", json={"candidate_email": "cand@x.io"})
-    assert resp.status_code == 403
+    # 503, not 403: every 403 on this route means "you are not one of the invited
+    # addresses", and the candidate gate says exactly that — so a quota refusal
+    # sent as 403 would tell someone to fix an email address that was never wrong.
+    assert resp.status_code == 503
     assert "not available" in resp.json()["detail"]
     assert "plan" not in resp.json()["detail"].lower()
 
@@ -847,3 +851,64 @@ def test_metadata_places_an_event_when_the_customer_is_not_stored_yet(
     resp = _deliver(client, monkeypatch, _Event("customer.subscription.updated", obj))
     assert resp.status_code == 200
     assert client.get("/billing").json()["plan"]["key"] == "growth"
+
+
+# --------------------------------------------------------------------------- #
+# Deleting the organisation                                                     #
+# --------------------------------------------------------------------------- #
+
+
+def test_deleting_the_last_account_leaves_no_row_behind(client, monkeypatch) -> None:
+    """Foreign keys enforced, as Postgres does and SQLite does not unless asked.
+
+    A table with `org_id` that `_purge_org` forgets is invisible in dev and in
+    every other test here, and then aborts the delete in production — on the one
+    route that has to work, since it is also the data-subject request (P13).
+    """
+    monkeypatch.setattr(agent_client, "draft_question", async_return(_draft_payload()))
+    token = _invite(client)
+    client.post(f"/invite/{token}/start", json={"candidate_email": "cand@x.io"})
+    client.post("/questions/draft", json={"brief": "b", "language": "python"})
+    assert _usage().sittings == 1  # there is something to orphan
+
+    with Session(db_module.engine) as s:
+        s.execute(text("PRAGMA foreign_keys=ON"))
+
+    resp = client.request(
+        "DELETE", "/auth/me", json={"password": "pw-long-enough-12"}
+    )
+    assert resp.status_code == 204, resp.text
+
+    with Session(db_module.engine) as s:
+        assert s.exec(select(OrgUsage)).all() == []
+        assert s.exec(select(Organization)).all() == []
+
+
+def test_deleting_the_organisation_cancels_its_subscription(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """The company is gone: there is nothing left to bill for, and nobody left
+    who could cancel it themselves."""
+    cancelled: list[str] = []
+    monkeypatch.setattr(stripe_client, "cancel_subscription", lambda sub_id: cancelled.append(sub_id))
+    _set_plan(stripe_customer_id="cus_1", stripe_subscription_id="sub_1", plan="growth")
+
+    resp = client.request("DELETE", "/auth/me", json={"password": "pw-long-enough-12"})
+    assert resp.status_code == 204
+
+    assert cancelled == ["sub_1"]
+
+
+def test_a_stripe_outage_cannot_block_a_deletion(client, stripe_configured, monkeypatch) -> None:
+    """Deleting an account is a data-subject right; it must not depend on a third
+    party being reachable. The failure is logged for a human to finish by hand."""
+
+    def _boom(_sub_id: str) -> None:
+        raise RuntimeError("stripe unreachable")
+
+    monkeypatch.setattr(stripe_client, "cancel_subscription", _boom)
+    _set_plan(stripe_customer_id="cus_1", stripe_subscription_id="sub_1", plan="growth")
+
+    assert client.request(
+        "DELETE", "/auth/me", json={"password": "pw-long-enough-12"}
+    ).status_code == 204

@@ -124,6 +124,16 @@ def create_portal_session(*, customer_id: str, return_url: str) -> str:
     return str(session.url)
 
 
+def cancel_subscription(subscription_id: str) -> None:
+    """End a subscription immediately.
+
+    Used when an organisation is deleted: the company is gone, so there is
+    nothing left to bill for and nobody left who could cancel it themselves.
+    Not a downgrade — the rows it applied to no longer exist.
+    """
+    stripe.Subscription.cancel(subscription_id, api_key=_key())
+
+
 def parse_event(payload: bytes, signature: str | None) -> stripe.Event:
     """Verify a webhook's signature and return the event.
 
