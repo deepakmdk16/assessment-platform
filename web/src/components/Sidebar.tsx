@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { ThemeToggle } from './ThemeToggle'
+import { PRODUCT_NAME } from '../branding'
 
 function initials(name: string): string {
   return name
@@ -27,7 +28,7 @@ export function Sidebar() {
     <aside className="sidebar">
       <Link to="/dashboard" className="brand">
         <span className="brand-mark" aria-hidden="true" />
-        <span className="brand-name">assess.dev</span>
+        <span className="brand-name">{PRODUCT_NAME}</span>
       </Link>
 
       <div className="nav-label">Workspace</div>

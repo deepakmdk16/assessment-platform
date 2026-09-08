@@ -264,24 +264,6 @@ docstrings and .env.example lag the code.**
   STATUS.md.
   _Verified: single-audit claim, not independently re-verified; source:
   backend,saas._
-- **W04 · P2 · S — The localStorage draft is keyed by token only and always beats
-the server copy.**
-  Evidence: key DRAFT_PREFIX + token (CandidatePage.tsx:40,150); restore order
-  loadDraft(token) ?? server (:198-199) ignores updated_at (types.ts:386) and
-  candidate email, while invites are multi-recipient (types.ts:183). Why: on a
-  shared machine candidate B inherits A's unsubmitted code; a stale local draft
-  hides newer work saved from another device. Fix: key the local draft by token +
-  email and compare timestamps before choosing.
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
-- **W05 · P2 · XS — The fullscreen "block" does not lock the keyboard.**
-  Evidence: .modal-scrim is a pointer overlay only (components.css:2536-2546);
-  Monaco readOnly is timeUp (CandidatePage.tsx:534) / locked
-  (AssessmentFlow.tsx:405) and never includes mustReturnToFullscreen; the dialog
-  moves no focus (IntegrityGate.tsx:54); STATUS says leaving fullscreen "blocks the
-  editor". Why: a candidate who exits fullscreen can keep typing behind the scrim.
-  Fix: add || integrity.mustReturnToFullscreen to readOnly and focus the modal
-  button on open.
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
 - **W09 · P2 · XS — A transient network failure on boot logs the interviewer out.**
   Evidence: auth/AuthContext.tsx:35-39 clears the token on any me() rejection, not
   just 401. Why: flaky Wi-Fi forces a re-login. Fix: clearToken() only on ApiError
@@ -301,13 +283,6 @@ ErrorBoundary only logs; 401 redirect loses returnTo.**
   one api.test.ts.
   _Verified: single-audit claim, not independently re-verified; source:
   frontend,quality._
-- **W11 · P2 · XS — Integrity monitoring and the countdown keep running after a
-multi-question sitting completes.**
-  Evidence: enabled: stage === 'editor' && proctored (CandidatePage.tsx:125) and
-  stage never leaves editor in the multi flow (AssessmentFlow.tsx:272-279 renders
-  the completion notice internally). Why: post-completion tab switches are recorded
-  against the sitting. Fix: AssessmentFlow calls an onComplete that flips stage.
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
 - **W12 · P2 · S — Silent truncation at 100/200 rows.**
   Evidence: builder library NewAssessmentPage.tsx:42 (200, no pager); submissions
   title map SubmissionsPage.tsx:12; per-question stats DashboardPage.tsx:37;
@@ -489,14 +464,13 @@ layout shift while analytics load.**
   strictness depends on a compiler default; a11y regressions are unlinted. Fix: pin
   strict; recommendedTypeChecked + jsx-a11y; fixed-height skeleton.
   _Verified: cited lines read in this audit; source: quality._
-- **W21 · P3 · XS — Product name "assess.dev" is hardcoded in the candidate header;
-start gate cannot show branding before identification.**
-  Evidence: AssessmentFlow.tsx:293 "Powered by assess.dev"; live: GET
-  /invite/{token} pre-start returns only status + proctored, branding arrives in the
-  /start payload. Why: product naming/white-label is baked into a component;
-  candidates see a generic gate for a branded assessment. Fix: brand constant from
-  config/env; carry title/org/logo in the pre-start public view.
-  _Verified: cited lines read in this audit; source: frontend,saas._
+- **W21 · P3 · XS — The start gate cannot show branding before identification.**
+  Evidence: live: GET /invite/{token} pre-start returns only status + proctored;
+  branding arrives in the /start payload. Why: candidates see a generic gate for a
+  branded assessment. Fix: return org_name/logo_url on the pre-start probe (needs
+  the backend half): carry title/org/logo in the pre-start public view.
+  _Verified: cited lines read in this audit; source: frontend,saas. The hardcoded
+  product name was lifted into `branding.ts` (VITE_PRODUCT_NAME) on 2026-09-08._
 
 ---
 

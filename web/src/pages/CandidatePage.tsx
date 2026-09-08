@@ -30,36 +30,56 @@ type Stage =
   | 'already_submitted'
   | 'timed_out'
 
-// Autosave the in-progress solution to localStorage, keyed by the invite token,
-// so a reload (or the ErrorBoundary catching a render throw) doesn't lose the
-// candidate's work. Cleared once the attempt is recorded.
+// Autosave the in-progress solution to localStorage so a reload (or the
+// ErrorBoundary catching a render throw) doesn't lose the candidate's work.
+// Cleared once the attempt is recorded.
 interface Draft {
   code: string
   language: string
+  /** When this copy was written, so it can be compared against the server's. */
+  saved_at?: string
 }
 
 const DRAFT_PREFIX = 'assessment-draft:'
 
-function loadDraft(token: string): Draft | null {
+/** Keyed by invite AND candidate. Keying on the token alone meant that on a
+ *  shared machine the next candidate to open the same link was seeded with the
+ *  previous one's unsubmitted code. */
+function draftKey(token: string, candidateEmail: string): string {
+  return `${DRAFT_PREFIX}${token}:${candidateEmail.trim().toLowerCase()}`
+}
+
+function loadDraft(token: string, candidateEmail: string): Draft | null {
   try {
-    const raw = localStorage.getItem(DRAFT_PREFIX + token)
+    const raw = localStorage.getItem(draftKey(token, candidateEmail))
     return raw ? (JSON.parse(raw) as Draft) : null
   } catch {
     return null
   }
 }
 
-function saveDraft(token: string, draft: Draft): void {
+function saveDraft(token: string, candidateEmail: string, draft: Draft): void {
   try {
-    localStorage.setItem(DRAFT_PREFIX + token, JSON.stringify(draft))
+    localStorage.setItem(draftKey(token, candidateEmail), JSON.stringify(draft))
   } catch {
     // Private mode / quota exceeded — autosave is best-effort, so drop it silently.
   }
 }
 
-function clearDraft(token: string): void {
+/** Whichever copy is newer, when both exist. Falls back to whichever is present.
+ *  An undated local draft (written before this shipped) loses to a dated server
+ *  copy — the server timestamp is the only one we can trust in that case. */
+function pickDraft(local: Draft | null, server: ServerDraft | null): Draft | null {
+  if (!local?.code) return server?.code ? server : null
+  if (!server?.code) return local
+  const localAt = local.saved_at ? new Date(local.saved_at).getTime() : 0
+  const serverAt = new Date(server.updated_at).getTime()
+  return serverAt > localAt ? server : local
+}
+
+function clearDraft(token: string, candidateEmail: string): void {
   try {
-    localStorage.removeItem(DRAFT_PREFIX + token)
+    localStorage.removeItem(draftKey(token, candidateEmail))
   } catch {
     // ignore
   }
@@ -89,6 +109,12 @@ export function CandidatePage() {
   const [language, setLanguage] = useState<Language | ''>('')
   const [code, setCode] = useState('')
   const [draftRestored, setDraftRestored] = useState(false)
+  // Both copies exist and differ, so the candidate chooses rather than having
+  // one silently win. Null when there is nothing to choose between.
+  const [draftConflict, setDraftConflict] = useState<{
+    local: Draft
+    server: ServerDraft
+  } | null>(null)
   // Server-side drafts for this sitting (CX2), fetched once at /start. The
   // single-question restore below uses them when localStorage has nothing
   // (cleared cache / device switch); AssessmentFlow seeds its answers from them.
@@ -118,12 +144,19 @@ export function CandidatePage() {
   // monitored.
   const proctored = invite?.proctored !== false
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null)
+  // AssessmentFlow renders its own terminal screen, so `stage` stays 'editor'
+  // after a multi-question sitting ends. Tracking completion separately stops
+  // monitoring without pre-empting that screen.
+  const [sittingComplete, setSittingComplete] = useState(false)
   const integrity = useIntegrity({
     token: token ?? '',
     candidateEmail,
     questionId: activeQuestionId,
-    enabled: stage === 'editor' && proctored,
+    enabled: stage === 'editor' && proctored && !sittingComplete,
   })
+  // The sitting is suspended: the gate is up and the candidate must return to
+  // fullscreen. Everything that could change or submit an answer is off.
+  const blocked = integrity.mustReturnToFullscreen
 
   // Probe the link only — the question isn't served until the gate below proves
   // the visitor is one of the invited recipients.
@@ -147,9 +180,12 @@ export function CandidatePage() {
   // to the same browser starts clean.
   useEffect(() => {
     if (stage !== 'editor' || !token) return
-    const t = setTimeout(() => saveDraft(token, { code, language }), 500)
+    const t = setTimeout(
+      () => saveDraft(token, candidateEmail, { code, language, saved_at: new Date().toISOString() }),
+      500,
+    )
     return () => clearTimeout(t)
-  }, [stage, token, code, language])
+  }, [stage, token, candidateEmail, code, language])
 
   // Server-side autosave (CX2), single-question flow only — AssessmentFlow
   // saves per question itself. Gentler cadence than the localStorage one, and
@@ -170,8 +206,9 @@ export function CandidatePage() {
   }, [stage, token, isMultiQuestion, code, language, candidateEmail, activeQuestionId])
 
   useEffect(() => {
-    if (token && (stage === 'submitted' || stage === 'already_submitted')) clearDraft(token)
-  }, [stage, token])
+    if (token && (stage === 'submitted' || stage === 'already_submitted'))
+      clearDraft(token, candidateEmail)
+  }, [stage, token, candidateEmail])
 
   async function handleGateSubmit(e: FormEvent) {
     e.preventDefault()
@@ -191,12 +228,19 @@ export function CandidatePage() {
         // offline / rate-limited — the localStorage path below still works
       }
       setServerDrafts(drafts)
-      // Restore an autosaved draft for this invite, if any — localStorage first
-      // (freshest on the same browser), else the server copy (survives a cleared
-      // cache or a device switch). Only keep a saved language that's still
-      // offered, else fall back to the first choice.
+      // Restore an autosaved draft for this invite. localStorage no longer wins
+      // unconditionally: it used to, so work saved from another device — or from
+      // this one after the local copy went stale — was silently hidden behind an
+      // older draft. When both exist and differ, the candidate is asked; the
+      // server copy carries `updated_at` and the local one now carries
+      // `saved_at`, so both sides of that choice can be dated.
       const server = drafts.find((d) => d.question_id === data.questions?.[0]?.id) ?? drafts[0]
-      const saved = loadDraft(token) ?? (server?.code ? server : null)
+      const local = loadDraft(token, candidateEmail)
+      const serverDraft = server?.code ? server : null
+      if (local?.code && serverDraft?.code && local.code !== serverDraft.code) {
+        setDraftConflict({ local, server: serverDraft })
+      }
+      const saved = pickDraft(local, serverDraft)
       if (saved?.code) {
         setCode(saved.code)
         setLanguage(
@@ -432,6 +476,7 @@ export function CandidatePage() {
         initialDrafts={serverDrafts}
         onQuestionChange={setActiveQuestionId}
         onExpired={() => setStage('expired')}
+        onComplete={() => setSittingComplete(true)}
       />
     )
   }
@@ -526,6 +571,45 @@ export function CandidatePage() {
             )}
           </div>
 
+          {draftConflict && (
+            <div className="modal-scrim" role="dialog" aria-modal="true" aria-labelledby="dc-title">
+              <div className="modal">
+                <div className="stack">
+                  <h2 id="dc-title">Two versions of your work</h2>
+                  <p>
+                    We found unsent work saved on this device and a different version saved from
+                    your account. Pick the one you want to carry on with — the other is discarded.
+                  </p>
+                  <div className="modal-actions">
+                    <button
+                      type="button"
+                      className="btn sec"
+                      onClick={() => {
+                        setCode(draftConflict.local.code)
+                        setDraftConflict(null)
+                      }}
+                    >
+                      This device
+                      {draftConflict.local.saved_at
+                        ? ` · ${new Date(draftConflict.local.saved_at).toLocaleString()}`
+                        : ''}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setCode(draftConflict.server.code)
+                        setDraftConflict(null)
+                      }}
+                    >
+                      Your account · {new Date(draftConflict.server.updated_at).toLocaleString()}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <IntegrityOverlay
             integrity={integrity}
             remainingLabel={
@@ -547,7 +631,11 @@ export function CandidatePage() {
                 minimap: { enabled: false },
                 fontSize: 13,
                 scrollBeyondLastLine: false,
-                readOnly: timeUp,
+                // Locked while the fullscreen gate is up, not merely covered.
+                // The scrim is a pointer overlay: it never stopped the keyboard,
+                // so a candidate kept typing behind a screen that claimed to
+                // have blocked them, and STATUS claimed the editor was blocked.
+                readOnly: timeUp || integrity.mustReturnToFullscreen,
               }}
             />
           </div>
@@ -616,7 +704,7 @@ export function CandidatePage() {
               type="button"
               className="btn sec"
               onClick={() => doRun('run')}
-              disabled={running !== null || submitting || timeUp || !code}
+              disabled={running !== null || submitting || timeUp || blocked || !code}
             >
               {running === 'run' ? 'Running…' : 'Run'}
             </button>
@@ -624,14 +712,14 @@ export function CandidatePage() {
               type="button"
               className="btn sec"
               onClick={() => doRun('tests')}
-              disabled={running !== null || submitting || timeUp || !code}
+              disabled={running !== null || submitting || timeUp || blocked || !code}
             >
               {running === 'tests' ? 'Running tests…' : 'Run against test cases'}
             </button>
             <button
               type="submit"
               className="btn submit"
-              disabled={submitting || running !== null || timeUp}
+              disabled={submitting || running !== null || timeUp || blocked}
             >
               {submitting ? 'Submitting…' : 'Submit'}
             </button>

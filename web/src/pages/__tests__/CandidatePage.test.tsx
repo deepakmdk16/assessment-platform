@@ -30,17 +30,40 @@ vi.mock('../../api', () => {
   }
 })
 
+// The fullscreen gate is browser state the jsdom environment can't produce, so
+// the hook is mocked and driven directly. Everything else stays real.
+const integrityState = vi.hoisted(() => ({
+  mustReturnToFullscreen: false,
+}))
+vi.mock('../../integrity', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../integrity')>()
+  return {
+    ...actual,
+    useIntegrity: () => ({
+      mustReturnToFullscreen: integrityState.mustReturnToFullscreen,
+      fullscreenExits: integrityState.mustReturnToFullscreen ? 1 : 0,
+      pasteBlocked: null,
+      dismissPasteBlock: vi.fn(),
+      enterFullscreen: vi.fn(async () => {}),
+      flush: vi.fn(),
+    }),
+  }
+})
+
 vi.mock('@monaco-editor/react', () => ({
   default: ({
     value,
     onChange,
+    options,
   }: {
     value?: string
     onChange?: (value: string | undefined) => void
+    options?: { readOnly?: boolean }
   }) => (
     <textarea
       aria-label="code editor"
       value={value}
+      readOnly={options?.readOnly}
       onChange={(e) => onChange?.(e.target.value)}
     />
   ),
@@ -486,7 +509,7 @@ describe('CandidatePage', () => {
   it('restores an autosaved draft when the candidate returns', async () => {
     const user = userEvent.setup()
     localStorage.setItem(
-      'assessment-draft:tok123',
+      'assessment-draft:tok123:jane@example.com',
       JSON.stringify({ code: 'saved work', language: 'javascript' }),
     )
     vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
@@ -576,19 +599,76 @@ describe('server drafts (CX2)', () => {
     expect(screen.getByLabelText(/language/i)).toHaveValue('javascript')
   })
 
-  it('prefers the same-browser localStorage draft over the server copy', async () => {
+  it('prefers the local draft when it is the newer of the two', async () => {
     localStorage.setItem(
-      'assessment-draft:tok123',
-      JSON.stringify({ code: 'local, freshest', language: 'python' }),
+      'assessment-draft:tok123:jane@example.com',
+      JSON.stringify({
+        code: 'local, freshest',
+        language: 'python',
+        saved_at: '2026-09-08T12:00:00Z',
+      }),
     )
     vi.mocked(api.startInvite).mockResolvedValue(startResponse)
     vi.mocked(api.getCandidateDrafts).mockResolvedValue({
-      drafts: [{ question_id: 'q1', code: 'older server copy', language: 'python', updated_at: 'x' }],
+      drafts: [
+        {
+          question_id: 'q1',
+          code: 'older server copy',
+          language: 'python',
+          updated_at: '2026-09-08T11:00:00Z',
+        },
+      ],
     })
 
     await startSitting()
 
     expect(await screen.findByLabelText(/code editor/i)).toHaveValue('local, freshest')
+  })
+
+  it('prefers the server draft when it is newer, instead of hiding it behind a stale local copy', async () => {
+    // The old rule was "local always wins", so work saved from another device
+    // was silently invisible behind whatever this browser happened to hold.
+    localStorage.setItem(
+      'assessment-draft:tok123:jane@example.com',
+      JSON.stringify({
+        code: 'stale local copy',
+        language: 'python',
+        saved_at: '2026-09-08T10:00:00Z',
+      }),
+    )
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({
+      drafts: [
+        {
+          question_id: 'q1',
+          code: 'newer work from my laptop',
+          language: 'python',
+          updated_at: '2026-09-08T12:00:00Z',
+        },
+      ],
+    })
+
+    await startSitting()
+
+    expect(await screen.findByLabelText(/code editor/i)).toHaveValue('newer work from my laptop')
+    // And because the two genuinely differ, the candidate is told rather than
+    // having one silently discarded.
+    expect(screen.getByRole('dialog', { name: /two versions of your work/i })).toBeInTheDocument()
+  })
+
+  it("does not seed a candidate with the previous candidate's work on a shared machine", async () => {
+    // Keyed on the token alone, the next person to open the same link inherited
+    // whatever the last one left unsent.
+    localStorage.setItem(
+      'assessment-draft:tok123:someone.else@example.com',
+      JSON.stringify({ code: 'not my code', language: 'python' }),
+    )
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({ drafts: [] })
+
+    await startSitting()
+
+    expect(await screen.findByLabelText(/code editor/i)).not.toHaveValue('not my code')
   })
 
   it('autosaves the code to the server while editing', async () => {
@@ -625,3 +705,38 @@ describe('server drafts (CX2)', () => {
   })
 })
 
+describe('CandidatePage — the fullscreen block actually blocks (UI-D / W05)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    integrityState.mustReturnToFullscreen = false
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active', proctored: true })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({ drafts: [] })
+  })
+
+  async function start() {
+    const user = userEvent.setup()
+    renderCandidatePage()
+    await user.type(await screen.findByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByRole('button', { name: /start/i }))
+    return user
+  }
+
+  it('leaves the editor writable while the candidate is in fullscreen', async () => {
+    await start()
+    expect(await screen.findByLabelText(/code editor/i)).not.toHaveAttribute('readonly')
+  })
+
+  it('locks the editor and every action when the gate is up', async () => {
+    integrityState.mustReturnToFullscreen = true
+    await start()
+
+    // The scrim was a pointer overlay only, so the candidate kept typing behind
+    // a screen that said they were blocked — while STATUS claimed otherwise.
+    expect(await screen.findByLabelText(/code editor/i)).toHaveAttribute('readonly')
+    expect(screen.getByRole('button', { name: /^run$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /submit/i })).toBeDisabled()
+  })
+})

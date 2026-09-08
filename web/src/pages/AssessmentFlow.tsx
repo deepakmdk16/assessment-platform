@@ -16,6 +16,7 @@ import type {
 import { CandidateNotice } from './CandidateNotice'
 import { ConsoleResult } from './ConsoleResult'
 import { formatRemaining, timerClass } from './candidateTimer'
+import { PRODUCT_NAME } from '../branding'
 
 interface Answer {
   code: string
@@ -44,6 +45,9 @@ interface Props {
   onQuestionChange: (questionId: string) => void
   /** Bubble a 410/404 (expired/revoked) up so the page shows the shared notice. */
   onExpired: () => void
+  /** Fired once when the sitting ends, so the page can stop proctoring. This
+   *  component keeps rendering its own terminal screen either way. */
+  onComplete?: () => void
 }
 
 /**
@@ -66,6 +70,7 @@ export function AssessmentFlow({
   initialDrafts,
   onQuestionChange,
   onExpired,
+  onComplete,
 }: Props) {
   const { resolved } = useTheme()
 
@@ -116,7 +121,11 @@ export function AssessmentFlow({
   const cq = questions[current]
   const answer = answers[cq.id]
   const isDone = submitted[cq.id]
-  const locked = isDone || timeUp
+  // Includes the fullscreen gate: the scrim over the editor is a pointer overlay
+  // and never stopped the keyboard, so a candidate kept typing behind a screen
+  // that said they were blocked. `locked` already drives readOnly and every
+  // action, so folding it in here locks all of them at once.
+  const locked = isDone || timeUp || integrity.mustReturnToFullscreen
   const submittedCount = questions.filter((q) => submitted[q.id]).length
   // Terminal screen (A5): reached from BOTH triggers — every question
   // submitted manually before time's up, or the timeout auto-submit pass has
@@ -158,7 +167,9 @@ export function AssessmentFlow({
 
   // Shared countdown to the assessment deadline (server-authoritative).
   useEffect(() => {
-    if (!deadline) return
+    // `complete` stops the clock: without it the interval keeps ticking behind
+    // the terminal screen for as long as the tab is left open.
+    if (!deadline || complete) return
     const tick = () => {
       const ms = new Date(deadline).getTime() - Date.now()
       setRemainingMs(ms)
@@ -167,7 +178,18 @@ export function AssessmentFlow({
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [deadline])
+  }, [deadline, complete])
+
+  // Tell the parent, which owns proctoring. This component renders its own
+  // terminal screen and never told anyone it had finished, so capture stayed on:
+  // tab switches a candidate made AFTER submitting were recorded against their
+  // sitting and counted toward the risk score an interviewer judges them on.
+  const notifiedComplete = useRef(false)
+  useEffect(() => {
+    if (!complete || notifiedComplete.current) return
+    notifiedComplete.current = true
+    onComplete?.()
+  }, [complete, onComplete])
 
   // At zero, auto-submit every unanswered-but-written question once, so time
   // running out records work instead of losing it. A failure is recorded (not
@@ -290,7 +312,9 @@ export function AssessmentFlow({
           <span className="ide-mark" aria-hidden="true" />
         )}
         <span className="ide-title">{brandedTitle ?? assessmentTitle ?? 'Coding assessment'}</span>
-        {(orgName || logoUrl) && <span className="ide-powered-by">Powered by assess.dev</span>}
+        {(orgName || logoUrl) && (
+          <span className="ide-powered-by">Powered by {PRODUCT_NAME}</span>
+        )}
         <div className="ide-top-right">
           <span className="progress">
             {submittedCount} / {questions.length} submitted
