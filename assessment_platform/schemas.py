@@ -985,6 +985,52 @@ class OrgInviteOut(BaseModel):
     error: str | None = None
 
 
+class PlanOut(BaseModel):
+    """One plan's entitlements — the pricing table, served rather than hardcoded
+    in the SPA so limits and prices only ever change in one place."""
+
+    key: str
+    label: str
+    price_usd_month: int
+    sittings: int
+    drafts: int
+    seats: int
+
+
+class UsageOut(BaseModel):
+    """What the organisation has used in the current billing period.
+
+    `seats` is the odd one out: a standing headcount (memberships plus invites
+    still awaiting acceptance), not something consumed monthly — but it is a
+    plan limit, so it belongs next to the other two.
+    """
+
+    period: str
+    sittings: int
+    drafts: int
+    seats: int
+    # The organisation's LLM spend this period, rolled up from what the agent
+    # priced: grading (judge) and question authoring (drafts).
+    judge_cost_usd: float
+    draft_cost_usd: float
+
+
+class BillingOut(BaseModel):
+    plan: PlanOut
+    # The Stripe subscription status verbatim ("active", "past_due", ...);
+    # "active" for an organisation that has never subscribed.
+    status: str
+    usage: UsageOut
+    current_period_end: datetime | None = None
+    # Whether limits actually refuse work right now, and whether a card can be
+    # entered at all (Stripe configured). Both are deployment facts, and the UI
+    # has to be honest about them: an upgrade button that can't reach a payment
+    # page is worse than no button.
+    enforced: bool
+    payments_enabled: bool
+    plans: list[PlanOut]
+
+
 class OrgInvitePublicOut(BaseModel):
     """What the join page may read before anyone has signed in.
 

@@ -51,6 +51,51 @@ class Organization(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     name: str
+    # Billing (X02). `plan` names the entitlement row in `billing.PLANS` and
+    # `plan_status` mirrors the Stripe subscription's status — together they
+    # decide the limits, so a subscription that lapses falls back to free
+    # limits without anything having to rewrite `plan`. The Stripe ids are how
+    # the plan got here and how the customer portal is reopened; both are null
+    # for an organisation that has never paid, which is every organisation
+    # until it upgrades.
+    plan: str = Field(default="free")
+    plan_status: str = Field(default="active")
+    stripe_customer_id: str | None = Field(default=None, unique=True, index=True)
+    stripe_subscription_id: str | None = Field(default=None, index=True)
+    # End of the period Stripe has already been paid for: what the billing page
+    # shows as the renewal (or, once cancellation is scheduled, the expiry) date.
+    current_period_end: datetime | None = None
+    created_at: datetime = _created_at()
+    updated_at: datetime = _updated_at()
+
+
+class OrgUsage(SQLModel, table=True):
+    """One organisation's metered usage for one calendar month (X02).
+
+    A row per (organisation, ``YYYY-MM``), created lazily on the first metered
+    event of the month. Counters are claimed with a conditional UPDATE rather
+    than read-modify-written, so two workers at the limit boundary can't both
+    win — see `billing.consume`.
+
+    The two cost columns are the per-tenant rollup of LLM spend. The agent
+    prices every judged submission and every drafted question and returns the
+    figure; before this it was stored only inside `AssessmentResult.full_result`
+    (opaque JSON, never aggregated) or thrown away with the draft response, so
+    "what did this customer cost us" had no answer. Denormalised deliberately:
+    a monthly total per organisation is a billing figure, not something to
+    recompute by walking every submission's JSON.
+    """
+
+    __table_args__ = (UniqueConstraint("org_id", "period", name="uq_org_usage_period"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    org_id: int = Field(foreign_key="organization.id", index=True)
+    # UTC calendar month, "YYYY-MM" — see `billing.period_key`.
+    period: str = Field(index=True)
+    sittings: int = 0
+    drafts: int = 0
+    judge_cost_usd: float = 0.0
+    draft_cost_usd: float = 0.0
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 
@@ -546,6 +591,13 @@ class Submission(SQLModel, table=True):
     # attempts) the version token for the compare-and-swap in `api._cas`; bounds
     # the reaper's automatic re-triggers (config.MAX_TRIGGER_ATTEMPTS).
     attempts: int = 0
+    # What the agent's judge cost to grade this submission, lifted out of the
+    # callback payload at the moment it lands (X02). The same number is inside
+    # `AssessmentResult.full_result`, but only as opaque JSON: a column is what
+    # makes per-question and per-candidate spend answerable, and it is the audit
+    # trail behind the organisation's monthly `OrgUsage.judge_cost_usd` total.
+    # Null when the agent priced nothing (a local model, or a job that errored).
+    judge_cost_usd: float | None = None
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 

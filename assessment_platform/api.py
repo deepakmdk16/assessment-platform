@@ -22,6 +22,7 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -43,7 +44,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, col, select
 
-from . import agent_client, analytics, config, db, email_client, integrity, signing
+from . import agent_client, analytics, billing, config, db, email_client, integrity, signing
 from .auth import (
     REFRESH_COOKIE,
     clear_refresh_cookie,
@@ -94,6 +95,7 @@ from .schemas import (
     AssessmentQuestionOut,
     AssessmentSlotIn,
     AssessmentUpdate,
+    BillingOut,
     CandidateDraftIn,
     CandidateDraftOut,
     CandidateDraftsOut,
@@ -136,6 +138,7 @@ from .schemas import (
     OrgInvitePublicOut,
     OverviewAnalyticsOut,
     Page,
+    PlanOut,
     QuestionAnalyticsOut,
     QuestionCreate,
     QuestionDraftIn,
@@ -153,6 +156,7 @@ from .schemas import (
     TestCaseOut,
     TokenOut,
     TrendPointOut,
+    UsageOut,
     VariantDraftOut,
     VariantOut,
     VariantSetCreate,
@@ -943,16 +947,54 @@ def _member_count(org_id: int, session: Session) -> int:
     )
 
 
-def _organization_out(org: Membership, session: Session) -> OrganizationOut:
-    organization = session.get(Organization, org.org_id)
+def _organization(org_id: int, session: Session) -> Organization:
+    """The tenant row behind a membership — where the plan and Stripe ids live."""
+    organization = session.get(Organization, org_id)
     if organization is None:  # FK-enforced, so this is a corrupted database
         raise HTTPException(status_code=500, detail="organisation row is missing.")
+    return organization
+
+
+def _organization_out(org: Membership, session: Session) -> OrganizationOut:
+    organization = _organization(org.org_id, session)
     return OrganizationOut(
         id=org.org_id,
         name=organization.name,
         role=org.role,
         member_count=_member_count(org.org_id, session),
     )
+
+
+def _seats_used(org_id: int, session: Session) -> int:
+    """Seats the plan is being asked to cover: members plus open invitations.
+
+    A pending invitation counts, or a two-seat organisation could send ten and
+    let them all in. An expired one does not, and an accepted one is already
+    counted as a member (accepted invites are kept as the audit trail, never
+    deleted). Expiry is compared in Python via `as_utc` because the column is
+    timezone-naive on SQLite — the same rule the candidate invite path uses.
+    """
+    now = datetime.now(timezone.utc)
+    pending = [
+        inv
+        for inv in session.exec(
+            select(OrgInvite).where(
+                OrgInvite.org_id == org_id, col(OrgInvite.accepted_at).is_(None)
+            )
+        ).all()
+        if inv.expires_at is None or as_utc(inv.expires_at) > now
+    ]
+    return _member_count(org_id, session) + len(pending)
+
+
+def _check_seat_capacity(org: Membership, session: Session) -> None:
+    """Refuse an invitation the plan has no seat for (X02)."""
+    if not config.BILLING_ENFORCED:
+        return
+    organization = _organization(org.org_id, session)
+    used = _seats_used(org.org_id, session)
+    if billing.remaining(session, organization, "seats", used=used) <= 0:
+        raise billing.quota_error(organization, "seats")
 
 
 def _admin_count(org_id: int, session: Session) -> int:
@@ -1115,9 +1157,7 @@ def update_org(
     session: Session = Depends(get_session),
 ) -> OrganizationOut:
     _require_admin(org)
-    organization = session.get(Organization, org.org_id)
-    if organization is None:
-        raise HTTPException(status_code=500, detail="organisation row is missing.")
+    organization = _organization(org.org_id, session)
     organization.name = body.name.strip()
     session.add(organization)
     session.commit()
@@ -1260,7 +1300,8 @@ def create_org_invite(
             col(OrgInvite.accepted_at).is_(None),
         )
     )
-    organization = session.get(Organization, org.org_id)
+    _check_seat_capacity(org, session)
+    organization = _organization(org.org_id, session)
     invite = OrgInvite(
         org_id=org.org_id,
         token=secrets.token_urlsafe(32),
@@ -1359,12 +1400,74 @@ def accept_org_invite(
         raise HTTPException(
             status_code=409, detail="you are already a member of this organisation."
         )
+    # Re-checked here and not only at invite time: an invitation outlives a plan
+    # downgrade, and a seat that was free a week ago may not be now. The invitee
+    # is not the customer, so this is a 409 about the organisation's state rather
+    # than a 402 asking them to pay.
+    organization = _organization(invite.org_id, session)
+    if (
+        config.BILLING_ENFORCED
+        and billing.remaining(
+            session, organization, "seats", used=_member_count(invite.org_id, session)
+        )
+        <= 0
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this organisation has no seat available; "
+                "ask an admin to upgrade its plan and invite you again."
+            ),
+        )
     if existing is not None:
         _leave_empty_org(existing, session)
     membership = _join_org(current, invite, session)
     session.commit()
     session.refresh(membership)
     return _organization_out(membership, session)
+
+
+# --------------------------------------------------------------------------- #
+# Billing (plan, allowances, usage)                                             #
+# --------------------------------------------------------------------------- #
+
+
+def _plan_out(plan: billing.Plan) -> PlanOut:
+    return PlanOut(**asdict(plan))
+
+
+@app.get("/billing", response_model=BillingOut)
+def get_billing(
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> BillingOut:
+    """This organisation's plan, what it has used this period, and the plans it
+    could move to.
+
+    Readable by any member, not only an admin: usage is the explanation for a
+    refused invite or draft, and withholding it from the person who hit the
+    limit turns a clear 402 into a mystery. Changing the plan stays admin-only.
+
+    Costs are rounded for the response; the stored figures keep full precision.
+    """
+    organization = _organization(org.org_id, session)
+    row = billing.usage(session, org.org_id)
+    return BillingOut(
+        plan=_plan_out(billing.plan_for(organization)),
+        status=organization.plan_status,
+        usage=UsageOut(
+            period=row.period,
+            sittings=row.sittings,
+            drafts=row.drafts,
+            seats=_seats_used(org.org_id, session),
+            judge_cost_usd=round(row.judge_cost_usd, 4),
+            draft_cost_usd=round(row.draft_cost_usd, 4),
+        ),
+        current_period_end=organization.current_period_end,
+        enforced=config.BILLING_ENFORCED,
+        payments_enabled=config.billing_enabled(),
+        plans=[_plan_out(plan) for plan in billing.PLANS.values()],
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1527,6 +1630,7 @@ async def draft_question(
     # to the LLM. Requiring a seat also makes the spend attributable per
     # organisation, which X02 billing and X09 per-tenant limits both need.
     org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
 ) -> QuestionDraftOut:
     """Draft a question from a brief via the agent. Stateless: stores NOTHING —
     the interviewer reviews/edits the returned draft and then saves it through the
@@ -1541,6 +1645,12 @@ async def draft_question(
     limiter.check(
         "draft", client_ip(request), config.DRAFT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
+    # The rate limit bounds a burst; the plan bounds the month (X02). Claimed
+    # BEFORE the agent is called — an allowance checked and then spent is not a
+    # budget, because two parallel calls both pass the check — and handed back
+    # below if the draft never happened.
+    organization = _organization(org.org_id, session)
+    billing.consume(session, organization, "drafts", 1)
     try:
         payload = await agent_client.draft_question(
             brief=body.brief,
@@ -1551,11 +1661,15 @@ async def draft_question(
     except httpx.HTTPStatusError as exc:
         # Surface the agent's own status/reason (503 offline, 422 unusable draft,
         # 400 bad language) so the UI can show what actually went wrong.
+        billing.release(session, org.org_id, "drafts", 1)
         raise HTTPException(
             status_code=exc.response.status_code, detail=_agent_detail(exc)
         ) from exc
     except httpx.HTTPError as exc:
+        billing.release(session, org.org_id, "drafts", 1)
         raise HTTPException(status_code=502, detail=f"agent unreachable: {exc}") from exc
+
+    billing.record(session, org.org_id, draft_cost_usd=float(payload.get("cost_usd") or 0.0))
 
     question = _question_create_from_agent(payload.get("question") or {})
     return QuestionDraftOut(
@@ -1627,6 +1741,7 @@ async def draft_variant_set(
     # to the LLM. Requiring a seat also makes the spend attributable per
     # organisation, which X02 billing and X09 per-tenant limits both need.
     org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
 ) -> VariantSetDraftOut:
     """Draft a SET of sibling variants from one brief via the agent. Stateless:
     stores NOTHING — the interviewer reviews the variants (and the parity warnings)
@@ -1635,6 +1750,10 @@ async def draft_variant_set(
     limiter.check(
         "draft", client_ip(request), config.DRAFT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
+    # A set of N is N full drafts on the agent, so it costs N of the plan's
+    # allowance — the rate limiter, which counts calls, can't see that.
+    organization = _organization(org.org_id, session)
+    billing.consume(session, organization, "drafts", body.count)
     try:
         payload = await agent_client.draft_set(
             brief=body.brief,
@@ -1644,10 +1763,12 @@ async def draft_variant_set(
             target_complexity=body.target_complexity,
         )
     except httpx.HTTPStatusError as exc:
+        billing.release(session, org.org_id, "drafts", body.count)
         raise HTTPException(
             status_code=exc.response.status_code, detail=_agent_detail(exc)
         ) from exc
     except httpx.HTTPError as exc:
+        billing.release(session, org.org_id, "drafts", body.count)
         raise HTTPException(status_code=502, detail=f"agent unreachable: {exc}") from exc
 
     variants: list[VariantDraftOut] = []
@@ -1672,6 +1793,7 @@ async def draft_variant_set(
                 warnings=v.get("warnings", []),
             )
         )
+    billing.record(session, org.org_id, draft_cost_usd=total_cost)
     return VariantSetDraftOut(
         variants=variants,
         warnings=payload.get("warnings", []),
@@ -2304,6 +2426,21 @@ def delete_assessment(
 # --------------------------------------------------------------------------- #
 
 
+def _check_invite_capacity(org: Membership, session: Session, n: int = 1) -> None:
+    """Refuse to hand out invites the plan has no sittings left for (X02).
+
+    Checked, never consumed: the metered event is a candidate *starting*, and
+    plenty of invites are never opened. This is the interviewer-facing half of
+    the same limit — they find out while sending links, which they can act on,
+    instead of a candidate being turned away, which they cannot.
+    """
+    if not config.BILLING_ENFORCED:
+        return
+    organization = _organization(org.org_id, session)
+    if billing.remaining(session, organization, "sittings") < n:
+        raise billing.quota_error(organization, "sittings")
+
+
 @app.post("/questions/{question_id}/invites", response_model=InviteOut, status_code=201)
 def create_invite(
     question_id: str,
@@ -2313,6 +2450,7 @@ def create_invite(
     session: Session = Depends(get_session),
 ) -> InviteOut:
     question = _owned_question(question_id, org, session)  # 404/403 guard
+    _check_invite_capacity(org, session)
     invite = Invite(
         token=secrets.token_urlsafe(32),
         question_id=question_id,
@@ -2369,6 +2507,7 @@ def create_assessment_invite(
         raise HTTPException(
             status_code=400, detail="cannot invite to an assessment with no questions."
         )
+    _check_invite_capacity(org, session)
     invite = Invite(
         token=secrets.token_urlsafe(32),
         assessment_id=assessment_id,
@@ -2424,6 +2563,8 @@ def create_variant_set_invites(
     variants = _set_variants(set_id, session)
     if not variants:
         raise HTTPException(status_code=400, detail="cannot invite to a variant set with no variants.")
+    # One invite per recipient here, so the whole batch has to fit the allowance.
+    _check_invite_capacity(org, session, len(body.recipients))
     by_id = {q.id: q for q in variants}
 
     # Continue the rotation across calls (count what this set already handed out).
@@ -3126,6 +3267,45 @@ def _deadline_for(started_at: datetime, duration_minutes: int | None) -> datetim
     return as_utc(started_at) + timedelta(minutes=duration_minutes)
 
 
+def _invite_org_id(invite: Invite, session: Session) -> int:
+    """The organisation a sitting on this invite is metered against (X02).
+
+    An invite points at exactly one of a question or an assessment, and both
+    carry `org_id` — the candidate routes have no membership to read it from.
+    """
+    if invite.assessment_id is not None:
+        assessment = session.get(Assessment, invite.assessment_id)
+        if assessment is not None:
+            return assessment.org_id
+    if invite.question_id is not None:
+        question = session.get(Question, invite.question_id)
+        if question is not None:
+            return question.org_id
+    # Both FK-enforced and one of them always set, so this is a corrupt row.
+    raise HTTPException(status_code=500, detail="invite belongs to no organisation.")
+
+
+def _require_sitting_quota(org_id: int, session: Session) -> None:
+    """Refuse a NEW sitting once the organisation's monthly allowance is spent.
+
+    Candidate-facing, so it reveals nothing about somebody else's billing: a
+    neutral 403, not the interviewer's 402. Only the creation of a sitting is
+    gated — a candidate who has already begun is never re-checked — so an
+    allowance running out mid-assessment can never take away someone's work.
+    """
+    if not config.BILLING_ENFORCED:
+        return
+    organization = _organization(org_id, session)
+    if billing.remaining(session, organization, "sittings") <= 0:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "this assessment link is not available right now; "
+                "please contact whoever invited you."
+            ),
+        )
+
+
 def _get_or_start_attempt(
     invite: Invite, email: str, session: Session, *, candidate_name: str | None = None
 ) -> CandidateAttempt:
@@ -3153,6 +3333,12 @@ def _get_or_start_attempt(
             session.commit()
             session.refresh(existing)
         return existing
+    # A new sitting is the plan's metered unit (X02), and this is the one place
+    # a sitting begins — both /start and a client that POSTs straight to /submit
+    # come through here, and the row that loses the race below returns without
+    # being counted, so a double-clicked Start bills once.
+    org_id = _invite_org_id(invite, session)
+    _require_sitting_quota(org_id, session)
     attempt = CandidateAttempt(
         invite_id=_require_id(invite.id), candidate_email=email, candidate_name=candidate_name
     )
@@ -3171,6 +3357,7 @@ def _get_or_start_attempt(
             raise
         return raced
     session.refresh(attempt)
+    billing.record(session, org_id, sittings=1)
     return attempt
 
 
@@ -4255,9 +4442,24 @@ def assessments_callback(
             )
         )
 
+    # Per-tenant LLM spend (X02). The figure is inside `full_result` either way,
+    # but only as opaque JSON; a column makes per-question and per-candidate cost
+    # answerable and is the audit trail behind the organisation's monthly total.
+    # The DELTA is what is rolled up, so a re-delivered callback cannot bill the
+    # same grade twice.
+    reported_cost = payload.get("judge_cost_usd")
+    cost_delta = 0.0
+    if isinstance(reported_cost, (int, float)):
+        cost_delta = float(reported_cost) - (sub.judge_cost_usd or 0.0)
+        sub.judge_cost_usd = float(reported_cost)
+
     sub.status = "error" if is_error else "done"
     session.add(sub)
     session.commit()
+    if cost_delta:
+        question = session.get(Question, sub.question_id)
+        if question is not None:
+            billing.record(session, question.org_id, judge_cost_usd=cost_delta)
     logger.info(
         "callback for agent job %s matched submission %s -> %s", job_id, sub.id, sub.status
     )
