@@ -92,6 +92,9 @@ export async function startAsCandidate(
 
   await page.getByLabel('Name').fill(candidate.name)
   await page.getByLabel('Email').fill(candidate.email)
+  // Consent (X04). Start stays disabled until this is ticked, and the server
+  // refuses a sitting that begins without it.
+  await page.getByLabel(/i agree to my assessment/i).check()
   await page.getByRole('button', { name: 'Start' }).click()
   return { context, page }
 }

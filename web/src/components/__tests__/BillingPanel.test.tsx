@@ -52,7 +52,7 @@ function billing(over: Partial<Billing> = {}): Billing {
 }
 
 function org(role: 'admin' | 'member'): Organization {
-  return { id: 1, name: 'Acme', role, member_count: 1 }
+  return { id: 1, name: 'Acme', role, member_count: 1, retention_days: null }
 }
 
 function mount(over: Partial<Billing> = {}, role: 'admin' | 'member' = 'admin') {

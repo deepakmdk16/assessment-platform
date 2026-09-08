@@ -622,7 +622,12 @@ class CandidateErasureOut(BaseModel):
     to say what was done, and because a silent zero would otherwise look
     identical to success."""
 
-    candidate_email: EmailStr
+    # Plain `str`, not `EmailStr`: this echoes back a path parameter, which can
+    # be any text a caller types. Validating it here would raise *after* the
+    # erasure had been committed, turning a completed request into a 500 — and
+    # the route deliberately answers 200-with-zeroes for an address it holds
+    # nothing for, so an unparseable one needs no special case.
+    candidate_email: str
     erased: bool
     submissions: int
     results: int

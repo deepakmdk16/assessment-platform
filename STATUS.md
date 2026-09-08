@@ -12,30 +12,14 @@ Priority: **P0** blocks taking money or endangers customers · **P1** first payi
 customers hit it · **P2** fix before scale · **P3** polish.
 Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data + API + UI.
 
-**Sequence:** (1) privacy (X03, X04) and email (X06, X07) · (2) deploy + ops
-(X05, X08, P26, X11) · (3) the rest by priority.
+**Sequence:** (1) email (X06, X07) · (2) deploy + ops (X05, X08, P26, X11) ·
+(3) the rest by priority. Privacy (X03, X04) is built; X19 is the legal review
+it still waits on before anyone is charged.
 
 ---
 
 ## Launch audit — 2026-09-06
 
-- **X03 · P0 · M — No PII erasure or retention path for candidate data.**
-  Evidence: deletion is refused once activity exists (api.py:1062-1103); no
-  candidate-scoped delete anywhere; PII stored in Submission (name/email/code),
-  IntegrityEvent, CandidateDraft, CandidateAttempt; no retention job; no
-  backup/restore doc. Why: GDPR/CCPA erasure requests cannot be honoured; a customer
-  DPA will require it. Fix: org-scoped DELETE /candidates/{email} that anonymises
-  the four tables; RETENTION_DAYS purge job; document backups/RPO/RTO.
-  _Verified: cited lines read in this audit; source: saas._
-- **X04 · P0 · S — No privacy policy, terms, DPA or recorded consent for
-proctoring.**
-  Evidence: web/src/components/IntegrityGate.tsx:10-22 is a notice, not a consent
-  record; no policy/terms links anywhere in web/src; nothing stored on
-  CandidateAttempt about consent. Why: selling monitored assessments to
-  EU/UK/California candidates without a documented lawful basis is
-  customer-blocking. Fix: explicit consent checkbox stored on CandidateAttempt;
-  privacy-policy + terms links; a DPA template (legal review).
-  _Verified: cited lines read in this audit; source: saas._
 - **P03 · P1 · S — Assessment and variant-set invites cannot be revoked (no route);
 archiving does not stop links.**
   Evidence: the only revoke route requires Invite.question_id == question_id
@@ -117,6 +101,19 @@ compose; the agent needs a privileged host.**
   storage, alerting on backup failure (ties to X08), and one actual restore
   drill recorded in the table.
   _Verified: opened by this change; source: saas._
+- **X22 · P2 · S — An interviewer's own submissions are outside erasure and
+retention.**
+  Evidence: `POST /submissions` stores `Submission.candidate` (a free-text name)
+  with `candidate_email` NULL and no invite, so `privacy.erase_candidate` — which
+  matches on the address — cannot reach those rows, and `purge_expired`, which
+  walks `CandidateAttempt`, never sees them either. Why: they are normally an
+  interviewer's own test runs, but nothing stops a real person's name and code
+  being pasted in, and the Privacy panel would then be overstating what it
+  destroys. Fix: either scope the route to non-candidate use explicitly (and say
+  so), or give the row a nullable `candidate_email` and include it in both
+  paths. Matching on the display name is not the fix — it would erase the wrong
+  people.
+  _Verified: opened by a code review of this change; source: backend._
 - **X21 · P2 · S — Erasures are not recorded anywhere that survives a restore.**
   Evidence: `privacy.erase_candidate` logs and returns counts, but the only
   durable trace is the erased rows themselves; restoring a backup from before a

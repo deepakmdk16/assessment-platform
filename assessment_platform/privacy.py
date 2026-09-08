@@ -75,9 +75,29 @@ ERASED_NAME = "[erased]"
 # the difference matters when an interviewer asks why a row has no detail.
 ERASED_RESULT: dict = {"erased": True}
 
+# `AssessmentResult.reason` goes with it. It reads like metadata but it is the
+# grader's prose about this candidate's code, routinely quoting the output that
+# code produced, and `ResultOut` shows it to interviewers — so keeping it would
+# leave the most readable candidate-derived text on the row while destroying the
+# JSON blob it was summarising.
+ERASED_REASON = "[erased]"
+
 # Suffix of every minted tombstone. `.invalid` is reserved by RFC 2606, so the
 # address can never route anywhere or collide with a real candidate's.
 TOMBSTONE_DOMAIN = "erased.invalid"
+
+
+def _naive_utc(moment: datetime) -> datetime:
+    """Drop the tzinfo for a comparison the database performs.
+
+    Every timestamp column here is timezone-naive UTC (P14), and everywhere else
+    in this codebase a stored datetime is compared in Python via `as_utc`. These
+    two queries filter in SQL instead — a retention scan should not load every
+    sitting to date one — so the bound has to be naive UTC or the comparison is
+    between an offset-carrying value and a bare one: silently tolerated by
+    SQLite, and off by the session's TimeZone on Postgres.
+    """
+    return moment.replace(tzinfo=None) if moment.tzinfo else moment
 
 
 def _tombstone() -> str:
@@ -180,7 +200,7 @@ def _erase(
             session,
             update(AssessmentResult)
             .where(col(AssessmentResult.submission_id).in_(subs))
-            .values(full_result=ERASED_RESULT),
+            .values(full_result=ERASED_RESULT, reason=ERASED_REASON),
         )
         submissions = _rowcount(
             session,
@@ -330,7 +350,7 @@ def expired_sittings(
     invite_ids = org_invite_ids(org_id, session)
     if not invite_ids:
         return []
-    cutoff = now - timedelta(days=days)
+    cutoff = _naive_utc(now - timedelta(days=days))
     rows = session.exec(
         select(CandidateAttempt.invite_id, CandidateAttempt.candidate_email).where(
             col(CandidateAttempt.invite_id).in_(invite_ids),
@@ -339,6 +359,59 @@ def expired_sittings(
         )
     ).all()
     return [(invite_id, email) for invite_id, email in rows]
+
+
+def _expire_invite_recipients(
+    session: Session, *, org_id: int, now: datetime, days: int
+) -> None:
+    """Drop stale addresses from old invitations, without stranding anyone.
+
+    An address is personal data on the invitation whether or not the person ever
+    opened the link, so an invitation past the window should not still be
+    carrying one. But the invitation is also the *credential*:
+    `api._check_invited` admits exactly the addresses listed here, so removing
+    one ends that person's access.
+
+    Which makes the naive version of this — wipe every recipient of an invite
+    older than the window — a bug that loses a candidate's work. Retention is
+    measured from when someone *sat*, so an invitation sent thirteen months ago
+    and opened yesterday is old while the sitting on it is current; blanking its
+    recipients locks that candidate out mid-assessment with everything they had
+    written still unsubmitted.
+
+    So only addresses with nothing live are dropped: no attempt at all (they
+    never came, and the link is long past the window) or an attempt already
+    anonymised (`_erase` removed them as part of the sitting). An address still
+    holding an un-erased sitting stays until that sitting expires on its own.
+    """
+    cutoff = _naive_utc(now - timedelta(days=days))
+    stale = session.exec(
+        select(Invite).where(
+            col(Invite.id).in_(org_invite_ids(org_id, session)),
+            col(Invite.created_at) < cutoff,
+        )
+    ).all()
+    for invite in stale:
+        if not invite.recipients and not invite.deliveries:
+            continue
+        live = {
+            attempt.candidate_email.strip().lower()
+            for attempt in session.exec(
+                select(CandidateAttempt).where(
+                    col(CandidateAttempt.invite_id) == invite.id,
+                    col(CandidateAttempt.erased_at).is_(None),
+                )
+            ).all()
+        }
+        keep = [r for r in invite.recipients if r.strip().lower() in live]
+        deliveries = [
+            d for d in invite.deliveries if str(d.get("recipient", "")).strip().lower() in live
+        ]
+        if len(keep) == len(invite.recipients) and len(deliveries) == len(invite.deliveries):
+            continue
+        invite.recipients = keep
+        invite.deliveries = deliveries
+        session.add(invite)
 
 
 def purge_expired(session: Session, *, now: datetime | None = None) -> int:
@@ -350,10 +423,9 @@ def purge_expired(session: Session, *, now: datetime | None = None) -> int:
     entirely — retention is something a customer turns on, never a window this
     platform picks on their behalf and starts deleting under.
 
-    A consequence worth stating: invitations older than the window have their
-    recipient list scrubbed too, because an address is personal data on the
-    invite whether or not the person ever opened the link. An unexpired link
-    that old therefore stops admitting the people it was sent to.
+    Invitations past the window also shed the addresses that have nothing live
+    behind them — see `_expire_invite_recipients`, which is careful not to strand
+    a sitting that is still inside the window.
     """
     stamp = now or datetime.now(timezone.utc)
     erased = 0
@@ -371,18 +443,7 @@ def purge_expired(session: Session, *, now: datetime | None = None) -> int:
             ):
                 erase_sitting(session, invite_id=invite_id, email=email, now=stamp)
                 erased += 1
-            cutoff = stamp - timedelta(days=days)
-            stale = session.exec(
-                select(Invite).where(
-                    col(Invite.id).in_(org_invite_ids(org_id, session)),
-                    col(Invite.created_at) < cutoff,
-                )
-            ).all()
-            for invite in stale:
-                if invite.recipients or invite.deliveries:
-                    invite.recipients = []
-                    invite.deliveries = []
-                    session.add(invite)
+            _expire_invite_recipients(session, org_id=org_id, now=stamp, days=days)
             session.commit()
         except Exception:  # one tenant's failure must not stop the rest
             session.rollback()

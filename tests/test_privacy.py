@@ -225,6 +225,26 @@ def test_erasure_is_scoped_to_the_callers_organisation(anon_client, monkeypatch)
     assert surviving == [CANDIDATE], "the other organisation's record was erased too"
 
 
+def test_the_graders_narrative_is_erased_with_the_payload(client, monkeypatch) -> None:
+    """`reason` reads like metadata but it is prose about this candidate's code,
+    routinely quoting the output it produced — and unlike `full_result` it is
+    rendered straight into the interviewer's view."""
+    _full_sitting(client, monkeypatch)
+    _erase(client)
+    with Session(db_module.engine) as s:
+        result = s.exec(select(AssessmentResult)).one()
+    assert result.reason == privacy.ERASED_REASON
+    assert result.verdict == "PASS"  # the grade itself still stands
+
+
+def test_an_unparseable_address_does_not_500(client) -> None:
+    """The path parameter is whatever the caller typed. Validating it on the way
+    back out raised *after* the erasure had been committed."""
+    resp = client.request("DELETE", "/candidates/not-an-email")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["erased"] is False
+
+
 def test_an_unknown_address_answers_200_with_nothing_erased(client) -> None:
     """404 here would be an existence oracle — an unbounded way to ask whether a
     given person has ever been assessed by this organisation."""
@@ -368,8 +388,16 @@ def test_the_sweep_is_idempotent(client, monkeypatch) -> None:
 
 def test_retention_is_measured_from_the_sitting_not_the_invitation(client, monkeypatch) -> None:
     """A link sent in January and taken in June expires six months after the
-    sitting, not before it."""
-    _full_sitting(client, monkeypatch)
+    sitting, not before it — and the old invitation must not be stripped of the
+    recipient who is still sitting on it.
+
+    The first version of the sweep blanked the recipients of every invitation
+    older than the window, which reads as tidy housekeeping and is in fact data
+    loss: `_check_invited` admits exactly the listed addresses, so a candidate
+    mid-assessment on a thirteen-month-old link was locked out with everything
+    they had written still unsubmitted.
+    """
+    token, _ = _full_sitting(client, monkeypatch)
     _set_retention(30)
     with Session(db_module.engine) as s:
         invite = s.exec(select(Invite)).one()
@@ -382,6 +410,35 @@ def test_retention_is_measured_from_the_sitting_not_the_invitation(client, monke
 
     with Session(db_module.engine) as s:
         assert privacy.purge_expired(s) == 0
+
+    with Session(db_module.engine) as s:
+        assert s.exec(select(Invite)).one().recipients == [CANDIDATE]
+    # The credential still works, which is the point. 409 is the
+    # already-submitted guard firing *after* the invite check passed; 403 would
+    # mean the address had been stripped and the candidate locked out.
+    assert client.post(
+        f"/invite/{token}/start", json={"candidate_email": CANDIDATE, "consent": True}
+    ).status_code == 409
+
+
+def test_an_old_invitation_sheds_a_recipient_who_never_sat(client) -> None:
+    """The other half: an address with nothing behind it is stale personal data
+    on an invitation long past the window, and does go."""
+    token = _invite(client, "q1", "never-came@x.io")
+    _set_retention(30)
+    with Session(db_module.engine) as s:
+        invite = s.exec(select(Invite)).one()
+        invite.created_at = datetime.now(timezone.utc) - timedelta(days=100)
+        s.add(invite)
+        s.commit()
+
+    with Session(db_module.engine) as s:
+        privacy.purge_expired(s)
+    with Session(db_module.engine) as s:
+        assert s.exec(select(Invite)).one().recipients == []
+    assert client.post(
+        f"/invite/{token}/start", json={"candidate_email": "never-came@x.io", "consent": True}
+    ).status_code == 403
 
 
 def test_the_retention_window_is_per_organisation(anon_client, monkeypatch) -> None:

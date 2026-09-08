@@ -695,6 +695,25 @@ export interface Organization {
   name: string
   role: OrgRole
   member_count: number
+  /** How long candidate data is kept, in days. `null` — the default — means no
+   *  policy is configured and nothing is erased on a schedule. Not the same as
+   *  0, which the API refuses (X03). */
+  retention_days: number | null
+}
+
+/** What a candidate erasure destroyed (X03). Counts rather than a bare success,
+ *  so the interviewer answering the request can say what was done — and so a
+ *  silent zero doesn't look identical to having erased something. */
+export interface CandidateErasure {
+  candidate_email: string
+  erased: boolean
+  submissions: number
+  results: number
+  attempts: number
+  slot_variants: number
+  integrity_events: number
+  drafts_deleted: number
+  invites_amended: number
 }
 
 export interface Member {

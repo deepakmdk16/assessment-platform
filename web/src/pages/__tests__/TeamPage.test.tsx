@@ -54,6 +54,7 @@ const org = (over: Partial<Organization> = {}): Organization => ({
   name: 'Acme Corp',
   role: 'admin',
   member_count: 2,
+  retention_days: null,
   ...over,
 })
 
