@@ -1,6 +1,7 @@
 /** The interviewer's view of a sitting's integrity signals (I1): summary counts,
  *  then the timeline. Evidence for a human — it never touches the verdict. */
 
+import { parseServerDate } from '../invites'
 import type { IntegrityEvent, IntegrityReport, IntegrityRisk } from '../types'
 
 /** Offsets are from the candidate's own start, so they line up with the clock
@@ -96,8 +97,38 @@ function RiskBanner({ risk }: { risk: IntegrityRisk }) {
   )
 }
 
+/** What the candidate agreed to before this sitting, and under which published
+ *  policy (X04). Shown next to the monitoring it authorises: an integrity
+ *  timeline read without knowing whether the candidate ever agreed to being
+ *  recorded is the thing the DPA has to be able to answer. A sitting from before
+ *  consent was asked for says so plainly rather than leaving a blank — the
+ *  absence is the finding. */
+function ConsentLine({ at, version }: { at?: string | null; version?: string | null }) {
+  if (!at) {
+    return (
+      <p className="integrity-consent">
+        <span className="chip chip-warn">No consent recorded</span> This sitting predates the
+        consent record.
+      </p>
+    )
+  }
+  return (
+    <p className="integrity-consent">
+      <span className="chip chip-good">Consented</span>{' '}
+      {parseServerDate(at).toLocaleString(undefined, {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })}
+      {version ? ` · policy ${version}` : ''}
+    </p>
+  )
+}
+
 export function IntegrityPanel({ report }: { report: IntegrityReport }) {
-  const { monitored, summary, events, risk } = report
+  const { monitored, summary, events, risk, consent_at: consentAt } = report
 
   // Recorded signals always win over the monitored flag: if a sitting produced
   // events, showing them is never wrong, whereas suppressing them would hide
@@ -110,6 +141,7 @@ export function IntegrityPanel({ report }: { report: IntegrityReport }) {
           This sitting ran unmonitored, so there is nothing to report — an empty timeline here says
           nothing either way.
         </p>
+        <ConsentLine at={consentAt} version={report.consent_version} />
       </div>
     )
   }
@@ -117,6 +149,7 @@ export function IntegrityPanel({ report }: { report: IntegrityReport }) {
   return (
     <div className="integrity">
       <h3>Integrity</h3>
+      <ConsentLine at={consentAt} version={report.consent_version} />
       {risk != null && <RiskBanner risk={risk} />}
       {summary.total === 0 ? (
         <p className="empty-state">

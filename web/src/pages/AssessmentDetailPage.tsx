@@ -217,8 +217,16 @@ export function AssessmentDetailPage() {
                     {attempts.map((att) => (
                       <tr key={att.candidate_email}>
                         <td>
-                          <div className="t-title">{att.candidate_name}</div>
-                          <div className="cellsub">{att.candidate_email}</div>
+                          <div className="t-title">
+                            {att.erased ? 'Erased candidate' : att.candidate_name}
+                          </div>
+                          {att.erased ? (
+                            <div className="cellsub">
+                              <span className="chip chip-neutral">Data erased</span>
+                            </div>
+                          ) : (
+                            <div className="cellsub">{att.candidate_email}</div>
+                          )}
                         </td>
                         <td>
                           <div className="attempt-progress">

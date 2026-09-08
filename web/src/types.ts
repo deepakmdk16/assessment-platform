@@ -267,6 +267,12 @@ export interface AssessmentAttemptQuestion {
 export interface AssessmentAttempt {
   candidate_name: string
   candidate_email: string
+  /** This candidate's data has been anonymised (X03) — the name and address are
+   *  a tombstone, not a person, so the row renders as erased rather than as a
+   *  contactable candidate. One person whose sittings expired on different days
+   *  appears as several erased rows; after the first erasure there is nothing
+   *  left to recognise them by. */
+  erased: boolean
   questions: AssessmentAttemptQuestion[]
   passed_count: number
   total_count: number
@@ -452,6 +458,8 @@ export interface SubmissionRow {
   submission_id: string
   candidate_name: string
   candidate_email: string
+  /** As on AssessmentAttempt: this row's candidate has been erased. */
+  erased: boolean
   language: Language
   status: string
   verdict?: string
@@ -471,6 +479,8 @@ export interface SubmissionSummary {
   question_id: string
   candidate: string
   candidate_email?: string | null
+  /** As on AssessmentAttempt: this row's candidate has been erased. */
+  erased: boolean
   language: Language
   status: string
   agent_job_id: string | null
@@ -622,6 +632,11 @@ export interface IntegritySummary {
  *  false means the sitting ran unmonitored — an empty timeline says nothing. */
 export interface IntegrityReport {
   monitored: boolean
+  /** When the candidate agreed to be assessed and monitored, and which published
+   *  policy version they were shown (X04). Null for a sitting that predates
+   *  consent being asked for — shown as missing rather than left blank. */
+  consent_at?: string | null
+  consent_version?: string | null
   summary: IntegritySummary
   /** Null only when there's nothing to score AND the sitting was unmonitored. */
   risk?: IntegrityRisk | null

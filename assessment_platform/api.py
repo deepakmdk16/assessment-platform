@@ -370,6 +370,7 @@ def _submission_summary(
         question_id=sub.question_id,
         candidate=sub.candidate,
         candidate_email=sub.candidate_email,
+        erased=privacy.is_erased(sub.candidate_email),
         language=sub.language,
         status=sub.status,
         agent_job_id=sub.agent_job_id,
@@ -3120,6 +3121,7 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
             AssessmentAttemptOut(
                 candidate_name=attempt.candidate_name or attempt.candidate_email,
                 candidate_email=attempt.candidate_email,
+                erased=attempt.erased_at is not None,
                 questions=q_rows,
                 passed_count=passed,
                 total_count=len(slots),
@@ -4596,11 +4598,28 @@ def get_submission_integrity(
         )
         .order_by(col(IntegrityEvent.offset_ms), col(IntegrityEvent.id))
     ).all()
-    return _integrity_report(monitored=monitored, events=list(rows), org=org, session=session)
+    # The sitting's consent record travels with its circumstances (X04): this
+    # panel is where the monitoring is explained, so it is where the agreement to
+    # be monitored belongs. Absent for a sitting that predates consent, and the
+    # view says so rather than leaving a blank that reads as consent.
+    attempt = session.exec(
+        select(CandidateAttempt).where(
+            CandidateAttempt.invite_id == sub.invite_id,
+            CandidateAttempt.candidate_email == sub.candidate_email,
+        )
+    ).first()
+    return _integrity_report(
+        monitored=monitored, events=list(rows), org=org, session=session, attempt=attempt
+    )
 
 
 def _integrity_report(
-    *, monitored: bool, events: list[IntegrityEvent], org: Membership, session: Session
+    *,
+    monitored: bool,
+    events: list[IntegrityEvent],
+    org: Membership,
+    session: Session,
+    attempt: CandidateAttempt | None = None,
 ) -> IntegrityReportOut:
     """Shape stored signals into the interviewer's view: the summary counts first,
     then the timeline. The counts are derived here rather than stored so a new
@@ -4638,6 +4657,8 @@ def _integrity_report(
         )
     return IntegrityReportOut(
         monitored=monitored,
+        consent_at=attempt.consent_at if attempt is not None else None,
+        consent_version=attempt.consent_version if attempt is not None else None,
         summary=summary,
         risk=risk,
         events=[
@@ -4737,6 +4758,7 @@ def question_submissions(
                 submission_id=sub.id,
                 candidate_name=sub.candidate,
                 candidate_email=sub.candidate_email,
+                erased=privacy.is_erased(sub.candidate_email),
                 language=sub.language,
                 status=sub.status,
                 verdict=result.verdict if result else None,

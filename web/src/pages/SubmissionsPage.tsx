@@ -168,9 +168,15 @@ export function SubmissionsPage() {
                         className="t-title"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {s.candidate}
+                        {s.erased ? 'Erased candidate' : s.candidate}
                       </Link>
-                      {s.candidate_email && <div className="cellsub">{s.candidate_email}</div>}
+                      {s.erased ? (
+                        <div className="cellsub">
+                          <span className="chip chip-neutral">Data erased</span>
+                        </div>
+                      ) : (
+                        s.candidate_email && <div className="cellsub">{s.candidate_email}</div>
+                      )}
                     </td>
                     <td>
                       {s.assessment_title && s.assessment_id ? (

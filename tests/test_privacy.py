@@ -310,6 +310,63 @@ def test_an_erased_candidate_can_no_longer_use_the_old_link(client, monkeypatch)
     ).status_code == 200
 
 
+def test_every_interviewer_surface_reports_the_sitting_as_erased(client, monkeypatch) -> None:
+    """The gap an integration check found: `erased_at` was written by both
+    erasure paths and read by nothing, so the only trace on screen was a
+    candidate apparently named "[erased]" beside a synthetic address an
+    interviewer could copy into a mail client.
+
+    Every list that shows a candidate now says so explicitly.
+    """
+    _full_sitting(client, monkeypatch)
+    _erase(client)
+
+    listed = client.get("/submissions").json()["items"]
+    assert [row["erased"] for row in listed] == [True]
+    quick = client.get("/questions/q1/submissions").json()["items"]
+    assert [row["erased"] for row in quick] == [True]
+
+
+def test_a_live_sitting_is_not_reported_as_erased(client, monkeypatch) -> None:
+    _full_sitting(client, monkeypatch)
+    assert client.get("/submissions").json()["items"][0]["erased"] is False
+
+
+def test_the_consent_record_is_visible_to_the_interviewer(client, monkeypatch) -> None:
+    """The DPA claims consent is recorded, so the product has to be able to show
+    it. Carried on the integrity report, which is where the monitoring it
+    authorises is explained."""
+    _token, sub_id = _full_sitting(client, monkeypatch)
+    report = client.get(f"/submissions/{sub_id}/integrity").json()
+    assert report["consent_at"] is not None
+    assert report["consent_version"] == config.PRIVACY_POLICY_VERSION
+
+
+def test_a_sitting_with_no_consent_record_says_so(client, monkeypatch) -> None:
+    """Null is the honest answer for a sitting that predates consent being
+    asked for, and the absence is the finding — it must not arrive as a blank
+    that reads like agreement."""
+    _token, sub_id = _full_sitting(client, monkeypatch)
+    with Session(db_module.engine) as s:
+        attempt = s.exec(select(CandidateAttempt)).one()
+        attempt.consent_at = None
+        attempt.consent_version = None
+        s.add(attempt)
+        s.commit()
+    report = client.get(f"/submissions/{sub_id}/integrity").json()
+    assert report["consent_at"] is None
+
+
+def test_erasure_leaves_the_consent_record_standing(client, monkeypatch) -> None:
+    """Consent is the evidence of a lawful basis for a sitting that did happen.
+    The row is anonymous afterwards, so the timestamp identifies nobody — and
+    destroying it would destroy the proof that the processing was lawful."""
+    _token, sub_id = _full_sitting(client, monkeypatch)
+    _erase(client)
+    report = client.get(f"/submissions/{sub_id}/integrity").json()
+    assert report["consent_at"] is not None
+
+
 # --------------------------------------------------------------------------- #
 # Retention                                                                     #
 # --------------------------------------------------------------------------- #

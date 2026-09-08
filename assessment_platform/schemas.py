@@ -230,6 +230,10 @@ class AssessmentAttemptOut(BaseModel):
 
     candidate_name: str
     candidate_email: str
+    # As on SubmissionSummaryOut. Note that one person whose sittings expired on
+    # different days appears here as several erased rows: after the first
+    # erasure there is nothing left to recognise them by, which is the point.
+    erased: bool = False
     questions: list[AssessmentAttemptQuestionOut]
     passed_count: int
     total_count: int
@@ -398,6 +402,10 @@ class SubmissionSummaryOut(BaseModel):
     question_id: str
     candidate: str
     candidate_email: str | None = None
+    # This candidate's data has been anonymised (X03). The name and address on
+    # this row are the tombstone, not a person — surfaces must say "erased"
+    # rather than render `erased-…@erased.invalid` as if it were reachable.
+    erased: bool = False
     language: str
     status: str
     agent_job_id: str | None
@@ -769,6 +777,8 @@ class DashboardSubmissionOut(BaseModel):
     submission_id: str
     candidate_name: str
     candidate_email: str | None
+    # As on SubmissionSummaryOut: the name and address are a tombstone (X03).
+    erased: bool = False
     language: str
     status: str
     verdict: str | None = None
@@ -950,6 +960,13 @@ class IntegrityReportOut(BaseModel):
     — each event naming its own question."""
 
     monitored: bool  # false = this sitting ran unmonitored, so "no signals" means nothing
+    # What the candidate agreed to before this sitting began, and which published
+    # version of the policy they were shown (X04). Null for a sitting that
+    # predates consent being asked for — which is the honest answer, and the
+    # reason it is surfaced at all: the DPA claims consent is recorded, so the
+    # product has to be able to show it (or show that it is missing).
+    consent_at: datetime | None = None
+    consent_version: str | None = None
     summary: IntegritySummaryOut
     # Null only when there is nothing to score AND the sitting was unmonitored —
     # recorded events are always scored, whatever the flag says (suppressing real

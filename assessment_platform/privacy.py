@@ -28,6 +28,14 @@ literal like "[erased]" would collide on the second one.
 `candidate_email` is NOT NULL on four of these tables, which is why erasure
 writes a tombstone rather than nulling the column.
 
+**A person with several expired sittings becomes several anonymous ones**, since
+retention erases per sitting and mints per erasure. That is not a defect to be
+fixed by reusing one tombstone per address: after the first erasure the original
+address is gone, so recognising the second sitting as the same person would mean
+keeping an address-to-tombstone map — which is the identifier the erasure was
+supposed to destroy. Views that group by candidate must therefore show erased
+rows as erased rather than trying to reunite them.
+
 **Erasure retires the invitation too.** The address is personal data on the
 invite itself — held there whether or not the person ever opened the link — so
 it is removed from `recipients`, and `api._check_invited` then has nothing left
@@ -85,6 +93,19 @@ ERASED_REASON = "[erased]"
 # Suffix of every minted tombstone. `.invalid` is reserved by RFC 2606, so the
 # address can never route anywhere or collide with a real candidate's.
 TOMBSTONE_DOMAIN = "erased.invalid"
+
+
+def is_erased(email: str | None) -> bool:
+    """Whether this row's candidate has been anonymised.
+
+    Reads the tombstone domain rather than a column, because the fact is needed
+    on `Submission` and `AssessmentResult` too and only `CandidateAttempt` has
+    `erased_at`. That is sound rather than a shortcut: `.invalid` is reserved by
+    RFC 2606 and can never be a deliverable address, so there is no real
+    candidate this can mistake for an erased one, and `_erase` writes the same
+    value across every row of a sitting in one statement each.
+    """
+    return email is not None and email.endswith(f"@{TOMBSTONE_DOMAIN}")
 
 
 def _naive_utc(moment: datetime) -> datetime:

@@ -3353,3 +3353,15 @@ button.tab:hover {
 .legal-foot a {
   color: var(--color-faint);
 }
+
+/* The sitting's consent record, above the integrity timeline (X04). Sits with
+   the monitoring it authorises rather than in a panel of its own. */
+.integrity-consent {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.75rem;
+  font-size: 0.78rem;
+  color: var(--color-muted);
+}

@@ -317,9 +317,15 @@ export function QuestionDetailPage() {
                           className="t-title"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {s.candidate_name}
+                          {s.erased ? 'Erased candidate' : s.candidate_name}
                         </Link>
-                        <div className="cellsub">{s.candidate_email}</div>
+                        {s.erased ? (
+                          <div className="cellsub">
+                            <span className="chip chip-neutral">Data erased</span>
+                          </div>
+                        ) : (
+                          <div className="cellsub">{s.candidate_email}</div>
+                        )}
                       </td>
                       <td>{s.language}</td>
                       <td>

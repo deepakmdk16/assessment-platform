@@ -28,6 +28,7 @@ const sub = (overrides: Partial<SubmissionSummary>): SubmissionSummary => ({
   question_id: 'two-sum',
   candidate: 'Alice',
   candidate_email: null,
+  erased: false,
   language: 'python',
   status: 'done',
   agent_job_id: 'job1',
@@ -139,4 +140,29 @@ describe('SubmissionsPage — recovering a failed grading (UI-A)', () => {
       '/assessments/a1',
     )
   })
+
+  it('shows an erased candidate as erased, not as a contactable address', async () => {
+    // The integration gap: without this the row read as a candidate named
+    // "[erased]" beside erased-a3f9@erased.invalid — which looks like an address
+    // an interviewer could write to, and is not one.
+    vi.mocked(api.listAllSubmissions).mockResolvedValue(
+      page([
+        sub({
+          candidate: '[erased]',
+          candidate_email: 'erased-a3f9@erased.invalid',
+          erased: true,
+        }),
+      ]),
+    )
+    render(
+      <MemoryRouter>
+        <SubmissionsPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText(/erased candidate/i)).toBeInTheDocument()
+    expect(screen.getByText(/data erased/i)).toBeInTheDocument()
+    expect(screen.queryByText(/erased\.invalid/)).not.toBeInTheDocument()
+  })
+
 })
