@@ -114,6 +114,11 @@ def webhook_url_error(url: str) -> str | None:
     route turns it into a 422 the interviewer reads, and `deliver` turns it into
     a log line and a dropped send.
 
+    The messages are written for the person typing into the settings panel, not
+    for whoever wrote this module — no "webhook host", no "URL". That panel
+    renders this string verbatim, so implementation vocabulary here shows up in
+    the product.
+
     The host must resolve to publicly-routable addresses only. Loopback, private
     ranges, link-local (which is where every cloud metadata service lives) and
     the rest of the reserved space are refused, and refused for EVERY address the
@@ -128,18 +133,18 @@ def webhook_url_error(url: str) -> str | None:
         # of a background task that promises never to raise.
         port = parts.port or 443
     except ValueError:
-        return "webhook URL is not a valid URL."
+        return "That doesn't look like a valid address."
     allowed_schemes = ("https", "http") if config.ALLOW_PRIVATE_WEBHOOKS else ("https",)
     if parts.scheme not in allowed_schemes:
-        return "webhook URL must use https."
+        return "The address must start with https://."
     if not parts.hostname:
-        return "webhook URL has no host."
+        return "That address is missing a domain name."
     if config.ALLOW_PRIVATE_WEBHOOKS:
         return None
     try:
         resolved = socket.getaddrinfo(parts.hostname, port, proto=socket.IPPROTO_TCP)
     except OSError:
-        return f"webhook host {parts.hostname!r} does not resolve."
+        return f"{parts.hostname} doesn't resolve — check the address for a typo."
     for info in resolved:
         address = ipaddress.ip_address(cast(tuple[str, int], info[4])[0])
         if not address.is_global or address.is_multicast:
@@ -152,8 +157,8 @@ def webhook_url_error(url: str) -> str | None:
                 "webhook host %r rejected: resolves to non-public %s", parts.hostname, address
             )
             return (
-                f"webhook host {parts.hostname!r} is not reachable on the public "
-                "internet; it must resolve to a public address."
+                f"{parts.hostname} isn't reachable on the public internet. Use an "
+                "address that someone outside your own network could open."
             )
     return None
 

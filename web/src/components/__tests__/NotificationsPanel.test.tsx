@@ -99,13 +99,13 @@ describe('saving', () => {
   it('surfaces the server’s reason when the address is refused', async () => {
     const { ApiError } = await import('../../api')
     vi.mocked(api.setResultsWebhook).mockRejectedValue(
-      new ApiError(422, "webhook host '10.0.0.5' resolves to a non-public address"),
+      new ApiError(422, "10.0.0.5 isn't reachable on the public internet."),
     )
     await loaded()
     await userEvent.type(screen.getByLabelText('Where should we post results?'), 'https://10.0.0.5/h')
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/non-public address/)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/reachable on the public internet/)
   })
 
   it('trims the address before sending it', async () => {
