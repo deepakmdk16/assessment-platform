@@ -9,7 +9,7 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 from test_slice1 import _auth, _make_invite, _sample_question
 
-from assessment_platform import agent_client, api, config, email_client
+from assessment_platform import agent_client, api, config, email_client, email_templates
 from assessment_platform.ratelimit import client_ip
 
 
@@ -215,8 +215,15 @@ def test_duplicate_submit_race_is_refused_by_the_db(
 def test_create_invite_emails_recipients(anon_client: TestClient, monkeypatch) -> None:
     sent: dict[str, object] = {}
 
-    def _fake_send(recipients: list[str], url: str, title: str) -> list[email_client.Delivery]:
-        sent["recipients"], sent["url"], sent["title"] = recipients, url, title
+    def _fake_send(
+        recipients: list[str],
+        email: email_templates.Email,
+        url: str,
+        *,
+        reply_to: str | None = None,
+    ) -> list[email_client.Delivery]:
+        sent["recipients"], sent["url"] = recipients, url
+        sent["subject"], sent["reply_to"] = email.subject, reply_to
         return [email_client.Delivery(r, sent=True) for r in recipients]
 
     monkeypatch.setattr(email_client, "send_invite_emails", _fake_send)
@@ -225,7 +232,9 @@ def test_create_invite_emails_recipients(anon_client: TestClient, monkeypatch) -
 
     assert sent["recipients"] == ["cand@x.io"]
     assert sent["url"] == inv["url"]
-    assert sent["title"] == "Sum of N"
+    assert "Sum of N" in str(sent["subject"])
+    # X07: a candidate who replies reaches the interviewer, not the send-only From.
+    assert sent["reply_to"] == "mail@x.io"
 
 
 # --------------------------------------------------------------------------- #

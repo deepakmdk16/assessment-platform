@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 from test_slice1 import _auth, _make_invite, _sample_question
 
-from assessment_platform import api, auth, config, db, email_client
+from assessment_platform import api, auth, config, db, email_client, email_templates
 from assessment_platform.models import Interviewer, Invite, Question, QuestionTestCase
 
 PW = "correct-horse-battery-staple"
@@ -27,8 +27,10 @@ def outbox(monkeypatch) -> list[dict[str, str]]:
     """Capture account emails (verification / reset links) instead of logging them."""
     box: list[dict[str, str]] = []
 
-    def fake(to: str, subject: str, body: str, url: str) -> email_client.Delivery:
-        box.append({"to": to, "subject": subject, "url": url})
+    def fake(
+        to: str, email: email_templates.Email, url: str, **_kw: Any
+    ) -> email_client.Delivery:
+        box.append({"to": to, "subject": email.subject, "url": url})
         return email_client.Delivery(to, sent=True)
 
     monkeypatch.setattr(email_client, "send_account_email", fake)

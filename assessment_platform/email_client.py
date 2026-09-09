@@ -21,8 +21,10 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.utils import formataddr
 
 from . import config
+from .email_templates import Email
 
 logger = logging.getLogger(__name__)
 
@@ -42,24 +44,35 @@ class Delivery:
     error: str | None = None
 
 
-def _message(to: str, subject: str, body: str) -> EmailMessage:
+def _message(to: str, email: Email, reply_to: str | None = None) -> EmailMessage:
+    """One `multipart/alternative` message: plain text first, HTML second.
+
+    Order matters — a client picks the LAST part it can render, so the text body
+    has to be set first for the HTML to win where HTML is supported.
+
+    `Reply-To` is what makes a no-reply sending address survivable (X07): the
+    From must stay on the authenticated domain for SPF/DKIM to pass, but a
+    candidate hitting reply should reach the interviewer who invited them rather
+    than a mailbox nobody reads. It is also the one header a Gmail sender keeps
+    intact — Gmail rewrites From to the authenticated account, never Reply-To.
+    """
     msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = config.SMTP_FROM
-    msg["To"] = to
-    msg.set_content(body)
-    return msg
-
-
-def _build_message(to: str, url: str, question_title: str) -> EmailMessage:
-    return _message(
-        to,
-        f"Coding assessment invite: {question_title}",
-        f"You've been invited to complete a coding assessment ({question_title}).\n\n"
-        f"Open your assessment here:\n{url}\n\n"
-        "This link is personal to you — you'll be asked to confirm this email\n"
-        "address to begin, and it won't work for anyone else.",
+    msg["Subject"] = email.subject
+    # formataddr, not an f-string: a display name containing a comma or a quote
+    # ("Acme, Inc.") concatenates into what parses as TWO addresses, and
+    # send_message then hands smtplib a MAIL FROM of <Acme> — every message
+    # rejected. formataddr quotes the name so that cannot happen.
+    msg["From"] = (
+        formataddr((config.SMTP_FROM_NAME, config.SMTP_FROM))
+        if config.SMTP_FROM_NAME
+        else config.SMTP_FROM
     )
+    msg["To"] = to
+    if reply_to:
+        msg["Reply-To"] = reply_to
+    msg.set_content(email.text)
+    msg.add_alternative(email.html, subtype="html")
+    return msg
 
 
 def _mask_email(addr: str) -> str:
@@ -76,23 +89,39 @@ def _who(recipients: list[str]) -> str:
     return ", ".join(r if config.LOG_PII else _mask_email(r) for r in recipients)
 
 
-def send_invite_emails(recipients: list[str], url: str, question_title: str) -> list[Delivery]:
-    """Email the invite `url` to each recipient. Best-effort; never raises.
+def send_invite_emails(
+    recipients: list[str], email: Email, url: str, *, reply_to: str | None = None
+) -> list[Delivery]:
+    """Email the invitation to each recipient. Best-effort; never raises.
 
-    Returns one `Delivery` per recipient, in order.
+    Returns one `Delivery` per recipient, in order. `reply_to` is the inviting
+    interviewer, so a candidate who replies reaches a person.
     """
     if not recipients:
         return []
-    return _deliver(
-        recipients, url, "invite", lambda to: _build_message(to, url, question_title)
-    )
+    return _deliver(recipients, url, "invite", lambda to: _message(to, email, reply_to))
 
 
-def send_account_email(to: str, subject: str, body: str, url: str) -> Delivery:
-    """Email one account-lifecycle message (confirm address, reset password) to
-    an interviewer. Best-effort; never raises. `url` is the link in the body,
-    named separately so the unconfigured-SMTP path can log it under LOG_PII."""
-    return _deliver([to], url, "account", lambda rcpt: _message(rcpt, subject, body))[0]
+def send_account_email(
+    to: str, email: Email, url: str, *, reply_to: str | None = None
+) -> Delivery:
+    """Email one account-lifecycle message (confirm address, reset password, an
+    organisation invitation) to one person. Best-effort; never raises. `url` is
+    the link in the body, named separately so the unconfigured-SMTP path can log
+    it under LOG_PII."""
+    return _deliver([to], url, "account", lambda rcpt: _message(rcpt, email, reply_to))[0]
+
+
+def send_results_email(to: str, email: Email, url: str) -> Delivery:
+    """Tell one interviewer a candidate's sitting has been graded (X06).
+
+    Same shape and same best-effort contract as `send_account_email`; separate so
+    the log line names the right thing and so the two can grow apart (a results
+    mail is the one an organisation is most likely to want redirected first).
+    No `reply_to`: the recipient is the interviewer, so there is nobody else to
+    point a reply at. `url` is the submission link in the body.
+    """
+    return _deliver([to], url, "results", lambda rcpt: _message(rcpt, email))[0]
 
 
 def _deliver(

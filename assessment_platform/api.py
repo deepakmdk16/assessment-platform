@@ -51,7 +51,9 @@ from . import (
     config,
     db,
     email_client,
+    email_templates,
     integrity,
+    notify,
     privacy,
     signing,
     stripe_client,
@@ -585,11 +587,7 @@ def _send_verification(interviewer: Interviewer, background: BackgroundTasks) ->
     background.add_task(
         email_client.send_account_email,
         interviewer.email,
-        "Confirm your email address",
-        f"Hi {interviewer.name},\n\n"
-        "Confirm this address for your coding-assessment account by opening:\n"
-        f"{url}\n\n"
-        "The link is valid for 3 days. If you didn't create an account, ignore this email.",
+        email_templates.confirm_address(name=interviewer.name, url=url),
         url,
     )
 
@@ -850,13 +848,7 @@ def forgot_password(
         background.add_task(
             email_client.send_account_email,
             interviewer.email,
-            "Reset your password",
-            f"Hi {interviewer.name},\n\n"
-            "Someone asked to reset the password for this coding-assessment account. "
-            "If that was you, open:\n"
-            f"{url}\n\n"
-            "The link works once and expires in 1 hour. If you didn't ask for it, "
-            "ignore this email — your password is unchanged.",
+            email_templates.reset_password(name=interviewer.name, url=url),
             url,
         )
     # The same answer whether or not the address has an account, so this can't
@@ -1006,7 +998,9 @@ def _organization(org_id: int, session: Session) -> Organization:
     return organization
 
 
-def _organization_out(org: Membership, session: Session) -> OrganizationOut:
+def _organization_out(
+    org: Membership, session: Session, *, reveal_secret: str | None = None
+) -> OrganizationOut:
     organization = _organization(org.org_id, session)
     return OrganizationOut(
         id=org.org_id,
@@ -1014,6 +1008,10 @@ def _organization_out(org: Membership, session: Session) -> OrganizationOut:
         role=org.role,
         member_count=_member_count(org.org_id, session),
         retention_days=organization.retention_days,
+        results_webhook_url=organization.results_webhook_url,
+        # Only the write that minted it ever sees the secret; a plain read of the
+        # organisation must not hand a signing key back out.
+        results_webhook_secret=reveal_secret,
     )
 
 
@@ -1220,10 +1218,42 @@ def update_org(
         organization.name = body.name.strip()
     if "retention_days" in sent:
         organization.retention_days = body.retention_days
+    minted: str | None = None
+    if "results_webhook_url" in sent:
+        minted = _set_results_webhook(organization, body.results_webhook_url)
     organization.updated_at = datetime.now(timezone.utc)
     session.add(organization)
     session.commit()
-    return _organization_out(org, session)
+    return _organization_out(org, session, reveal_secret=minted)
+
+
+def _set_results_webhook(organization: Organization, url: str | None) -> str | None:
+    """Point the organisation's results webhook at `url` (None turns it off).
+
+    Returns the freshly minted signing secret when there is one to reveal — the
+    only moment it is ever readable.
+
+    Re-saving the URL **unchanged** deliberately keeps the existing secret. Now
+    that `GET /orgs/current` hands the URL back, a settings form that reads the
+    organisation and PATCHes it whole would otherwise rotate the key on every
+    unrelated save and silently break a working receiver. Rotating is therefore
+    an explicit act: clear the webhook (`null`), then set it again.
+    """
+    if url is None:
+        organization.results_webhook_url = None
+        organization.results_webhook_secret = None
+        return None
+    if url == organization.results_webhook_url and organization.results_webhook_secret:
+        return None
+    error = notify.webhook_url_error(url)
+    if error:
+        # Logged with the detail, answered without it: the resolved address is
+        # exactly what an attacker wants back, and telling a tenant admin which
+        # internal IP a name points at makes the guard a mapping oracle.
+        raise HTTPException(status_code=422, detail=error)
+    organization.results_webhook_url = url
+    organization.results_webhook_secret = notify.new_webhook_secret()
+    return organization.results_webhook_secret
 
 
 @app.get("/orgs/current/members", response_model=list[MemberOut])
@@ -1382,13 +1412,14 @@ def create_org_invite(
     # a warning that vanishes on the next page load is a warning nobody acts on.
     delivery = email_client.send_account_email(
         email,
-        f"You've been invited to {organization.name if organization else 'an organisation'}",
-        f"{current.name} invited you to join "
-        f"{organization.name if organization else 'their organisation'} "
-        "on the coding-assessment platform.\n\n"
-        f"Accept the invitation:\n{url}\n\n"
-        "The link is valid for 7 days. If you weren't expecting this, ignore it.",
+        email_templates.org_invitation(
+            inviter_name=current.name,
+            org_name=organization.name if organization else "their organisation",
+            url=url,
+        ),
         url,
+        # A colleague replying to the invitation reaches the admin who sent it.
+        reply_to=current.email,
     )
     invite.sent = delivery.sent
     invite.send_error = delivery.error
@@ -2799,6 +2830,20 @@ def _check_invite_capacity(org: Membership, session: Session, n: int) -> None:
         raise billing.quota_error(organization, "sittings", limit)
 
 
+def _invite_email(title: str, url: str, org: Membership, session: Session) -> email_templates.Email:
+    """The candidate-facing invitation, branded with the organisation's name.
+
+    Shared by all three invite routes so the one email a stranger reads cannot
+    drift between them. The name is the organisation's rather than the sending
+    domain's because a candidate recognises the company that is hiring them, not
+    the platform running the exercise.
+    """
+    organization = session.get(Organization, org.org_id)
+    return email_templates.invite(
+        url=url, title=title, org_name=organization.name if organization else None
+    )
+
+
 @app.post("/questions/{question_id}/invites", response_model=InviteOut, status_code=201)
 def create_invite(
     question_id: str,
@@ -2824,7 +2869,10 @@ def create_invite(
     # that already exists — but the per-recipient outcome rides back on the
     # response so the interviewer sees a failure instead of assuming delivery.
     deliveries = email_client.send_invite_emails(
-        invite.recipients, _invite_url(invite.token), question.title
+        invite.recipients,
+        _invite_email(question.title, _invite_url(invite.token), org, session),
+        _invite_url(invite.token),
+        reply_to=current.email,
     )
     # Persist the per-recipient outcome so it's an audit trail, not just this
     # response. Store after the send so the invite exists even if the send throws.
@@ -2880,7 +2928,10 @@ def create_assessment_invite(
     session.commit()
     session.refresh(invite)
     deliveries = email_client.send_invite_emails(
-        invite.recipients, _invite_url(invite.token), assessment.title
+        invite.recipients,
+        _invite_email(assessment.title, _invite_url(invite.token), org, session),
+        _invite_url(invite.token),
+        reply_to=current.email,
     )
     invite.deliveries = [
         {"recipient": d.recipient, "sent": d.sent, "error": d.error} for d in deliveries
@@ -2958,7 +3009,10 @@ def create_variant_set_invites(
     for invite, _label in created:
         session.refresh(invite)
         deliveries = email_client.send_invite_emails(
-            invite.recipients, _invite_url(invite.token), vs.title
+            invite.recipients,
+            _invite_email(vs.title, _invite_url(invite.token), org, session),
+            _invite_url(invite.token),
+            reply_to=current.email,
         )
         invite.deliveries = [
             {"recipient": d.recipient, "sent": d.sent, "error": d.error} for d in deliveries
@@ -4365,6 +4419,20 @@ async def _reap_tick() -> list[str]:
                     sub.attempts,
                     sub.agent_job_id,
                 )
+                # X06: giving up ends the sitting exactly as a callback would, so
+                # it notifies exactly as a callback would. Without this a sitting
+                # whose agent never came back is the one case where the
+                # interviewer is told nothing at all — the case they most need to
+                # hear about. Already inside a background loop, so `deliver` is
+                # called directly rather than queued.
+                ready = notify.claim_sitting(session, sub)
+                if ready is not None:
+                    # `deliver` is blocking (smtplib, getaddrinfo, httpx) and this
+                    # runs ON the event loop, so it goes to a worker thread — the
+                    # same reason `_retention_tick` does. Inline, one unreachable
+                    # mail host would stall every in-flight request for the whole
+                    # SMTP deadline.
+                    await asyncio.to_thread(notify.deliver, ready)
                 acted.append(sub.id)
     return acted
 
@@ -4456,6 +4524,12 @@ async def retry_submission(
             status_code=404, detail=f"no question with id {sub.question_id!r}."
         )
 
+    # X06: the sitting may already have been reported — the reaper gives up on a
+    # stranded submission and notifies ERROR. Retrying it re-opens the sitting, so
+    # the "already told them" stamp has to go with it; otherwise a retry that
+    # succeeds sends nothing, and the customer's ATS keeps the failure forever as
+    # this candidate's result.
+    notify.reopen_sitting(session, sub)
     sub = await _trigger_agent(session, question, sub)
     return _submission_out(sub, None)
 
@@ -4842,7 +4916,9 @@ def _is_error_payload(payload: dict[str, Any], verdict: str) -> bool:
     dependencies=[Depends(_require_callback_token), Depends(_require_callback_signature)],
 )
 def assessments_callback(
-    payload: dict[str, Any], session: Session = Depends(get_session)
+    payload: dict[str, Any],
+    background: BackgroundTasks,
+    session: Session = Depends(get_session),
 ) -> dict:
     """Receive the agent's result and persist it verbatim. Always returns 200.
 
@@ -4936,6 +5012,14 @@ def assessments_callback(
     logger.info(
         "callback for agent job %s matched submission %s -> %s", job_id, sub.id, sub.status
     )
+    # X06: if that was the last question of the sitting, tell the interviewer.
+    # The claim (is it complete, and did we already notify?) happens here, inside
+    # the request, because it is a compare-and-swap on the attempt row; the
+    # sending is queued, because SMTP and a customer's webhook endpoint must not
+    # be on the path of a callback the agent is waiting to have acknowledged.
+    ready = notify.claim_sitting(session, sub)
+    if ready is not None:
+        background.add_task(notify.deliver, ready)
     return {"status": "ok", "submission_id": sub.id}
 
 

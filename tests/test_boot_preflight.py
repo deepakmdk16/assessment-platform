@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from assessment_platform import api, config, email_client
+from assessment_platform import api, config, email_client, email_templates
 
 
 def _clear_smtp(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,7 +120,9 @@ def test_deadline_stops_the_recipient_loop(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(config, "SMTP_DEADLINE_S", 0.0)
     monkeypatch.setattr(email_client.smtplib, "SMTP", _CountingSMTP)
 
-    out = email_client.send_invite_emails(["a@x.io", "b@x.io", "c@x.io"], "http://u", "Q")
+    out = email_client.send_invite_emails(
+        ["a@x.io", "b@x.io", "c@x.io"], email_templates.invite(url="http://u", title="Q"), "http://u"
+    )
 
     assert [d.sent for d in out] == [False, False, False]
     assert all(d.error == email_client._DEADLINE_EXCEEDED for d in out)
@@ -132,7 +134,9 @@ def test_deadline_is_inert_on_the_happy_path(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
     monkeypatch.setattr(email_client.smtplib, "SMTP", _CountingSMTP)
 
-    out = email_client.send_invite_emails(["a@x.io", "b@x.io", "c@x.io"], "http://u", "Q")
+    out = email_client.send_invite_emails(
+        ["a@x.io", "b@x.io", "c@x.io"], email_templates.invite(url="http://u", title="Q"), "http://u"
+    )
 
     assert [d.sent for d in out] == [True, True, True]
     assert _CountingSMTP.sent == ["a@x.io", "b@x.io", "c@x.io"]

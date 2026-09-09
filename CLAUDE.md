@@ -80,6 +80,16 @@ deterministic grade.
   `agent_client`). Hosted Checkout + Stripe's portal, so no card detail reaches
   this server. The **signed webhook is the only thing that grants a plan** — a
   browser landing on `?billing=success` proves nothing.
+- `notify.py` — telling the interviewer a sitting finished (X06): the email and
+  the organisation's signed `results.ready` webhook. Split deliberately —
+  `claim_sitting` runs **inline** in the agent callback because deciding "the
+  sitting is over and nobody has been told" is a compare-and-swap on
+  `CandidateAttempt.results_notified_at` (one notification per sitting, not per
+  question, and none for a re-delivered callback); `deliver` runs in a
+  **background task** because SMTP and a customer's endpoint must never be on
+  the path of a callback the agent is waiting on. The webhook URL is
+  customer-supplied and fetched server-side, so `webhook_url_error` is an SSRF
+  gate applied twice — when the URL is saved and again when it is used.
 - `auth.py` — interviewer auth: bcrypt hashing + stateless JWT bearer.
 - `agent_client.py` — the outbound call that triggers the agent (the mock
   boundary in tests).

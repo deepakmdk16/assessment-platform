@@ -12,9 +12,12 @@ Priority: **P0** blocks taking money or endangers customers · **P1** first payi
 customers hit it · **P2** fix before scale · **P3** polish.
 Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data + API + UI.
 
-**Sequence:** (1) email (X06, X07) · (2) deploy + ops (X05, X08, P26, X11) ·
-(3) the rest by priority. Privacy (X03, X04) is built; X19 is the legal review
-it still waits on before anyone is charged.
+**Sequence:** (1) deploy + ops (X05, X08, P26, X11) · (2) the rest by priority.
+Privacy (X03, X04) is built; X19 is the legal review it still waits on before
+anyone is charged. Result delivery (X06 + X23) is done end to end — email, a
+signed per-org webhook, and the settings panel that configures it. X07's code
+half is done too; what remains of it is a domain purchase and three DNS records,
+so nothing here is waiting on it.
 
 ---
 
@@ -43,21 +46,72 @@ compose; the agent needs a privileged host.**
   (uv + alembic upgrade head && uvicorn), static web build behind nginx,
   docker-compose wiring agent (privileged) + platform + Postgres; docs/DEPLOY.md.
   _Verified: cited lines read in this audit; source: saas._
-- **X06 · P1 · S — Results never reach the interviewer proactively.**
-  Evidence: agent_client.py:260 passes email_to=None; no notification or webhook
-  code in the platform; the agent's Gmail mailer (mailer.py:29-30,103-106) is
-  CLI/direct-API only. Why: interviewers must poll the dashboard to learn a
-  candidate finished. Fix: "results ready" email from assessments_callback
-  (api.py:3129) via email_client, plus a per-org webhook.
-  _Verified: cited lines read in this audit; source: saas._
-- **X07 · P1 · S — Email deliverability is not production-grade.**
-  Evidence: invites go via smtplib STARTTLS (email_client.py:37-48) with SMTP_FROM
-  default no-reply@assessment.local (config.py:130-135); plain text, no templates,
-  no unsubscribe/consent footer; README:96-101 already warns Gmail is test-only.
-  Why: invites land in spam; candidates miss interviews; the default from-address is
-  invalid. Fix: Postmark/SES with a verified domain (SPF/DKIM/DMARC), HTML+text
-  templates, per-org reply-to.
-  _Verified: cited lines read in this audit; source: saas._
+- **X24 · P2 · S — The results webhook's SSRF gate is TOCTOU.**
+  Evidence: `notify.webhook_url_error` resolves the host and refuses private
+  addresses, then `httpx.post` resolves it again independently — a name with a
+  short TTL can answer publicly for the check and privately for the connection.
+  Why: blind (only the status code is logged) but it is the whole defense the
+  README describes. Fix: resolve once and connect to the pinned address (custom
+  httpx transport, keep the SNI/Host so TLS still validates), or send through an
+  egress proxy that enforces the policy.
+  Second defect in the same gate: `socket.getaddrinfo` runs unbounded inside the
+  synchronous PATCH /orgs/current handler, so a hostname served by a black-holed
+  nameserver pins a threadpool slot for tens of seconds. Admin-only and
+  self-inflicted per tenant, which is why it is P2 and not higher, but the
+  resolver wants a timeout (resolve in a thread with a deadline) — and the
+  pinning fix above has to touch this code anyway.
+  _Verified: raised by /code-review when X06 and X23 landed; the double-check is
+  in main._
+- **X26 · P2 · S — Erasure and the results notification have never met.**
+  Evidence: `privacy._erase` rewrites `Submission.candidate_email` to a tombstone
+  and `candidate` to `[erased]` but leaves `status` alone, so a submission still
+  grading when the erasure lands notifies normally on its callback — emailing the
+  interviewer "[erased] has completed Backend Screen" and POSTing a
+  `results.ready` for `erased-…@erased.invalid` to the customer's endpoint.
+  Separately, erasure does not clear `results_notified_at`, which is probably
+  right (clearing it would re-arm the notifier for an erased sitting) but is
+  undocumented, and `notify.reopen_sitting` is the other writer of that column.
+  Why: the notification is the one channel that PUSHES rather than stores, so a
+  tombstone reaches a third-party ATS as a junk record. Nobody decided this; it
+  is what falls out. Fix: decide it — either suppress the notification for an
+  erased sitting, or state that an anonymous result is still owed — and comment
+  the `results_notified_at` interaction either way.
+  _Verified: traced by /integration-check on the X06/X23 branch._
+- **X27 · P2 · XS — The privacy notice and DPA do not mention the results webhook.**
+  Evidence: docs/PRIVACY.md:73-81 lists who candidate data reaches — the employer,
+  the named sub-processors, and "**Nobody else.**" The webhook (X06) sends
+  candidate name and email to an address the customer nominates; docs/DPA.md:50-55
+  has no row for a controller-configured egress. Why: likely fine in law (the
+  controller receives their own data), but if they point it at a third-party ATS
+  that vendor becomes THEIR sub-processor, and the notice as written does not
+  admit the flow exists. Fix: fold into the X19 legal review — a sentence in
+  PRIVACY.md and a line in the DPA saying a controller-configured destination is
+  the controller's responsibility.
+  _Verified: traced by /integration-check on the X06/X23 branch._
+- **X25 · P3 · XS — A crash between claiming a notification and sending it loses it.**
+  Evidence: `notify.claim_sitting` stamps `results_notified_at` inside the
+  callback request; `deliver` runs after the response. A SIGTERM in between
+  consumes the one-shot claim with nothing sent, and nothing re-examines a
+  stamped-but-unsent attempt (grading has the reaper for exactly this). Why: a
+  rare silently-missed notification; the dashboard is still the record. Fix:
+  stamp `results_sent_at` separately after delivery and let a sweep retry the
+  gap, or move delivery onto a durable queue when one exists.
+  _Verified: raised by /code-review when X06 landed._
+- **X07 · P1 · XS — Email needs a real sending domain. BLOCKED on a purchase.**
+  The code half is done: HTML+text templates for all five messages
+  (`email_templates.py`), per-invitation Reply-To, `SMTP_FROM_NAME`, and the boot
+  preflight already refuses the no-reply@assessment.local placeholder. Every
+  provider speaks SMTP, so switching is five env vars and no code (profiles for
+  SES and Postmark are in .env.example).
+  What is left is not code: (1) buy the domain, (2) pick the sender — SES is
+  effectively free against the existing $120 of AWS credits at this volume, but
+  starts in the sandbox; Brevo/Resend free tiers avoid that, (3) publish SPF,
+  DKIM and DMARC for it and start DMARC at `p=none`. Until then Gmail SMTP with
+  an app password works and is what .env.example ships.
+  Why it still matters: mail from an unauthenticated domain lands in spam, and a
+  candidate who never sees the invitation silently misses the interview.
+  _Verified: templates and Reply-To landed with X07's code half; the rest is a
+  purchase and three DNS records._
 - **X08 · P1 · S — No metrics, tracing or error reporting in either service.**
   Evidence: grep Sentry|opentelemetry|prometheus|/metrics in both packages: none;
   agent /health is static; platform logging unconfigured (P19). Why: no way to see
@@ -76,10 +130,10 @@ compose; the agent needs a privileged host.**
   Evidence: no question import/bulk upload (only hand-form or AI
   draft, api.py:554); no candidate-facing feedback or score (CandidatePage.tsx:345);
   no re-invite/extend-deadline (STATUS.md:118-121); no custom domain/white-label
-  beyond logo/org text (models.py:165-166); no ATS/webhook (STATUS.md:337).
-  Why: procurement and onboarding stall on table-stakes features. Fix: prioritise
-  notifications, import, re-invite after the P0s. (Team and self-serve org
-  onboarding shipped with X01.)
+  beyond logo/org text (models.py:165-166).
+  Why: procurement and onboarding stall on table-stakes features. Fix: import and
+  re-invite are what is left here. (Team and self-serve org onboarding shipped
+  with X01; results notification and the ATS webhook shipped with X06/X23.)
   _Verified: cited lines read in this audit; source: saas._
 - **X19 · P1 · S — The privacy notice, terms and DPA are unreviewed templates.**
   Evidence: docs/PRIVACY.md, docs/TERMS.md and docs/DPA.md were written from the

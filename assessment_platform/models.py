@@ -73,6 +73,14 @@ class Organization(SQLModel, table=True):
     # than the window on a schedule. Measured from when the candidate sat, not
     # from when the invitation was sent.
     retention_days: int | None = None
+    # Where to POST a machine-readable "results ready" event when a sitting
+    # finishes (X06), and the secret its HMAC signature is computed under. Both
+    # null — the default — means the organisation takes results by email only.
+    # The secret is minted by the server when a URL is first set, never supplied
+    # by the customer, so it cannot be a password they reused; it is returned
+    # once on write and never read back, like any other credential.
+    results_webhook_url: str | None = None
+    results_webhook_secret: str | None = None
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 
@@ -466,6 +474,14 @@ class CandidateAttempt(SQLModel, table=True):
     # recorded consent, and saying so is the point of the column.
     consent_at: datetime | None = None
     consent_version: str | None = None
+    # When the interviewer was told this sitting's results were ready (X06).
+    # The stamp is the idempotency key, not a log line: a multi-question sitting
+    # produces one agent callback per question, and a re-delivered callback can
+    # arrive at any time, so `notify.claim_sitting` sets this once under the row
+    # and every later caller sees it already set and stays quiet. Null means
+    # nobody has been notified — which is the truth for every sitting that
+    # finished before this existed, and they are deliberately not backfilled.
+    results_notified_at: datetime | None = None
     # When this sitting's personal data was anonymised — by a data-subject
     # request or by the organisation's retention window (X03). Also what keeps
     # the retention job from re-erasing rows it has already done.

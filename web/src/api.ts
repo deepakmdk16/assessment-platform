@@ -258,6 +258,17 @@ export const api = {
       auth: true,
     }),
 
+  /** Point the organisation's result delivery at `url`, or `null` to stop
+   *  sending (X06/X23). The response carries `results_webhook_secret` only when
+   *  this call minted a new one — re-saving an unchanged URL deliberately
+   *  returns null there rather than rotating a key under a working receiver. */
+  setResultsWebhook: (results_webhook_url: string | null) =>
+    request<Organization>('/orgs/current', {
+      method: 'PATCH',
+      body: { results_webhook_url },
+      auth: true,
+    }),
+
   /** Answer a candidate's deletion request (X03). Admin-only, irreversible, and
    *  scoped to the caller's organisation. */
   eraseCandidate: (email: string) =>

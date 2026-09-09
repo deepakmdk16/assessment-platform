@@ -171,6 +171,12 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER") or None
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or None
 SMTP_FROM = os.getenv("SMTP_FROM", "no-reply@assessment.local")
+# Display name on the From header ("Acme Assessments <no-reply@…>"). Optional and
+# cosmetic, but it is the first thing a candidate reads in their inbox list, and
+# a bare address there is one of the cheaper reasons mail gets treated as junk.
+# The ADDRESS still has to stay on the authenticated domain — the name is free
+# text and authenticates nothing.
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME") or None
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
 
 # The .env.example placeholder. `.local` is a reserved mDNS TLD with no MX, so a
@@ -194,6 +200,17 @@ SMTP_DEADLINE_S = float(os.getenv("SMTP_DEADLINE_S", "30"))
 # only for offline local dev, where the mailer logs the link instead of sending
 # it (pair with LOG_PII=true to get the link verbatim).
 ALLOW_UNCONFIGURED_EMAIL = os.getenv("ALLOW_UNCONFIGURED_EMAIL", "").lower() in {"1", "true"}
+
+# Results webhook (X06). One short timeout, because the delivery runs in a
+# background task off the agent's callback: a customer endpoint that hangs must
+# cost us one worker slot briefly, not hold a grading callback open.
+RESULTS_WEBHOOK_TIMEOUT_S = float(os.getenv("RESULTS_WEBHOOK_TIMEOUT_S", "5"))
+# Whether a webhook may point at a plain-http or private-network address. OFF by
+# default: the URL is customer-supplied and the platform fetches it server-side,
+# which is the textbook SSRF shape — without this gate a tenant could aim the
+# POST at the cloud metadata endpoint or another tenant's internal service. On
+# only for local development, where the endpoint under test is on localhost.
+ALLOW_PRIVATE_WEBHOOKS = os.getenv("ALLOW_PRIVATE_WEBHOOKS", "").lower() in {"1", "true"}
 
 
 def missing_smtp_vars() -> list[str]:

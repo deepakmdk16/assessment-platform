@@ -55,6 +55,8 @@ const org = (over: Partial<Organization> = {}): Organization => ({
   role: 'admin',
   member_count: 2,
   retention_days: null,
+    results_webhook_url: null,
+    results_webhook_secret: null,
   ...over,
 })
 

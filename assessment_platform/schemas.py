@@ -1000,6 +1000,12 @@ class OrganizationOut(BaseModel):
     # (X03). Null is the default and is not the same as 0 — see
     # `privacy.purge_expired`.
     retention_days: int | None = None
+    # Where "results ready" events are POSTed, or null for email only (X06).
+    results_webhook_url: str | None = None
+    # The webhook's signing secret, returned ONLY by the PATCH that mints it and
+    # null on every read — the same one-time-reveal contract as any other
+    # credential. An interviewer who loses it saves the URL again to rotate.
+    results_webhook_secret: str | None = None
 
 
 # Stripped before the length check, so "   " is rejected as the blank name it is
@@ -1017,12 +1023,17 @@ RetentionDays = Annotated[int, Field(ge=1, le=3650)]
 
 
 class OrganizationUpdate(BaseModel):
-    """Both fields optional: the Privacy panel changes the retention window
+    """Every field optional: the Privacy panel changes the retention window
     without resending the name, and the route distinguishes an omitted field
     from an explicit null via `model_fields_set`."""
 
     name: OrgName | None = None
     retention_days: RetentionDays | None = None
+    # Length-capped only here; whether the URL is *reachable and public* is
+    # `notify.webhook_url_error`, which has to resolve DNS and so belongs in the
+    # route rather than in a pydantic validator. Explicit null turns the webhook
+    # off (and drops the secret with it).
+    results_webhook_url: Annotated[str, Field(max_length=2000)] | None = None
 
 
 class OrganizationCreate(BaseModel):
