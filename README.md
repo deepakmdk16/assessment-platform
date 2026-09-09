@@ -98,6 +98,22 @@ link instead of sending it (add `LOG_PII=true` to log it verbatim). Never set it
 in a deployment. Creating an invite returns a per-recipient `deliveries[]` saying
 whether each address was actually mailed, and the UI warns when a send failed.
 
+Every message goes out as `multipart/alternative` — plain text and HTML, both
+rendered from [email_templates.py](assessment_platform/email_templates.py), the
+one place any outbound copy lives. Invitations carry a `Reply-To` pointing at the
+interviewer who sent them, so a candidate who hits reply reaches a person even
+though the From is a send-only address.
+
+**Switching provider is configuration, not code.** SES, Postmark, Brevo and
+Gmail all speak SMTP, so moving between them is the five `SMTP_*` values and
+nothing else; `.env.example` carries ready-made blocks for SES and Postmark.
+Whichever you use, publish **SPF, DKIM and DMARC** for the sending domain — the
+provider generates the records, they cost nothing, and they are what decides
+whether an invitation reaches the inbox. Keep the From address on that
+authenticated domain. Gmail with an app password is fine for development, but it
+rewrites From to the authenticated account and rate-limits, so it is not what a
+real candidate should be receiving.
+
 | Var             | Default                    | Purpose                                        |
 | --------------- | -------------------------- | ---------------------------------------------- |
 | `SMTP_HOST`     | *(required)*               | SMTP server hostname.                          |
@@ -109,6 +125,7 @@ whether each address was actually mailed, and the UI warns when a send failed.
 | `SMTP_TIMEOUT_S` | `10`                      | Per socket operation (connect, TLS, login, send). |
 | `SMTP_DEADLINE_S` | `30`                     | Ceiling on one whole multi-recipient send.     |
 | `ALLOW_UNCONFIGURED_EMAIL` | `false`         | Offline dev only: boot without SMTP and log links instead. |
+| `SMTP_FROM_NAME` | *(unset)*               | Display name on From (`Acme Assessments <no-reply@…>`). |
 | `RESULTS_WEBHOOK_TIMEOUT_S` | `5`            | Ceiling on one results-webhook POST.           |
 | `ALLOW_PRIVATE_WEBHOOKS` | `false`           | Local dev only: allow http / private-address webhook URLs (lifts the SSRF gate). |
 

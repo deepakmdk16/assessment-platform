@@ -171,6 +171,12 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER") or None
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or None
 SMTP_FROM = os.getenv("SMTP_FROM", "no-reply@assessment.local")
+# Display name on the From header ("Acme Assessments <no-reply@…>"). Optional and
+# cosmetic, but it is the first thing a candidate reads in their inbox list, and
+# a bare address there is one of the cheaper reasons mail gets treated as junk.
+# The ADDRESS still has to stay on the authenticated domain — the name is free
+# text and authenticates nothing.
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME") or None
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
 
 # The .env.example placeholder. `.local` is a reserved mDNS TLD with no MX, so a

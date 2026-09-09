@@ -5,14 +5,16 @@ from __future__ import annotations
 
 import logging
 
-from assessment_platform import config, email_client
+from assessment_platform import config, email_client, email_templates
 
 
 def test_unconfigured_smtp_does_not_log_email_or_link(caplog) -> None:
     # Under test SMTP is forced off, so this hits the "not configured" path.
     with caplog.at_level(logging.INFO, logger="assessment_platform.email_client"):
         out = email_client.send_invite_emails(
-            ["jane@example.com"], "http://host/t/SECRET-TOKEN", "Two Sum"
+            ["jane@example.com"],
+            email_templates.invite(url="http://host/t/SECRET-TOKEN", title="Two Sum"),
+            "http://host/t/SECRET-TOKEN",
         )
     assert all(d.sent is False for d in out)
     text = caplog.text
@@ -26,7 +28,9 @@ def test_smtp_failure_masks_recipients(caplog, monkeypatch) -> None:
     monkeypatch.setattr(config, "SMTP_HOST", "127.0.0.1")
     monkeypatch.setattr(config, "SMTP_PORT", 1)
     with caplog.at_level(logging.INFO, logger="assessment_platform.email_client"):
-        out = email_client.send_invite_emails(["mark@corp.io"], "http://host/t/T", "Q")
+        out = email_client.send_invite_emails(
+            ["mark@corp.io"], email_templates.invite(url="http://host/t/T", title="Q"), "http://host/t/T"
+        )
     assert all(d.sent is False for d in out)
     assert "mark@corp.io" not in caplog.text
     assert "m***@c***" in caplog.text
@@ -35,6 +39,10 @@ def test_smtp_failure_masks_recipients(caplog, monkeypatch) -> None:
 def test_log_pii_opt_in_logs_verbatim(caplog, monkeypatch) -> None:
     monkeypatch.setattr(config, "LOG_PII", True)
     with caplog.at_level(logging.INFO, logger="assessment_platform.email_client"):
-        email_client.send_invite_emails(["jane@example.com"], "http://host/t/SECRET-TOKEN", "Q")
+        email_client.send_invite_emails(
+            ["jane@example.com"],
+            email_templates.invite(url="http://host/t/SECRET-TOKEN", title="Q"),
+            "http://host/t/SECRET-TOKEN",
+        )
     assert "jane@example.com" in caplog.text
     assert "SECRET-TOKEN" in caplog.text

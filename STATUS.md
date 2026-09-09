@@ -12,11 +12,12 @@ Priority: **P0** blocks taking money or endangers customers · **P1** first payi
 customers hit it · **P2** fix before scale · **P3** polish.
 Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data + API + UI.
 
-**Sequence:** (1) email (X07, then X23's UI) · (2) deploy + ops (X05, X08, P26,
-X11) · (3) the rest by priority. Privacy (X03, X04) is built; X19 is the legal
-review it still waits on before anyone is charged. X06 is built server-side —
-results now email the interviewer and POST a signed webhook — and X23 is the
-interface it still needs.
+**Sequence:** (1) X23's UI · (2) deploy + ops (X05, X08, P26, X11) · (3) the rest
+by priority. Privacy (X03, X04) is built; X19 is the legal review it still waits
+on before anyone is charged. X06 is built server-side — results now email the
+interviewer and POST a signed webhook — and X23 is the interface it still needs.
+X07's code half is done; what remains of it is a domain purchase and three DNS
+records, so it is unblocked by nothing here.
 
 ---
 
@@ -72,14 +73,21 @@ compose; the agent needs a privileged host.**
   stamp `results_sent_at` separately after delivery and let a sweep retry the
   gap, or move delivery onto a durable queue when one exists.
   _Verified: raised by /code-review when X06 landed._
-- **X07 · P1 · S — Email deliverability is not production-grade.**
-  Evidence: invites go via smtplib STARTTLS (email_client.py:37-48) with SMTP_FROM
-  default no-reply@assessment.local (config.py:130-135); plain text, no templates,
-  no unsubscribe/consent footer; README:96-101 already warns Gmail is test-only.
-  Why: invites land in spam; candidates miss interviews; the default from-address is
-  invalid. Fix: Postmark/SES with a verified domain (SPF/DKIM/DMARC), HTML+text
-  templates, per-org reply-to.
-  _Verified: cited lines read in this audit; source: saas._
+- **X07 · P1 · XS — Email needs a real sending domain. BLOCKED on a purchase.**
+  The code half is done: HTML+text templates for all five messages
+  (`email_templates.py`), per-invitation Reply-To, `SMTP_FROM_NAME`, and the boot
+  preflight already refuses the no-reply@assessment.local placeholder. Every
+  provider speaks SMTP, so switching is five env vars and no code (profiles for
+  SES and Postmark are in .env.example).
+  What is left is not code: (1) buy the domain, (2) pick the sender — SES is
+  effectively free against the existing $120 of AWS credits at this volume, but
+  starts in the sandbox; Brevo/Resend free tiers avoid that, (3) publish SPF,
+  DKIM and DMARC for it and start DMARC at `p=none`. Until then Gmail SMTP with
+  an app password works and is what .env.example ships.
+  Why it still matters: mail from an unauthenticated domain lands in spam, and a
+  candidate who never sees the invitation silently misses the interview.
+  _Verified: templates and Reply-To landed with X07's code half; the rest is a
+  purchase and three DNS records._
 - **X08 · P1 · S — No metrics, tracing or error reporting in either service.**
   Evidence: grep Sentry|opentelemetry|prometheus|/metrics in both packages: none;
   agent /health is static; platform logging unconfigured (P19). Why: no way to see

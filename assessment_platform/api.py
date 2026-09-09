@@ -51,6 +51,7 @@ from . import (
     config,
     db,
     email_client,
+    email_templates,
     integrity,
     notify,
     privacy,
@@ -586,11 +587,7 @@ def _send_verification(interviewer: Interviewer, background: BackgroundTasks) ->
     background.add_task(
         email_client.send_account_email,
         interviewer.email,
-        "Confirm your email address",
-        f"Hi {interviewer.name},\n\n"
-        "Confirm this address for your coding-assessment account by opening:\n"
-        f"{url}\n\n"
-        "The link is valid for 3 days. If you didn't create an account, ignore this email.",
+        email_templates.confirm_address(name=interviewer.name, url=url),
         url,
     )
 
@@ -851,13 +848,7 @@ def forgot_password(
         background.add_task(
             email_client.send_account_email,
             interviewer.email,
-            "Reset your password",
-            f"Hi {interviewer.name},\n\n"
-            "Someone asked to reset the password for this coding-assessment account. "
-            "If that was you, open:\n"
-            f"{url}\n\n"
-            "The link works once and expires in 1 hour. If you didn't ask for it, "
-            "ignore this email — your password is unchanged.",
+            email_templates.reset_password(name=interviewer.name, url=url),
             url,
         )
     # The same answer whether or not the address has an account, so this can't
@@ -1418,13 +1409,14 @@ def create_org_invite(
     # a warning that vanishes on the next page load is a warning nobody acts on.
     delivery = email_client.send_account_email(
         email,
-        f"You've been invited to {organization.name if organization else 'an organisation'}",
-        f"{current.name} invited you to join "
-        f"{organization.name if organization else 'their organisation'} "
-        "on the coding-assessment platform.\n\n"
-        f"Accept the invitation:\n{url}\n\n"
-        "The link is valid for 7 days. If you weren't expecting this, ignore it.",
+        email_templates.org_invitation(
+            inviter_name=current.name,
+            org_name=organization.name if organization else "their organisation",
+            url=url,
+        ),
         url,
+        # A colleague replying to the invitation reaches the admin who sent it.
+        reply_to=current.email,
     )
     invite.sent = delivery.sent
     invite.send_error = delivery.error
@@ -2835,6 +2827,20 @@ def _check_invite_capacity(org: Membership, session: Session, n: int) -> None:
         raise billing.quota_error(organization, "sittings", limit)
 
 
+def _invite_email(title: str, url: str, org: Membership, session: Session) -> email_templates.Email:
+    """The candidate-facing invitation, branded with the organisation's name.
+
+    Shared by all three invite routes so the one email a stranger reads cannot
+    drift between them. The name is the organisation's rather than the sending
+    domain's because a candidate recognises the company that is hiring them, not
+    the platform running the exercise.
+    """
+    organization = session.get(Organization, org.org_id)
+    return email_templates.invite(
+        url=url, title=title, org_name=organization.name if organization else None
+    )
+
+
 @app.post("/questions/{question_id}/invites", response_model=InviteOut, status_code=201)
 def create_invite(
     question_id: str,
@@ -2860,7 +2866,10 @@ def create_invite(
     # that already exists — but the per-recipient outcome rides back on the
     # response so the interviewer sees a failure instead of assuming delivery.
     deliveries = email_client.send_invite_emails(
-        invite.recipients, _invite_url(invite.token), question.title
+        invite.recipients,
+        _invite_email(question.title, _invite_url(invite.token), org, session),
+        _invite_url(invite.token),
+        reply_to=current.email,
     )
     # Persist the per-recipient outcome so it's an audit trail, not just this
     # response. Store after the send so the invite exists even if the send throws.
@@ -2916,7 +2925,10 @@ def create_assessment_invite(
     session.commit()
     session.refresh(invite)
     deliveries = email_client.send_invite_emails(
-        invite.recipients, _invite_url(invite.token), assessment.title
+        invite.recipients,
+        _invite_email(assessment.title, _invite_url(invite.token), org, session),
+        _invite_url(invite.token),
+        reply_to=current.email,
     )
     invite.deliveries = [
         {"recipient": d.recipient, "sent": d.sent, "error": d.error} for d in deliveries
@@ -2994,7 +3006,10 @@ def create_variant_set_invites(
     for invite, _label in created:
         session.refresh(invite)
         deliveries = email_client.send_invite_emails(
-            invite.recipients, _invite_url(invite.token), vs.title
+            invite.recipients,
+            _invite_email(vs.title, _invite_url(invite.token), org, session),
+            _invite_url(invite.token),
+            reply_to=current.email,
         )
         invite.deliveries = [
             {"recipient": d.recipient, "sent": d.sent, "error": d.error} for d in deliveries

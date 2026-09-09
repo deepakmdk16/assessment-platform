@@ -16,7 +16,15 @@ from conftest import async_return, register_interviewer
 from fastapi.testclient import TestClient
 from test_api import _age_submission
 
-from assessment_platform import agent_client, api, config, email_client, notify, signing
+from assessment_platform import (
+    agent_client,
+    api,
+    config,
+    email_client,
+    email_templates,
+    notify,
+    signing,
+)
 
 
 def _question(qid: str) -> dict[str, Any]:
@@ -52,8 +60,8 @@ def mails(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
     """Capture every results email instead of sending one."""
     sent: list[dict[str, str]] = []
 
-    def fake(to: str, subject: str, body: str, url: str) -> email_client.Delivery:
-        sent.append({"to": to, "subject": subject, "body": body, "url": url})
+    def fake(to: str, email: email_templates.Email, url: str) -> email_client.Delivery:
+        sent.append({"to": to, "subject": email.subject, "body": email.text, "html": email.html, "url": url})
         return email_client.Delivery(to, sent=True)
 
     monkeypatch.setattr(email_client, "send_results_email", fake)

@@ -51,7 +51,7 @@ import httpx
 from sqlalchemy import CursorResult, update
 from sqlmodel import Session, col, select
 
-from . import config, email_client, signing
+from . import config, email_client, email_templates, signing
 from .models import (
     AssessmentQuestion,
     AssessmentResult,
@@ -322,27 +322,16 @@ def _send_email(payload: ResultsReady) -> None:
     try:
         email_client.send_results_email(
             payload.recipient,
-            f"Assessment complete: {payload.candidate} — {payload.title}",
-            _email_body(payload),
+            email_templates.results_ready(
+                candidate=payload.candidate,
+                title=payload.title,
+                results_url=payload.results_url,
+                questions=[(q.title, q.verdict, q.score_pct) for q in payload.questions],
+            ),
             payload.results_url,
         )
     except Exception:  # a mailer bug must not take the webhook down with it
         logger.exception("results email failed for invite %s", payload.invite_id)
-
-
-def _email_body(payload: ResultsReady) -> str:
-    lines = [
-        f"{payload.candidate} has completed {payload.title}.",
-        "",
-    ]
-    for question in payload.questions:
-        lines.append(f"  {question.verdict:<5} {question.score_pct:5.1f}%  {question.title}")
-    lines += [
-        "",
-        "Full result, code and per-test-case detail:",
-        payload.results_url,
-    ]
-    return "\n".join(lines)
 
 
 def _send_webhook(payload: ResultsReady) -> None:

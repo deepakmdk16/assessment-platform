@@ -20,7 +20,7 @@ from conftest import async_return, register_interviewer  # pytest adds tests/ to
 from fastapi.testclient import TestClient
 from test_slice1 import _auth, _make_invite, _sample_question
 
-from assessment_platform import agent_client, config, email_client
+from assessment_platform import agent_client, config, email_client, email_templates
 
 
 def _start(client: TestClient, token: str, email: str) -> Any:
@@ -229,7 +229,9 @@ def test_one_bad_recipient_does_not_block_the_others(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
 
     out = email_client.send_invite_emails(
-        ["good@x.io", "bad@x.io", "also-good@x.io"], "http://x/t/abc", "Sum of N"
+        ["good@x.io", "bad@x.io", "also-good@x.io"],
+        email_templates.invite(url="http://x/t/abc", title="Sum of N"),
+        "http://x/t/abc",
     )
     assert [(d.recipient, d.sent) for d in out] == [
         ("good@x.io", True),
