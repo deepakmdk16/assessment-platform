@@ -719,6 +719,12 @@ export interface Organization {
    *  policy is configured and nothing is erased on a schedule. Not the same as
    *  0, which the API refuses (X03). */
   retention_days: number | null
+  /** Where finished results are POSTed, or `null` for email only (X06/X23). */
+  results_webhook_url: string | null
+  /** Returned ONLY by the PATCH that mints it, `null` on every read — the
+   *  one-time reveal contract for a credential. The UI shows it once and then
+   *  has no way to get it back, which is why the copy says so. */
+  results_webhook_secret: string | null
 }
 
 /** What a candidate erasure destroyed (X03). Counts rather than a bare success,

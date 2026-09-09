@@ -1247,6 +1247,9 @@ def _set_results_webhook(organization: Organization, url: str | None) -> str | N
         return None
     error = notify.webhook_url_error(url)
     if error:
+        # Logged with the detail, answered without it: the resolved address is
+        # exactly what an attacker wants back, and telling a tenant admin which
+        # internal IP a name points at makes the guard a mapping oracle.
         raise HTTPException(status_code=422, detail=error)
     organization.results_webhook_url = url
     organization.results_webhook_secret = notify.new_webhook_secret()
@@ -4424,7 +4427,12 @@ async def _reap_tick() -> list[str]:
                 # called directly rather than queued.
                 ready = notify.claim_sitting(session, sub)
                 if ready is not None:
-                    notify.deliver(ready)
+                    # `deliver` is blocking (smtplib, getaddrinfo, httpx) and this
+                    # runs ON the event loop, so it goes to a worker thread — the
+                    # same reason `_retention_tick` does. Inline, one unreachable
+                    # mail host would stall every in-flight request for the whole
+                    # SMTP deadline.
+                    await asyncio.to_thread(notify.deliver, ready)
                 acted.append(sub.id)
     return acted
 
@@ -4516,6 +4524,12 @@ async def retry_submission(
             status_code=404, detail=f"no question with id {sub.question_id!r}."
         )
 
+    # X06: the sitting may already have been reported — the reaper gives up on a
+    # stranded submission and notifies ERROR. Retrying it re-opens the sitting, so
+    # the "already told them" stamp has to go with it; otherwise a retry that
+    # succeeds sends nothing, and the customer's ATS keeps the failure forever as
+    # this candidate's result.
+    notify.reopen_sitting(session, sub)
     sub = await _trigger_agent(session, question, sub)
     return _submission_out(sub, None)
 

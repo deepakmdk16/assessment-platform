@@ -143,9 +143,17 @@ def webhook_url_error(url: str) -> str | None:
     for info in resolved:
         address = ipaddress.ip_address(cast(tuple[str, int], info[4])[0])
         if not address.is_global or address.is_multicast:
+            # The resolved address is deliberately NOT in the returned message.
+            # That message is handed to a tenant admin as a 422, and "your name
+            # points at 10.4.12.9" turns this guard into an internal-network
+            # mapping oracle — the caller learns exactly what the guard exists to
+            # keep them from reaching. It goes to the log, where operators are.
+            logger.warning(
+                "webhook host %r rejected: resolves to non-public %s", parts.hostname, address
+            )
             return (
-                f"webhook host {parts.hostname!r} resolves to a non-public address "
-                f"({address}); it must be reachable on the public internet."
+                f"webhook host {parts.hostname!r} is not reachable on the public "
+                "internet; it must resolve to a public address."
             )
     return None
 
@@ -198,6 +206,32 @@ def claim_sitting(session: Session, sub: Submission) -> ResultsReady | None:
         return None
 
     return _payload(session, invite, sub, graded)
+
+
+def reopen_sitting(session: Session, sub: Submission) -> None:
+    """Clear the notified stamp for `sub`'s sitting, so a re-graded submission
+    can be reported again.
+
+    Called when an interviewer retries a submission the reaper had given up on.
+    That give-up already sent an ERROR result — to the interviewer and to the
+    organisation's endpoint — so without this the retry is invisible: it grades
+    fine, and the last thing anyone was told about the candidate stays "ERROR".
+    Clearing the stamp lets the incoming callback claim the sitting a second
+    time. Notifying twice is the right failure mode here; notifying once, with
+    the wrong answer, is not.
+    """
+    if sub.invite_id is None or not sub.candidate_email:
+        return
+    session.execute(
+        update(CandidateAttempt)
+        .where(
+            col(CandidateAttempt.invite_id) == sub.invite_id,
+            col(CandidateAttempt.candidate_email) == sub.candidate_email,
+        )
+        .values(results_notified_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    session.commit()
 
 
 def _slot_count(session: Session, invite: Invite) -> int:

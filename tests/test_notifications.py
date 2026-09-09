@@ -206,6 +206,25 @@ def test_a_sitting_the_reaper_gives_up_on_still_notifies(client, echo_agent, mai
     assert "ERROR" in mails[0]["body"]
 
 
+def test_retrying_a_given_up_sitting_notifies_again(client, echo_agent, mails, monkeypatch) -> None:
+    """The reaper already told the interviewer ERROR. A retry that grades must
+    be reported too — otherwise the last word on this candidate stays the
+    failure, everywhere it was sent."""
+    monkeypatch.setattr(config, "MAX_TRIGGER_ATTEMPTS", 1)
+    token = _quick_screen(client)
+    sub_id = _sit(client, token, "cand@x.io")
+
+    _age_submission(sub_id, config.REAP_RUNNING_AFTER_S + 60)
+    asyncio.run(api._reap_tick())
+    assert len(mails) == 1 and "ERROR" in mails[0]["body"]
+
+    assert client.post(f"/submissions/{sub_id}/retry").status_code == 200
+    client.post("/assessments/callback", json=_callback(sub_id, "PASS", 100.0))
+
+    assert len(mails) == 2
+    assert "PASS" in mails[1]["body"]
+
+
 # --------------------------------------------------------------------------- #
 # The per-organisation webhook                                                  #
 # --------------------------------------------------------------------------- #
@@ -325,6 +344,28 @@ def test_a_failing_webhook_costs_neither_the_grade_nor_the_email(
 def test_webhook_url_must_be_public_https(client, url) -> None:
     resp = client.patch("/orgs/current", json={"results_webhook_url": url})
     assert resp.status_code == 422, resp.text
+
+
+def test_the_refusal_does_not_name_the_address_it_resolved_to(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 422 goes to a tenant admin. Echoing back an IP they typed themselves
+    tells them nothing — but resolving THEIR hostname and reporting which
+    internal address it points at turns the guard into a network-mapping oracle,
+    which is the case here."""
+
+    def resolves_private(host: str, port: int, **_kw: Any) -> list[Any]:
+        return [(0, 0, 0, "", ("10.4.12.9", port))]
+
+    monkeypatch.setattr(notify.socket, "getaddrinfo", resolves_private)
+    resp = client.patch(
+        "/orgs/current", json={"results_webhook_url": "https://internal.acme.example/x"}
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "10.4.12.9" not in detail
+    # Still says enough to be actionable.
+    assert "public" in detail
 
 
 def test_webhook_secret_is_revealed_once_and_never_read_back(client, allow_local_webhooks) -> None:

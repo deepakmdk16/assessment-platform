@@ -21,6 +21,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.utils import formataddr
 
 from . import config
 from .email_templates import Email
@@ -57,8 +58,12 @@ def _message(to: str, email: Email, reply_to: str | None = None) -> EmailMessage
     """
     msg = EmailMessage()
     msg["Subject"] = email.subject
+    # formataddr, not an f-string: a display name containing a comma or a quote
+    # ("Acme, Inc.") concatenates into what parses as TWO addresses, and
+    # send_message then hands smtplib a MAIL FROM of <Acme> — every message
+    # rejected. formataddr quotes the name so that cannot happen.
     msg["From"] = (
-        f"{config.SMTP_FROM_NAME} <{config.SMTP_FROM}>"
+        formataddr((config.SMTP_FROM_NAME, config.SMTP_FROM))
         if config.SMTP_FROM_NAME
         else config.SMTP_FROM
     )

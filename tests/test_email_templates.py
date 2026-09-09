@@ -125,6 +125,22 @@ def test_from_name_is_used_when_configured(monkeypatch: pytest.MonkeyPatch) -> N
     assert _rendered(email)["From"] == "Acme Assessments <no-reply@acme.io>"
 
 
+def test_a_comma_in_the_from_name_does_not_split_it_into_two_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concatenated, 'Acme, Inc.' parses as TWO addresses and smtplib then sends
+    MAIL FROM:<Acme> — every message rejected. formataddr quotes it."""
+    monkeypatch.setattr(config, "SMTP_FROM", "no-reply@acme.io")
+    monkeypatch.setattr(config, "SMTP_FROM_NAME", "Acme, Inc.")
+    msg = _rendered(email_templates.confirm_address(name="Jane", url="https://x/v/1"))
+
+    assert msg["From"] == '"Acme, Inc." <no-reply@acme.io>'
+    # The header must resolve to exactly one address, and the right one.
+    from email.utils import getaddresses
+
+    assert [a for _n, a in getaddresses([msg["From"]])] == ["no-reply@acme.io"]
+
+
 def test_results_email_lists_every_question_in_both_parts() -> None:
     email = email_templates.results_ready(
         candidate="Jane",

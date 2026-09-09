@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { api, ApiError, setToken } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { BillingPanel } from '../components/BillingPanel'
+import { NotificationsPanel } from '../components/NotificationsPanel'
 import { PrivacyPanel } from '../components/PrivacyPanel'
 
 export function SettingsPage() {
@@ -175,6 +176,8 @@ export function SettingsPage() {
 
       <h2 className="section-title">Billing</h2>
       <BillingPanel />
+
+      <NotificationsPanel />
 
       <PrivacyPanel />
 

@@ -12,12 +12,12 @@ Priority: **P0** blocks taking money or endangers customers · **P1** first payi
 customers hit it · **P2** fix before scale · **P3** polish.
 Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data + API + UI.
 
-**Sequence:** (1) X23's UI · (2) deploy + ops (X05, X08, P26, X11) · (3) the rest
-by priority. Privacy (X03, X04) is built; X19 is the legal review it still waits
-on before anyone is charged. X06 is built server-side — results now email the
-interviewer and POST a signed webhook — and X23 is the interface it still needs.
-X07's code half is done; what remains of it is a domain purchase and three DNS
-records, so it is unblocked by nothing here.
+**Sequence:** (1) deploy + ops (X05, X08, P26, X11) · (2) the rest by priority.
+Privacy (X03, X04) is built; X19 is the legal review it still waits on before
+anyone is charged. Result delivery (X06 + X23) is done end to end — email, a
+signed per-org webhook, and the settings panel that configures it. X07's code
+half is done too; what remains of it is a domain purchase and three DNS records,
+so nothing here is waiting on it.
 
 ---
 
@@ -46,15 +46,6 @@ compose; the agent needs a privileged host.**
   (uv + alembic upgrade head && uvicorn), static web build behind nginx,
   docker-compose wiring agent (privileged) + platform + Postgres; docs/DEPLOY.md.
   _Verified: cited lines read in this audit; source: saas._
-- **X23 · P1 · S — The results webhook has no UI; it is API-only.**
-  Evidence: `PATCH /orgs/current` accepts `results_webhook_url` and returns the
-  minted `results_webhook_secret` once (X06), but nothing in `web/` renders
-  either — no field on the organisation settings page, and `types.ts`/`api.ts`
-  still mirror the pre-X06 schema. Why: a customer cannot turn on the feature
-  without curl, and the one-time secret has nowhere to be copied from. Fix: a
-  Webhook panel beside Privacy — URL field, save-rotates-secret, reveal-once
-  copy box. **Mockup first** (CLAUDE.md), then `.tsx`.
-  _Verified: written when X06 landed; the backend half is on main._
 - **X24 · P2 · S — The results webhook's SSRF gate is TOCTOU.**
   Evidence: `notify.webhook_url_error` resolves the host and refuses private
   addresses, then `httpx.post` resolves it again independently — a name with a
@@ -63,7 +54,14 @@ compose; the agent needs a privileged host.**
   README describes. Fix: resolve once and connect to the pinned address (custom
   httpx transport, keep the SNI/Host so TLS still validates), or send through an
   egress proxy that enforces the policy.
-  _Verified: raised by /code-review when X06 landed; the double-check is in main._
+  Second defect in the same gate: `socket.getaddrinfo` runs unbounded inside the
+  synchronous PATCH /orgs/current handler, so a hostname served by a black-holed
+  nameserver pins a threadpool slot for tens of seconds. Admin-only and
+  self-inflicted per tenant, which is why it is P2 and not higher, but the
+  resolver wants a timeout (resolve in a thread with a deadline) — and the
+  pinning fix above has to touch this code anyway.
+  _Verified: raised by /code-review when X06 and X23 landed; the double-check is
+  in main._
 - **X25 · P3 · XS — A crash between claiming a notification and sending it loses it.**
   Evidence: `notify.claim_sitting` stamps `results_notified_at` inside the
   callback request; `deliver` runs after the response. A SIGTERM in between
@@ -106,10 +104,10 @@ compose; the agent needs a privileged host.**
   Evidence: no question import/bulk upload (only hand-form or AI
   draft, api.py:554); no candidate-facing feedback or score (CandidatePage.tsx:345);
   no re-invite/extend-deadline (STATUS.md:118-121); no custom domain/white-label
-  beyond logo/org text (models.py:165-166); no ATS/webhook (STATUS.md:337).
-  Why: procurement and onboarding stall on table-stakes features. Fix: prioritise
-  notifications, import, re-invite after the P0s. (Team and self-serve org
-  onboarding shipped with X01.)
+  beyond logo/org text (models.py:165-166).
+  Why: procurement and onboarding stall on table-stakes features. Fix: import and
+  re-invite are what is left here. (Team and self-serve org onboarding shipped
+  with X01; results notification and the ATS webhook shipped with X06/X23.)
   _Verified: cited lines read in this audit; source: saas._
 - **X19 · P1 · S — The privacy notice, terms and DPA are unreviewed templates.**
   Evidence: docs/PRIVACY.md, docs/TERMS.md and docs/DPA.md were written from the
