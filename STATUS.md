@@ -62,6 +62,32 @@ compose; the agent needs a privileged host.**
   pinning fix above has to touch this code anyway.
   _Verified: raised by /code-review when X06 and X23 landed; the double-check is
   in main._
+- **X26 · P2 · S — Erasure and the results notification have never met.**
+  Evidence: `privacy._erase` rewrites `Submission.candidate_email` to a tombstone
+  and `candidate` to `[erased]` but leaves `status` alone, so a submission still
+  grading when the erasure lands notifies normally on its callback — emailing the
+  interviewer "[erased] has completed Backend Screen" and POSTing a
+  `results.ready` for `erased-…@erased.invalid` to the customer's endpoint.
+  Separately, erasure does not clear `results_notified_at`, which is probably
+  right (clearing it would re-arm the notifier for an erased sitting) but is
+  undocumented, and `notify.reopen_sitting` is the other writer of that column.
+  Why: the notification is the one channel that PUSHES rather than stores, so a
+  tombstone reaches a third-party ATS as a junk record. Nobody decided this; it
+  is what falls out. Fix: decide it — either suppress the notification for an
+  erased sitting, or state that an anonymous result is still owed — and comment
+  the `results_notified_at` interaction either way.
+  _Verified: traced by /integration-check on the X06/X23 branch._
+- **X27 · P2 · XS — The privacy notice and DPA do not mention the results webhook.**
+  Evidence: docs/PRIVACY.md:73-81 lists who candidate data reaches — the employer,
+  the named sub-processors, and "**Nobody else.**" The webhook (X06) sends
+  candidate name and email to an address the customer nominates; docs/DPA.md:50-55
+  has no row for a controller-configured egress. Why: likely fine in law (the
+  controller receives their own data), but if they point it at a third-party ATS
+  that vendor becomes THEIR sub-processor, and the notice as written does not
+  admit the flow exists. Fix: fold into the X19 legal review — a sentence in
+  PRIVACY.md and a line in the DPA saying a controller-configured destination is
+  the controller's responsibility.
+  _Verified: traced by /integration-check on the X06/X23 branch._
 - **X25 · P3 · XS — A crash between claiming a notification and sending it loses it.**
   Evidence: `notify.claim_sitting` stamps `results_notified_at` inside the
   callback request; `deliver` runs after the response. A SIGTERM in between

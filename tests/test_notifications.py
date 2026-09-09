@@ -376,6 +376,42 @@ def test_webhook_secret_is_revealed_once_and_never_read_back(client, allow_local
     assert shown["results_webhook_secret"] is None
 
 
+def test_no_other_organisation_route_can_return_the_secret(anon_client) -> None:
+    """`OrganizationOut` declares the secret, so EVERY route using that response
+    model is a place it could escape — not just the read this file already
+    covers. The value comes from a parameter rather than the column, which is
+    what makes them safe; these assertions are what keeps that true when someone
+    adds a fifth caller."""
+    from test_organizations import auth, invite_colleague
+
+    admin = register_interviewer(anon_client, "founder@acme.io", name="Founder")
+    member = register_interviewer(anon_client, "sam@acme.io", name="Sam")
+
+    # POST /org-invites/{token}/accept — joining one.
+    join = invite_colleague(anon_client, admin, "sam@acme.io")
+    accepted = anon_client.post(f"/org-invites/{join}/accept", headers=auth(member))
+    assert accepted.status_code == 200
+    assert accepted.json()["results_webhook_secret"] is None
+
+    # POST /orgs — founding one. Only reachable for an account that belongs to no
+    # organisation, so the admin removes them from this one first.
+    roster = anon_client.get("/orgs/current/members", headers=auth(admin)).json()
+    member_id = next(m["interviewer_id"] for m in roster if m["role"] == "member")
+    assert anon_client.delete(
+        f"/orgs/current/members/{member_id}", headers=auth(admin)
+    ).status_code == 204
+
+    founded = anon_client.post("/orgs", json={"name": "Sam Consulting"}, headers=auth(member))
+    assert founded.status_code == 201, founded.text
+    assert founded.json()["results_webhook_secret"] is None
+
+    # And the plain read, for completeness of the four.
+    assert (
+        anon_client.get("/orgs/current", headers=auth(admin)).json()["results_webhook_secret"]
+        is None
+    )
+
+
 def test_resaving_the_same_url_keeps_the_working_secret(client, allow_local_webhooks) -> None:
     """`GET /orgs/current` returns the URL, so a read-modify-write settings form
     re-sends it on every save. That must not rotate the key under a receiver
