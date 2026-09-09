@@ -356,6 +356,18 @@ def test_the_detail_view_agrees_with_the_list_it_was_reached_from(
     assert detail["code"] == ""
 
 
+def test_no_pdf_report_is_generated_for_an_erased_submission(client, monkeypatch) -> None:
+    """The report is rendered FROM the code and the agent's payload, and erasure
+    destroys both. Generating one anyway produces a document titled "[erased]"
+    with an empty listing, which invites the reader to treat it as a record of
+    the sitting."""
+    _token, sub_id = _full_sitting(client, monkeypatch)
+    _erase(client)
+    resp = client.get(f"/submissions/{sub_id}/report")
+    assert resp.status_code == 409
+    assert "erased" in resp.json()["detail"]
+
+
 def test_a_live_sitting_is_not_reported_as_erased(client, monkeypatch) -> None:
     _full_sitting(client, monkeypatch)
     assert client.get("/submissions").json()["items"][0]["erased"] is False

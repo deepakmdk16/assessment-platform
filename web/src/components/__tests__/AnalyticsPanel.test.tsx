@@ -49,6 +49,7 @@ const xc: AssessmentAnalytics = {
     {
       candidate_name: 'Priya N.',
       candidate_email: 'priya@x.io',
+      erased: false,
       passed_count: 3,
       submitted_count: 3,
       total_count: 3,
@@ -60,6 +61,7 @@ const xc: AssessmentAnalytics = {
     {
       candidate_name: 'Sam K.',
       candidate_email: 'sam@x.io',
+      erased: false,
       passed_count: 1,
       submitted_count: 2,
       total_count: 3,

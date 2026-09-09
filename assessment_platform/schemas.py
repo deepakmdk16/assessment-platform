@@ -858,6 +858,9 @@ class AssessmentCandidateAnalyticsOut(BaseModel):
 
     candidate_name: str
     candidate_email: str
+    # As everywhere else (X03): the leaderboard must not rank a row labelled
+    # "[erased]" beside real names.
+    erased: bool = False
     passed_count: int
     submitted_count: int  # slots this candidate has submitted (for completion status)
     total_count: int

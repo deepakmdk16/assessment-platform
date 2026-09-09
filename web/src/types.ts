@@ -337,6 +337,8 @@ export interface ScoreBucket {
 export interface AssessmentCandidateAnalytics {
   candidate_name: string
   candidate_email: string
+  /** As on AssessmentAttempt: this candidate has been erased. */
+  erased: boolean
   passed_count: number
   submitted_count: number
   total_count: number

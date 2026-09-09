@@ -3396,6 +3396,7 @@ def analytics_assessment(
             AssessmentCandidateAnalyticsOut(
                 candidate_name=r.candidate_name,
                 candidate_email=r.candidate_email,
+                erased=privacy.is_erased(r.candidate_email),
                 passed_count=r.passed_count,
                 submitted_count=sum(1 for q in r.questions if q.submitted),
                 total_count=r.total_count,
@@ -4709,6 +4710,17 @@ async def submission_report(
     question = session.get(Question, sub.question_id)
     if question is None:
         raise HTTPException(status_code=404, detail=f"no question with id {sub.question_id!r}.")
+    # A report is rendered FROM the submitted code and the agent's payload, and
+    # erasure destroys both. Generating one anyway produces a document titled
+    # "[erased]" with an empty listing — a confusing artefact that also invites
+    # the reader to treat it as a record of the sitting. Refused with the same
+    # 409 shape as an ungraded submission: a state where there is nothing to
+    # render, not an error.
+    if privacy.is_erased(sub.candidate_email):
+        raise HTTPException(
+            status_code=409,
+            detail="this candidate's data was erased; there is no report to generate.",
+        )
 
     try:
         pdf = await agent_client.request_report(

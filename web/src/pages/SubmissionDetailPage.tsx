@@ -336,14 +336,19 @@ export function SubmissionDetailPage() {
             <>
               <span className={badgeClass(result.verdict)}>{result.verdict}</span>
               <span className="score">{result.score_pct}%</span>
-              <button
-                type="button"
-                className="btn sec"
-                onClick={handleDownloadReport}
-                disabled={downloading}
-              >
-                {downloading ? 'Preparing…' : 'Download PDF report'}
-              </button>
+              {/* The PDF is rendered from the code and the agent's payload, both
+                  destroyed by erasure — the server refuses with a 409, so the
+                  button would only ever produce an error. */}
+              {!sub.erased && (
+                <button
+                  type="button"
+                  className="btn sec"
+                  onClick={handleDownloadReport}
+                  disabled={downloading}
+                >
+                  {downloading ? 'Preparing…' : 'Download PDF report'}
+                </button>
+              )}
             </>
           ) : (
             <span className={`${badgeClass(sub.status)}${isPending ? ' chip-live' : ''}`}>
