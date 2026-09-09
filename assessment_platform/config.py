@@ -195,6 +195,17 @@ SMTP_DEADLINE_S = float(os.getenv("SMTP_DEADLINE_S", "30"))
 # it (pair with LOG_PII=true to get the link verbatim).
 ALLOW_UNCONFIGURED_EMAIL = os.getenv("ALLOW_UNCONFIGURED_EMAIL", "").lower() in {"1", "true"}
 
+# Results webhook (X06). One short timeout, because the delivery runs in a
+# background task off the agent's callback: a customer endpoint that hangs must
+# cost us one worker slot briefly, not hold a grading callback open.
+RESULTS_WEBHOOK_TIMEOUT_S = float(os.getenv("RESULTS_WEBHOOK_TIMEOUT_S", "5"))
+# Whether a webhook may point at a plain-http or private-network address. OFF by
+# default: the URL is customer-supplied and the platform fetches it server-side,
+# which is the textbook SSRF shape — without this gate a tenant could aim the
+# POST at the cloud metadata endpoint or another tenant's internal service. On
+# only for local development, where the endpoint under test is on localhost.
+ALLOW_PRIVATE_WEBHOOKS = os.getenv("ALLOW_PRIVATE_WEBHOOKS", "").lower() in {"1", "true"}
+
 
 def missing_smtp_vars() -> list[str]:
     """Names of the mail settings that are unset or still on the placeholder.

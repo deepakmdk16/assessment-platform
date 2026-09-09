@@ -12,9 +12,11 @@ Priority: **P0** blocks taking money or endangers customers · **P1** first payi
 customers hit it · **P2** fix before scale · **P3** polish.
 Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data + API + UI.
 
-**Sequence:** (1) email (X06, X07) · (2) deploy + ops (X05, X08, P26, X11) ·
-(3) the rest by priority. Privacy (X03, X04) is built; X19 is the legal review
-it still waits on before anyone is charged.
+**Sequence:** (1) email (X07, then X23's UI) · (2) deploy + ops (X05, X08, P26,
+X11) · (3) the rest by priority. Privacy (X03, X04) is built; X19 is the legal
+review it still waits on before anyone is charged. X06 is built server-side —
+results now email the interviewer and POST a signed webhook — and X23 is the
+interface it still needs.
 
 ---
 
@@ -43,13 +45,33 @@ compose; the agent needs a privileged host.**
   (uv + alembic upgrade head && uvicorn), static web build behind nginx,
   docker-compose wiring agent (privileged) + platform + Postgres; docs/DEPLOY.md.
   _Verified: cited lines read in this audit; source: saas._
-- **X06 · P1 · S — Results never reach the interviewer proactively.**
-  Evidence: agent_client.py:260 passes email_to=None; no notification or webhook
-  code in the platform; the agent's Gmail mailer (mailer.py:29-30,103-106) is
-  CLI/direct-API only. Why: interviewers must poll the dashboard to learn a
-  candidate finished. Fix: "results ready" email from assessments_callback
-  (api.py:3129) via email_client, plus a per-org webhook.
-  _Verified: cited lines read in this audit; source: saas._
+- **X23 · P1 · S — The results webhook has no UI; it is API-only.**
+  Evidence: `PATCH /orgs/current` accepts `results_webhook_url` and returns the
+  minted `results_webhook_secret` once (X06), but nothing in `web/` renders
+  either — no field on the organisation settings page, and `types.ts`/`api.ts`
+  still mirror the pre-X06 schema. Why: a customer cannot turn on the feature
+  without curl, and the one-time secret has nowhere to be copied from. Fix: a
+  Webhook panel beside Privacy — URL field, save-rotates-secret, reveal-once
+  copy box. **Mockup first** (CLAUDE.md), then `.tsx`.
+  _Verified: written when X06 landed; the backend half is on main._
+- **X24 · P2 · S — The results webhook's SSRF gate is TOCTOU.**
+  Evidence: `notify.webhook_url_error` resolves the host and refuses private
+  addresses, then `httpx.post` resolves it again independently — a name with a
+  short TTL can answer publicly for the check and privately for the connection.
+  Why: blind (only the status code is logged) but it is the whole defense the
+  README describes. Fix: resolve once and connect to the pinned address (custom
+  httpx transport, keep the SNI/Host so TLS still validates), or send through an
+  egress proxy that enforces the policy.
+  _Verified: raised by /code-review when X06 landed; the double-check is in main._
+- **X25 · P3 · XS — A crash between claiming a notification and sending it loses it.**
+  Evidence: `notify.claim_sitting` stamps `results_notified_at` inside the
+  callback request; `deliver` runs after the response. A SIGTERM in between
+  consumes the one-shot claim with nothing sent, and nothing re-examines a
+  stamped-but-unsent attempt (grading has the reaper for exactly this). Why: a
+  rare silently-missed notification; the dashboard is still the record. Fix:
+  stamp `results_sent_at` separately after delivery and let a sweep retry the
+  gap, or move delivery onto a durable queue when one exists.
+  _Verified: raised by /code-review when X06 landed._
 - **X07 · P1 · S — Email deliverability is not production-grade.**
   Evidence: invites go via smtplib STARTTLS (email_client.py:37-48) with SMTP_FROM
   default no-reply@assessment.local (config.py:130-135); plain text, no templates,

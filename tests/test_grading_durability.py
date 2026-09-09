@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 import pytest
 from conftest import async_raise, async_return, patch_async_post
+from fastapi import BackgroundTasks
 from sqlmodel import Session
 from test_api import (
     _age_submission,
@@ -72,7 +73,12 @@ def test_callback_arriving_before_the_202_is_recorded_still_lands(client, monkey
     async def fast_agent(question, submission, callback_url, base_url=None):  # noqa: ANN001
         # The agent graded and called back before we even processed its 202.
         with Session(db_module.engine) as s:
-            out = api.assessments_callback(_callback_payload(submission.agent_job_id), session=s)
+            # Called as a plain function, so the BackgroundTasks FastAPI would
+            # have injected is supplied here; this submission has no invite, so
+            # nothing is queued onto it either way.
+            out = api.assessments_callback(
+                _callback_payload(submission.agent_job_id), BackgroundTasks(), session=s
+            )
         assert out["status"] == "ok"
         return submission.agent_job_id
 

@@ -52,6 +52,7 @@ from . import (
     db,
     email_client,
     integrity,
+    notify,
     privacy,
     signing,
     stripe_client,
@@ -1006,7 +1007,9 @@ def _organization(org_id: int, session: Session) -> Organization:
     return organization
 
 
-def _organization_out(org: Membership, session: Session) -> OrganizationOut:
+def _organization_out(
+    org: Membership, session: Session, *, reveal_secret: str | None = None
+) -> OrganizationOut:
     organization = _organization(org.org_id, session)
     return OrganizationOut(
         id=org.org_id,
@@ -1014,6 +1017,10 @@ def _organization_out(org: Membership, session: Session) -> OrganizationOut:
         role=org.role,
         member_count=_member_count(org.org_id, session),
         retention_days=organization.retention_days,
+        results_webhook_url=organization.results_webhook_url,
+        # Only the write that minted it ever sees the secret; a plain read of the
+        # organisation must not hand a signing key back out.
+        results_webhook_secret=reveal_secret,
     )
 
 
@@ -1220,10 +1227,39 @@ def update_org(
         organization.name = body.name.strip()
     if "retention_days" in sent:
         organization.retention_days = body.retention_days
+    minted: str | None = None
+    if "results_webhook_url" in sent:
+        minted = _set_results_webhook(organization, body.results_webhook_url)
     organization.updated_at = datetime.now(timezone.utc)
     session.add(organization)
     session.commit()
-    return _organization_out(org, session)
+    return _organization_out(org, session, reveal_secret=minted)
+
+
+def _set_results_webhook(organization: Organization, url: str | None) -> str | None:
+    """Point the organisation's results webhook at `url` (None turns it off).
+
+    Returns the freshly minted signing secret when there is one to reveal — the
+    only moment it is ever readable.
+
+    Re-saving the URL **unchanged** deliberately keeps the existing secret. Now
+    that `GET /orgs/current` hands the URL back, a settings form that reads the
+    organisation and PATCHes it whole would otherwise rotate the key on every
+    unrelated save and silently break a working receiver. Rotating is therefore
+    an explicit act: clear the webhook (`null`), then set it again.
+    """
+    if url is None:
+        organization.results_webhook_url = None
+        organization.results_webhook_secret = None
+        return None
+    if url == organization.results_webhook_url and organization.results_webhook_secret:
+        return None
+    error = notify.webhook_url_error(url)
+    if error:
+        raise HTTPException(status_code=422, detail=error)
+    organization.results_webhook_url = url
+    organization.results_webhook_secret = notify.new_webhook_secret()
+    return organization.results_webhook_secret
 
 
 @app.get("/orgs/current/members", response_model=list[MemberOut])
@@ -4365,6 +4401,15 @@ async def _reap_tick() -> list[str]:
                     sub.attempts,
                     sub.agent_job_id,
                 )
+                # X06: giving up ends the sitting exactly as a callback would, so
+                # it notifies exactly as a callback would. Without this a sitting
+                # whose agent never came back is the one case where the
+                # interviewer is told nothing at all — the case they most need to
+                # hear about. Already inside a background loop, so `deliver` is
+                # called directly rather than queued.
+                ready = notify.claim_sitting(session, sub)
+                if ready is not None:
+                    notify.deliver(ready)
                 acted.append(sub.id)
     return acted
 
@@ -4842,7 +4887,9 @@ def _is_error_payload(payload: dict[str, Any], verdict: str) -> bool:
     dependencies=[Depends(_require_callback_token), Depends(_require_callback_signature)],
 )
 def assessments_callback(
-    payload: dict[str, Any], session: Session = Depends(get_session)
+    payload: dict[str, Any],
+    background: BackgroundTasks,
+    session: Session = Depends(get_session),
 ) -> dict:
     """Receive the agent's result and persist it verbatim. Always returns 200.
 
@@ -4936,6 +4983,14 @@ def assessments_callback(
     logger.info(
         "callback for agent job %s matched submission %s -> %s", job_id, sub.id, sub.status
     )
+    # X06: if that was the last question of the sitting, tell the interviewer.
+    # The claim (is it complete, and did we already notify?) happens here, inside
+    # the request, because it is a compare-and-swap on the attempt row; the
+    # sending is queued, because SMTP and a customer's webhook endpoint must not
+    # be on the path of a callback the agent is waiting to have acknowledged.
+    ready = notify.claim_sitting(session, sub)
+    if ready is not None:
+        background.add_task(notify.deliver, ready)
     return {"status": "ok", "submission_id": sub.id}
 
 

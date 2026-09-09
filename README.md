@@ -109,6 +109,8 @@ whether each address was actually mailed, and the UI warns when a send failed.
 | `SMTP_TIMEOUT_S` | `10`                      | Per socket operation (connect, TLS, login, send). |
 | `SMTP_DEADLINE_S` | `30`                     | Ceiling on one whole multi-recipient send.     |
 | `ALLOW_UNCONFIGURED_EMAIL` | `false`         | Offline dev only: boot without SMTP and log links instead. |
+| `RESULTS_WEBHOOK_TIMEOUT_S` | `5`            | Ceiling on one results-webhook POST.           |
+| `ALLOW_PRIVATE_WEBHOOKS` | `false`           | Local dev only: allow http / private-address webhook URLs (lifts the SSRF gate). |
 
 Gmail works for testing: enable 2-Step Verification, then create an **app password**
 (Google Account → Security → App passwords) — your normal account password will not
@@ -193,6 +195,60 @@ The list endpoints (`GET /questions`, `GET /submissions`, `GET
 is the full count, so a client can render a pager in one request.
 
 Interactive docs at `/docs` when running.
+
+### Results webhook (outbound)
+
+When the **last** question of a sitting is graded, the platform emails the
+interviewer who sent the invitation and — if the organisation has configured one
+— POSTs a `results.ready` event to its webhook. Both are best-effort and run
+after the agent's callback has been acknowledged, so neither can delay or fail a
+grade. A multi-question assessment produces **one** notification, not one per
+question, and a re-delivered agent callback produces none.
+
+Configure it with `PATCH /orgs/current` (admin only):
+
+```jsonc
+// request
+{ "results_webhook_url": "https://acme.example.com/hooks/assessments" }
+// response — the secret is shown ONCE and never returned by a read
+{ "results_webhook_url": "https://…", "results_webhook_secret": "kR3…" }
+```
+
+Re-sending the **same** URL changes nothing and reveals nothing, so a settings
+form that PATCHes the whole organisation cannot rotate the key out from under a
+working receiver. To rotate deliberately (or to recover a lost secret), send
+`null` — which turns the webhook off and discards the secret — then set the URL
+again.
+
+The URL must be **https and publicly routable**: loopback, private ranges and
+link-local (cloud metadata) addresses are refused when it is saved and again
+before it is used, and redirects are never followed. `ALLOW_PRIVATE_WEBHOOKS=true`
+lifts this for local development only.
+
+The POST body is signed exactly like the platform↔agent link — `X-Assess-Signature:
+t=<unix>,v1=<hex-hmac-sha256>` over `f"{t}.".encode() + body`, under the secret
+above (see [signing.py](assessment_platform/signing.py)). **Verify it before
+trusting the payload.**
+
+```json
+{
+  "event": "results.ready",
+  "sent_at": "2026-09-09T10:15:00+00:00",
+  "organization_id": 1,
+  "invite_id": 42,
+  "title": "Backend Screen",
+  "candidate": { "name": "Jane Doe", "email": "jane@example.com" },
+  "results_url": "https://app.example.com/submissions/8f2c…",
+  "results": [
+    { "submission_id": "8f2c…", "question_id": "sum_of_n", "title": "Sum of N",
+      "verdict": "PASS", "score_pct": 100.0 }
+  ]
+}
+```
+
+One attempt, no retry queue: the dashboard stays the system of record and the
+email still goes out, so a receiver that was down is a logged warning rather
+than a job the platform owns.
 
 ## Data model
 

@@ -95,6 +95,17 @@ def send_account_email(to: str, subject: str, body: str, url: str) -> Delivery:
     return _deliver([to], url, "account", lambda rcpt: _message(rcpt, subject, body))[0]
 
 
+def send_results_email(to: str, subject: str, body: str, url: str) -> Delivery:
+    """Tell one interviewer a candidate's sitting has been graded (X06).
+
+    Same shape and same best-effort contract as `send_account_email`; separate so
+    the log line names the right thing and so the two can grow apart (a results
+    mail is the one an organisation is most likely to want templated or
+    redirected first). `url` is the submission link in the body.
+    """
+    return _deliver([to], url, "results", lambda rcpt: _message(rcpt, subject, body))[0]
+
+
 def _deliver(
     recipients: list[str], url: str, kind: str, build: Callable[[str], EmailMessage]
 ) -> list[Delivery]:
