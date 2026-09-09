@@ -1,0 +1,111 @@
+# Deployable wiring for the whole system: Postgres, the agent (privileged, runs
+# untrusted candidate code), the platform API, and nginx serving the SPA.
+# docs/DEPLOY.md is the walkthrough — including what must be in .env first.
+#
+#   docker compose up -d --build
+#
+# The agent builds from the sibling checkout. The two repos are developed side
+# by side (see CLAUDE.md); if yours are laid out differently, override
+# AGENT_CONTEXT in .env or run the agent from a pre-built image.
+#
+# Only `web` publishes a port. The API and the agent are reachable on the
+# internal network only: the agent executes untrusted code and must never be
+# addressable from outside, and the API is reached through nginx so that the app
+# and the API share one origin (see web/nginx.conf).
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: assessment
+      POSTGRES_DB: assessment
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The platform waits on this: it runs `alembic upgrade head` at boot, and
+      # that fails outright against a database still initialising.
+      test: ["CMD-SHELL", "pg_isready -U assessment -d assessment"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ${AGENT_CONTEXT:-../AssesmentAgent}
+    # nsjail needs namespace + cgroup privileges to build the jail; without them
+    # every run fails loudly rather than executing untrusted code unsandboxed
+    # (ASSESS_SANDBOX=nsjail is set in the agent's Dockerfile). This is why the
+    # agent needs a host that allows privileged containers — see STATUS.md A07.
+    privileged: true
+    cgroup: host
+    environment:
+      # Shared secrets: the platform authenticates to the agent with
+      # ASSESS_API_TOKEN and verifies the callback with CALLBACK_TOKEN; the
+      # *_SIGNING_SECRET pair HMACs the bodies in each direction. Both sides
+      # must agree, so they are set from the same .env values here.
+      ASSESS_API_TOKEN: ${ASSESS_API_TOKEN:?set ASSESS_API_TOKEN in .env}
+      CALLBACK_TOKEN: ${CALLBACK_TOKEN:?set CALLBACK_TOKEN in .env}
+      ASSESS_SIGNING_SECRET: ${ASSESS_SIGNING_SECRET:?set ASSESS_SIGNING_SECRET in .env}
+      CALLBACK_SIGNING_SECRET: ${CALLBACK_SIGNING_SECRET:?set CALLBACK_SIGNING_SECRET in .env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Pin the provider. Left unset, the agent auto-selects Ollama whenever
+      # ANTHROPIC_API_KEY is absent and then fails every LLM call in a container
+      # that has no Ollama — STATUS.md A02. Pinning it here is the deployment
+      # half of that workaround; the code fix is still open.
+      ASSESS_LLM_PROVIDER: ${ASSESS_LLM_PROVIDER:-anthropic}
+      ASSESS_TRUST_PROXY_HEADERS: "false"
+    restart: unless-stopped
+
+  platform:
+    build:
+      context: .
+    # Everything not wired below — SMTP, JWT_SECRET, Stripe, rate limits — comes
+    # from .env. Values in `environment:` override it, and the ones here are the
+    # settings that are only correct *inside* this compose network.
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://assessment:${POSTGRES_PASSWORD}@db:5432/assessment
+      AGENT_BASE_URL: http://agent:8000
+      # Where the agent posts results back to. A hostname, so it passes the
+      # agent's SSRF guard, which rejects literal private addresses.
+      PLATFORM_BASE_URL: http://platform:9000
+      # The public origin. Every invite link the API mints points here, so it
+      # must be what a candidate can actually open — not the internal name.
+      FRONTEND_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env}
+      # PLATFORM_BASE_URL is internal http, and COOKIE_SECURE is derived from it
+      # unless set (config.py). Behind TLS that derivation is wrong and the
+      # session cookie would go out without Secure, so state it explicitly.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # nginx is the single hop in front of this service (web/nginx.conf).
+      TRUST_PROXY_HEADERS: "true"
+      # In-memory counters are per-process, so every replica would grant its own
+      # full allowance; the DB backend is the only correct one off a single worker.
+      RATE_LIMIT_BACKEND: db
+      # Production evolves the schema through Alembic only (see db.py).
+      AUTO_CREATE_TABLES: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      agent:
+        condition: service_started
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+      args:
+        # Baked into the bundle at build time — changing it needs a rebuild.
+        VITE_API_BASE_URL: /api
+        VITE_PRODUCT_NAME: ${VITE_PRODUCT_NAME:-}
+    ports:
+      - "${WEB_PORT:-80}:80"
+    depends_on:
+      platform:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:

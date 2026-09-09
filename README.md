@@ -334,6 +334,22 @@ Still open before production:
 - Candidate `code` is untrusted; the agent sandboxes execution, but treat stored
   code as untrusted data here too.
 
+## Deployment
+
+`docker-compose.yml` brings up the whole system — Postgres, the agent (privileged,
+because nsjail needs namespace and cgroup capabilities), the platform API, and
+nginx serving the SPA and proxying the API on one origin:
+
+```bash
+cp .env.example .env    # fill in the required secrets first
+docker compose up -d --build
+```
+
+The platform image runs `alembic upgrade head` before binding its port, so a
+missing migration is a boot failure rather than a 500 on the first request that
+reads a new column. Full walkthrough, TLS notes and the operational gaps a first
+deploy hits: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+
 ## License
 
 Dual-licensed. Copyright (c) 2026 deepak madire.
