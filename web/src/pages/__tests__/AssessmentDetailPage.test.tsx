@@ -128,6 +128,7 @@ describe('AssessmentDetailPage — attempts (A3/A11)', () => {
   const attempt: AssessmentAttempt = {
     candidate_name: 'Jane Doe',
     candidate_email: 'jane@example.com',
+    erased: false,
     passed_count: 1,
     total_count: 1,
     avg_score_pct: 92,

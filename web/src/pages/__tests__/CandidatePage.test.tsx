@@ -131,10 +131,18 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     await waitFor(() => {
-      expect(api.startInvite).toHaveBeenCalledWith('tok123', 'jane@example.com', 'Jane Doe')
+      // The consent the candidate gave at the gate travels with the start (X04);
+      // the server refuses a sitting that begins without it.
+      expect(api.startInvite).toHaveBeenCalledWith(
+        'tok123',
+        'jane@example.com',
+        'Jane Doe',
+        true,
+      )
     })
 
     // Editor split view
@@ -149,10 +157,42 @@ describe('CandidatePage', () => {
         candidate_email: 'jane@example.com',
         language: 'python',
         code: 'print("hi")',
+        // Carried so a submit that is itself the start of the sitting still
+        // records what the candidate agreed to (X04).
+        consent: true,
       })
     })
 
     expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
+  })
+
+  it('cannot start until the candidate has consented', async () => {
+    const user = userEvent.setup()
+    renderCandidatePage()
+    await user.type(await screen.findByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+
+    // The server refuses this too (422). Disabling the button is only so the
+    // candidate meets the requirement as a choice rather than as an error.
+    expect(screen.getByRole('button', { name: /start/i })).toBeDisabled()
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
+    expect(screen.getByRole('button', { name: /start/i })).toBeEnabled()
+    expect(api.startInvite).not.toHaveBeenCalled()
+  })
+
+  it('names the monitoring in what the candidate agrees to, when monitored', async () => {
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active', proctored: true })
+    renderCandidatePage()
+    expect(await screen.findByLabelText(/including the monitoring described above/i)).toBeInTheDocument()
+  })
+
+  it('does not claim monitoring in the consent for an unmonitored sitting', async () => {
+    // Agreeing to monitoring that is not happening is a false record, and it is
+    // the record that a lawful basis rests on.
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active', proctored: false })
+    renderCandidatePage()
+    expect(await screen.findByLabelText(/i agree to my assessment/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/including the monitoring/i)).not.toBeInTheDocument()
   })
 
   it('discloses monitoring on the gate before the candidate identifies themselves', async () => {
@@ -185,6 +225,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     // Both questions appear as tabs; the first one's prompt is shown.
@@ -221,6 +262,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     expect(await screen.findByText('Acme Corp — Backend Screen')).toBeInTheDocument()
@@ -242,6 +284,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     await screen.findByRole('tab', { name: /Two Sum/i })
@@ -259,6 +302,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     await screen.findByRole('tab', { name: /Two Sum/i })
@@ -292,6 +336,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     // Neither question was ever answered, so nothing to auto-submit — the
@@ -316,6 +361,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     expect(await screen.findByRole('heading', { name: /time.s up/i })).toBeInTheDocument()
@@ -350,6 +396,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Mallory')
     await user.type(screen.getByLabelText(/^email$/i), 'mallory@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/wasn’t sent to that email/i)
@@ -370,6 +417,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     // Turned away before ever seeing the editor.
@@ -393,6 +441,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     await user.type(await screen.findByLabelText(/code editor/i), 'print("hi")')
@@ -409,6 +458,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
     await user.type(await screen.findByLabelText(/code editor/i), 'print("hi")')
   }
@@ -520,6 +570,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
 
     const editor = await screen.findByLabelText(/code editor/i)
@@ -540,6 +591,7 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
     await user.type(await screen.findByLabelText(/code editor/i), 'print("hi")')
     await user.click(screen.getByRole('button', { name: /^submit$/i }))
@@ -581,6 +633,7 @@ describe('server drafts (CX2)', () => {
     renderCandidatePage()
     await user.type(await screen.findByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
     return user
   }
@@ -779,6 +832,7 @@ describe('CandidatePage — the fullscreen block actually blocks (UI-D / W05)', 
     renderCandidatePage()
     await user.type(await screen.findByLabelText(/^name$/i), 'Jane Doe')
     await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
     await user.click(screen.getByRole('button', { name: /start/i }))
     return user
   }

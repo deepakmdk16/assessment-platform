@@ -16,7 +16,7 @@ from assessment_platform.ratelimit import client_ip
 def _submit(client: TestClient, token: str, email: str, name: str = "Cand") -> object:
     return client.post(
         f"/invite/{token}/submit",
-        json={"candidate_name": name, "candidate_email": email, "language": "python", "code": "x"},
+        json={"candidate_name": name, "candidate_email": email, "consent": True, "language": "python", "code": "x"},
     )
 
 

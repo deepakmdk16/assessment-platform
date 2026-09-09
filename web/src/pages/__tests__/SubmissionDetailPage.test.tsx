@@ -118,6 +118,7 @@ const submission: SubmissionDetail = {
   id: 'sub1',
   question_id: 'two-sum',
   candidate: 'Casey Candidate',
+  erased: false,
   language: 'python',
   code: 'print("hi")',
   status: 'done',
@@ -333,4 +334,21 @@ describe('SubmissionDetailPage', () => {
 
     expect(await screen.findByText(/stayed in fullscreen/i)).toBeInTheDocument()
   })
+
+  it('says the code was destroyed for an erased candidate, rather than showing an empty editor', async () => {
+    // An empty read-only editor reads as a candidate who submitted nothing —
+    // a different and much worse thing to believe about them.
+    vi.mocked(api.getSubmission).mockResolvedValue({
+      ...submission,
+      candidate: '[erased]',
+      erased: true,
+      code: '',
+    })
+    renderPage()
+
+    expect(await screen.findByText(/data was erased/i)).toBeInTheDocument()
+    expect(screen.getByText(/erased candidate/i)).toBeInTheDocument()
+    expect(screen.queryByText('[erased]')).not.toBeInTheDocument()
+  })
+
 })

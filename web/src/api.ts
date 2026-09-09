@@ -12,6 +12,7 @@ import type {
   InviteStatusResponse,
   LoginResponse,
   Member,
+  CandidateErasure,
   Organization,
   OrgInvite,
   OrgInvitePublic,
@@ -247,6 +248,24 @@ export const api = {
   renameOrg: (name: string) =>
     request<Organization>('/orgs/current', { method: 'PATCH', body: { name }, auth: true }),
 
+  /** Set or clear the organisation's retention window (X03). `null` turns the
+   *  policy off; the field is sent either way, which is what distinguishes it
+   *  from an omitted field on the server. */
+  setRetention: (retention_days: number | null) =>
+    request<Organization>('/orgs/current', {
+      method: 'PATCH',
+      body: { retention_days },
+      auth: true,
+    }),
+
+  /** Answer a candidate's deletion request (X03). Admin-only, irreversible, and
+   *  scoped to the caller's organisation. */
+  eraseCandidate: (email: string) =>
+    request<CandidateErasure>(`/candidates/${encodeURIComponent(email)}`, {
+      method: 'DELETE',
+      auth: true,
+    }),
+
   listMembers: () => request<Member[]>('/orgs/current/members', { auth: true }),
 
   setMemberRole: (interviewerId: number, role: OrgRole) =>
@@ -446,10 +465,17 @@ export const api = {
       auth: true,
     }),
 
-  startInvite: (token: string, candidate_email: string, candidate_name?: string) =>
+  startInvite: (
+    token: string,
+    candidate_email: string,
+    candidate_name?: string,
+    // Agreement to the privacy notice and terms (X04). The server refuses a
+    // sitting that begins without it, so this is not decorative.
+    consent?: boolean,
+  ) =>
     request<InviteStartResponse>(`/invite/${token}/start`, {
       method: 'POST',
-      body: { candidate_email, candidate_name },
+      body: { candidate_email, candidate_name, consent },
     }),
 
   runCandidate: (
@@ -476,6 +502,9 @@ export const api = {
       language: string
       code: string
       question_id?: string
+      // Only read when this submit is what begins the sitting — a client that
+      // never called /start. The normal flow consented there already.
+      consent?: boolean
     },
   ) => request<SubmitResponse>(`/invite/${token}/submit`, { method: 'POST', body: data }),
 

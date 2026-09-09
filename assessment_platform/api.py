@@ -52,6 +52,7 @@ from . import (
     db,
     email_client,
     integrity,
+    privacy,
     signing,
     stripe_client,
 )
@@ -110,6 +111,7 @@ from .schemas import (
     CandidateDraftIn,
     CandidateDraftOut,
     CandidateDraftsOut,
+    CandidateErasureOut,
     CandidateQuestionPublic,
     CandidateQuestionView,
     CandidateRunIn,
@@ -223,16 +225,25 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # (dev/E2E) so a missing migration surfaces instead of being papered over.
     if config.AUTO_CREATE_TABLES:
         init_db()
-    # The grading reaper (`_reap_tick`): one loop per worker process, made safe
-    # by the compare-and-swap claim in `_trigger_agent`. Off under test.
-    reaper = asyncio.create_task(_reaper_loop()) if config.REAP_INTERVAL_S > 0 else None
+    # Background loops, one set per worker process. The grading reaper
+    # (`_reap_tick`) is made safe against its siblings by the compare-and-swap
+    # claim in `_trigger_agent`; the retention sweep (`_retention_tick`) is
+    # idempotent, since a sitting it has already erased has `erased_at` set and
+    # is skipped. Both are off under test, where the suite drives the tick
+    # functions directly rather than racing them.
+    background: list[asyncio.Task] = []
+    if config.REAP_INTERVAL_S > 0:
+        background.append(asyncio.create_task(_reaper_loop()))
+    if config.RETENTION_INTERVAL_S > 0:
+        background.append(asyncio.create_task(_retention_loop()))
     try:
         yield
     finally:
-        if reaper is not None:
-            reaper.cancel()
+        for task in background:
+            task.cancel()
+        for task in background:
             with suppress(asyncio.CancelledError):
-                await reaper
+                await task
 
 
 app = FastAPI(
@@ -338,6 +349,7 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
         id=sub.id,
         question_id=sub.question_id,
         candidate=sub.candidate,
+        erased=privacy.is_erased(sub.candidate_email),
         language=sub.language,
         code=sub.code,
         status=sub.status,
@@ -359,6 +371,7 @@ def _submission_summary(
         question_id=sub.question_id,
         candidate=sub.candidate,
         candidate_email=sub.candidate_email,
+        erased=privacy.is_erased(sub.candidate_email),
         language=sub.language,
         status=sub.status,
         agent_job_id=sub.agent_job_id,
@@ -1000,6 +1013,7 @@ def _organization_out(org: Membership, session: Session) -> OrganizationOut:
         name=organization.name,
         role=org.role,
         member_count=_member_count(org.org_id, session),
+        retention_days=organization.retention_days,
     )
 
 
@@ -1196,7 +1210,17 @@ def update_org(
 ) -> OrganizationOut:
     _require_admin(org)
     organization = _organization(org.org_id, session)
-    organization.name = body.name.strip()
+    # Both fields are optional and applied only when actually sent, so the
+    # Privacy panel can change the retention window without resubmitting the
+    # organisation's name — and, more importantly, so that "retention_days":
+    # null (turn the policy off) is distinguishable from "field omitted".
+    # Pydantic's `model_fields_set` is the only thing that tells those apart.
+    sent = body.model_fields_set
+    if body.name is not None:
+        organization.name = body.name.strip()
+    if "retention_days" in sent:
+        organization.retention_days = body.retention_days
+    organization.updated_at = datetime.now(timezone.utc)
     session.add(organization)
     session.commit()
     return _organization_out(org, session)
@@ -1388,6 +1412,52 @@ def revoke_org_invite(
         raise HTTPException(status_code=404, detail="no pending invitation with that id.")
     session.delete(invite)
     session.commit()
+
+
+@app.delete("/candidates/{email}", response_model=CandidateErasureOut)
+def erase_candidate_data(
+    email: str,
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> CandidateErasureOut:
+    """Erase everything this organisation holds about one candidate (X03) — the
+    route an interviewer answers a data-subject request with.
+
+    Admin-only, like every other destructive organisation-wide action: the result
+    is irreversible and spans work the whole team can see.
+
+    Scoped to the caller's organisation and never global. The same person may
+    have sat for two customers of this platform, and one customer's erasure
+    request is not the other's to make — nor is the fact that they sat elsewhere
+    something this response should leak.
+
+    Answers 200 with zero counts rather than 404 for an address that holds no
+    data. A 404 here would be an existence oracle: an unbounded way to ask "has
+    this person ever been assessed by this organisation", answered for any
+    address the caller cares to type. `erased` reports whether anything was
+    actually touched.
+
+    What this does NOT do is documented on `privacy.erase_candidate`: the sitting
+    survives as an anonymous record, so the organisation's pass-rate history and
+    billing record don't rewrite themselves. The candidate's invitation is
+    retired along with their data — the link they were sent stops working, and
+    reassessing them means issuing a new one.
+    """
+    _require_admin(org)
+    normalized = _normalize_email(email)
+    counts = privacy.erase_candidate(session, org_id=org.org_id, email=normalized)
+    session.commit()
+    return CandidateErasureOut(
+        candidate_email=normalized,
+        erased=counts.touched_anything,
+        submissions=counts.submissions,
+        results=counts.results,
+        attempts=counts.attempts,
+        slot_variants=counts.slot_variants,
+        integrity_events=counts.integrity_events,
+        drafts_deleted=counts.drafts_deleted,
+        invites_amended=counts.invites_amended,
+    )
 
 
 @app.get("/org-invites/{token}", response_model=OrgInvitePublicOut)
@@ -3052,6 +3122,7 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
             AssessmentAttemptOut(
                 candidate_name=attempt.candidate_name or attempt.candidate_email,
                 candidate_email=attempt.candidate_email,
+                erased=attempt.erased_at is not None,
                 questions=q_rows,
                 passed_count=passed,
                 total_count=len(slots),
@@ -3325,6 +3396,7 @@ def analytics_assessment(
             AssessmentCandidateAnalyticsOut(
                 candidate_name=r.candidate_name,
                 candidate_email=r.candidate_email,
+                erased=privacy.is_erased(r.candidate_email),
                 passed_count=r.passed_count,
                 submitted_count=sum(1 for q in r.questions if q.submitted),
                 total_count=r.total_count,
@@ -3607,7 +3679,12 @@ def _claim_sitting(org_id: int, session: Session) -> None:
 
 
 def _get_or_start_attempt(
-    invite: Invite, email: str, session: Session, *, candidate_name: str | None = None
+    invite: Invite,
+    email: str,
+    session: Session,
+    *,
+    candidate_name: str | None = None,
+    consent: bool = False,
 ) -> CandidateAttempt:
     """Return this candidate's attempt for the invite, creating it (stamping
     started_at = now, and candidate_name if given — A10) on first call.
@@ -3637,10 +3714,28 @@ def _get_or_start_attempt(
     # a sitting begins — both /start and a client that POSTs straight to /submit
     # come through here, and the row that loses the race below returns without
     # being counted, so a double-clicked Start bills once.
+    # Consent (X04) is a property of the SITTING, recorded once, so it is checked
+    # exactly where a sitting is created — which is also the one place every
+    # entry path converges, including a caller that skips the start screen. A
+    # candidate returning to a sitting they already consented to is never asked
+    # again: the branch above returned before reaching here.
+    #
+    # 422, deliberately not 403: the candidate gate renders a 403 as "this
+    # assessment wasn't sent to that email address", so refusing consent that way
+    # would tell the candidate to fix the one thing that isn't wrong.
+    if not consent:
+        raise HTTPException(
+            status_code=422,
+            detail="you must agree to the privacy notice and terms before starting.",
+        )
     org_id = _invite_org_id(invite, session)
     _claim_sitting(org_id, session)
     attempt = CandidateAttempt(
-        invite_id=_require_id(invite.id), candidate_email=email, candidate_name=candidate_name
+        invite_id=_require_id(invite.id),
+        candidate_email=email,
+        candidate_name=candidate_name,
+        consent_at=datetime.now(timezone.utc),
+        consent_version=config.PRIVACY_POLICY_VERSION,
     )
     session.add(attempt)
     try:
@@ -3785,7 +3880,9 @@ def start_invite(
     # Stamp (or re-read) the clock start for this candidate, so the returned
     # deadline is stable across reloads and device switches. candidate_name is
     # anchored the same way (A10) — ignored on re-entry once already set.
-    attempt = _get_or_start_attempt(invite, email, session, candidate_name=body.candidate_name)
+    attempt = _get_or_start_attempt(
+        invite, email, session, candidate_name=body.candidate_name, consent=body.consent
+    )
     return _candidate_question_view(invite, session, attempt)
 
 
@@ -3917,7 +4014,9 @@ async def candidate_submit(
     # always wins once set (from the first /start or, lacking that, this first
     # /submit), so a later resubmission with a differently-typed name can't
     # fork one candidate's sitting into inconsistently-labeled rows.
-    attempt = _get_or_start_attempt(invite, email, session, candidate_name=body.candidate_name)
+    attempt = _get_or_start_attempt(
+        invite, email, session, candidate_name=body.candidate_name, consent=body.consent
+    )
     # Timed sitting: a submit past the window is RECORDED (flagged late), not
     # discarded — the candidate's work always counts; the flag lets the
     # interviewer weigh it. No-op (late=False) for an untimed sitting.
@@ -4280,6 +4379,33 @@ async def _reaper_loop() -> None:
             logger.exception("grading reaper tick failed")
 
 
+def _retention_tick() -> int:
+    """One pass of the retention sweep; returns the number of sittings erased.
+
+    Erases nothing on its own account: `purge_expired` skips every organisation
+    that has not set a `retention_days` window, so a deployment that nobody has
+    configured runs this loop forever and deletes nothing.
+    """
+    with Session(db.engine) as session:
+        return privacy.purge_expired(session)
+
+
+async def _retention_loop() -> None:
+    """Background task (started by the lifespan): `_retention_tick` every
+    RETENTION_INTERVAL_S.
+
+    The tick is synchronous database work, so it runs in a worker thread — on the
+    event loop it would stall every in-flight request for the length of a scan
+    across every tenant, which is precisely the wrong thing to do hourly.
+    """
+    while True:
+        await asyncio.sleep(config.RETENTION_INTERVAL_S)
+        try:
+            await asyncio.to_thread(_retention_tick)
+        except Exception:  # keep the loop alive; the next tick retries
+            logger.exception("retention sweep tick failed")
+
+
 @app.post("/submissions", response_model=SubmissionOut, status_code=201)
 async def create_submission(
     body: SubmissionCreate,
@@ -4412,8 +4538,17 @@ def export_submissions(
         signals, blocked_pastes, risk = integrity[sub.id]
         writer.writerow(
             [
-                sub.id, sub.question_id, titles.get(sub.question_id, ""), sub.candidate,
-                sub.candidate_email or "", sub.language, sub.status,
+                sub.id,
+                sub.question_id,
+                titles.get(sub.question_id, ""),
+                # An erased row leaves the product with no identifier at all. The
+                # tombstone is an internal join key, not something to hand to a
+                # spreadsheet or an ATS import, where nobody sees the "Data
+                # erased" chip and the address looks deliverable.
+                "Erased candidate" if privacy.is_erased(sub.candidate_email) else sub.candidate,
+                "" if privacy.is_erased(sub.candidate_email) else (sub.candidate_email or ""),
+                sub.language,
+                sub.status,
                 r.verdict if r else "", r.score_pct if r else "", sub.late,
                 # Blank (not 0) when the sitting wasn't monitored — "nothing
                 # recorded" and "nothing to record" must not look alike.
@@ -4474,11 +4609,28 @@ def get_submission_integrity(
         )
         .order_by(col(IntegrityEvent.offset_ms), col(IntegrityEvent.id))
     ).all()
-    return _integrity_report(monitored=monitored, events=list(rows), org=org, session=session)
+    # The sitting's consent record travels with its circumstances (X04): this
+    # panel is where the monitoring is explained, so it is where the agreement to
+    # be monitored belongs. Absent for a sitting that predates consent, and the
+    # view says so rather than leaving a blank that reads as consent.
+    attempt = session.exec(
+        select(CandidateAttempt).where(
+            CandidateAttempt.invite_id == sub.invite_id,
+            CandidateAttempt.candidate_email == sub.candidate_email,
+        )
+    ).first()
+    return _integrity_report(
+        monitored=monitored, events=list(rows), org=org, session=session, attempt=attempt
+    )
 
 
 def _integrity_report(
-    *, monitored: bool, events: list[IntegrityEvent], org: Membership, session: Session
+    *,
+    monitored: bool,
+    events: list[IntegrityEvent],
+    org: Membership,
+    session: Session,
+    attempt: CandidateAttempt | None = None,
 ) -> IntegrityReportOut:
     """Shape stored signals into the interviewer's view: the summary counts first,
     then the timeline. The counts are derived here rather than stored so a new
@@ -4516,6 +4668,8 @@ def _integrity_report(
         )
     return IntegrityReportOut(
         monitored=monitored,
+        consent_at=attempt.consent_at if attempt is not None else None,
+        consent_version=attempt.consent_version if attempt is not None else None,
         summary=summary,
         risk=risk,
         events=[
@@ -4556,6 +4710,17 @@ async def submission_report(
     question = session.get(Question, sub.question_id)
     if question is None:
         raise HTTPException(status_code=404, detail=f"no question with id {sub.question_id!r}.")
+    # A report is rendered FROM the submitted code and the agent's payload, and
+    # erasure destroys both. Generating one anyway produces a document titled
+    # "[erased]" with an empty listing — a confusing artefact that also invites
+    # the reader to treat it as a record of the sitting. Refused with the same
+    # 409 shape as an ungraded submission: a state where there is nothing to
+    # render, not an error.
+    if privacy.is_erased(sub.candidate_email):
+        raise HTTPException(
+            status_code=409,
+            detail="this candidate's data was erased; there is no report to generate.",
+        )
 
     try:
         pdf = await agent_client.request_report(
@@ -4615,6 +4780,7 @@ def question_submissions(
                 submission_id=sub.id,
                 candidate_name=sub.candidate,
                 candidate_email=sub.candidate_email,
+                erased=privacy.is_erased(sub.candidate_email),
                 language=sub.language,
                 status=sub.status,
                 verdict=result.verdict if result else None,

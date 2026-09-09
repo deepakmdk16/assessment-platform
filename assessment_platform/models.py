@@ -65,6 +65,14 @@ class Organization(SQLModel, table=True):
     # End of the period Stripe has already been paid for: what the billing page
     # shows as the renewal (or, once cancellation is scheduled, the expiry) date.
     current_period_end: datetime | None = None
+    # How long this organisation keeps candidate data, in days (X03). None — the
+    # default — means "keep it until someone asks", which is the only honest
+    # default for a platform that cannot know its customers' legal obligations:
+    # a window picked here would start deleting a tenant's hiring record under
+    # them. Set it, and `privacy.purge_expired` anonymises every sitting older
+    # than the window on a schedule. Measured from when the candidate sat, not
+    # from when the invitation was sent.
+    retention_days: int | None = None
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 
@@ -449,6 +457,19 @@ class CandidateAttempt(SQLModel, table=True):
     candidate_email: str = Field(index=True)
     candidate_name: str | None = None
     started_at: datetime = Field(default_factory=_utcnow)
+    # Consent to being assessed and — when the sitting is monitored — to the
+    # proctoring signals being recorded (X04). Stamped at the same moment the
+    # attempt is created, because that is the only moment a candidate is asked;
+    # `consent_version` records *which* published policy they agreed to, so a
+    # later rewrite of the policy cannot retroactively claim their agreement.
+    # Null on rows created before this existed: those sittings genuinely have no
+    # recorded consent, and saying so is the point of the column.
+    consent_at: datetime | None = None
+    consent_version: str | None = None
+    # When this sitting's personal data was anonymised — by a data-subject
+    # request or by the organisation's retention window (X03). Also what keeps
+    # the retention job from re-erasing rows it has already done.
+    erased_at: datetime | None = None
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()
 

@@ -6,6 +6,13 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    // The policy pages import `docs/*.md?raw` (X04), which sits above this
+    // package. Vite's dev server refuses to read outside its root unless told
+    // otherwise — without this the documents build fine but 403 under `npm run
+    // dev` and fail to resolve under vitest, so the failure only appears where
+    // it is least expected. Scoped to the repository, which the dev server is
+    // already serving from.
+    fs: { allow: ['..'] },
     // Bind IPv4 loopback explicitly. Vite's default host is "localhost", which
     // Node 17+ resolves with verbatim DNS ordering — on macOS that puts ::1
     // first, so the dev server listens on [::1]:5173 ONLY. Every link the API

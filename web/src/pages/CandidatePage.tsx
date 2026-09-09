@@ -109,6 +109,10 @@ export function CandidatePage() {
   // From the liveness probe, so the gate screen knows whether to disclose
   // monitoring before the candidate identifies themselves.
   const [gateProctored, setGateProctored] = useState(true)
+  // Agreement to the privacy notice and terms (X04). The server refuses a
+  // sitting that begins without it; this only stops the candidate discovering
+  // that through an error message.
+  const [consented, setConsented] = useState(false)
 
   const [language, setLanguage] = useState<Language | ''>('')
   const [code, setCode] = useState('')
@@ -238,7 +242,7 @@ export function CandidatePage() {
     setGateError(null)
     setStarting(true)
     try {
-      const data = await api.startInvite(token, candidateEmail, candidateName)
+      const data = await api.startInvite(token, candidateEmail, candidateName, consented)
       setInvite(data)
       setDeadline(data.deadline ?? null)
       // Server-side drafts for the sitting (CX2). Best-effort: a failed fetch
@@ -350,6 +354,9 @@ export function CandidatePage() {
         candidate_email: candidateEmail,
         language,
         code,
+        // Carried so a submit that is itself the start of the sitting (a reload
+        // that lost the attempt, say) still records what they agreed to.
+        consent: consented,
       })
       integrity.flush()  // the sitting's last signals, before this page unmounts
       setStage('submitted')
@@ -466,13 +473,43 @@ export function CandidatePage() {
                 required
               />
             </div>
-            <button type="submit" className="btn submit block" disabled={starting}>
+            <div className="consent-check">
+              <input
+                id="candidate_consent"
+                type="checkbox"
+                checked={consented}
+                onChange={(e) => setConsented(e.target.checked)}
+              />
+              <label htmlFor="candidate_consent">
+                I’ve read the{' '}
+                <a href="/privacy" target="_blank" rel="noreferrer">
+                  privacy notice
+                </a>{' '}
+                and{' '}
+                <a href="/terms" target="_blank" rel="noreferrer">
+                  terms
+                </a>
+                , and I agree to my assessment
+                {gateProctored ? ' — including the monitoring described above — ' : ' '}
+                being recorded and shared with the interviewer.
+              </label>
+            </div>
+            <button type="submit" className="btn submit block" disabled={starting || !consented}>
               {starting
                 ? 'Starting…'
                 : gateProctored && fullscreenSupported()
                   ? 'Enter fullscreen & start'
                   : 'Start assessment'}
             </button>
+            <p className="gate-legal">
+              <a href="/privacy" target="_blank" rel="noreferrer">
+                Privacy
+              </a>
+              <span aria-hidden="true">·</span>
+              <a href="/terms" target="_blank" rel="noreferrer">
+                Terms
+              </a>
+            </p>
           </div>
         </form>
       </div>

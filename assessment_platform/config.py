@@ -331,6 +331,26 @@ STRIPE_PRICE_IDS = {
 }
 
 
+# --------------------------------------------------------------------------- #
+# Privacy: retention and consent (X03/X04)                                      #
+# --------------------------------------------------------------------------- #
+
+# How often the retention sweep runs. It only decides the *cadence* — what gets
+# erased is each organisation's own `retention_days`, and an organisation that
+# has set none is skipped, so this being on does not delete anything by itself.
+# <= 0 disables the background task; forced off under test, where the suite
+# drives `privacy.purge_expired` directly (same arrangement as the grading
+# reaper, and for the same reason: a background sweep racing the assertions
+# makes a test suite that fails at random).
+RETENTION_INTERVAL_S = 0 if TESTING else int(os.getenv("RETENTION_INTERVAL_S", "3600"))
+
+# Which published policy a candidate's recorded consent refers to. Stamped onto
+# `CandidateAttempt.consent_version` at the moment they agree, so a later
+# rewrite of the policy cannot retroactively claim their agreement to words they
+# never saw. Bump it whenever docs/PRIVACY.md changes materially.
+PRIVACY_POLICY_VERSION = os.getenv("PRIVACY_POLICY_VERSION", "2026-09-08")
+
+
 def billing_enabled() -> bool:
     """Whether checkout/portal can actually be reached.
 

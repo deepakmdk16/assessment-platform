@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { api, ApiError, setToken } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { BillingPanel } from '../components/BillingPanel'
+import { PrivacyPanel } from '../components/PrivacyPanel'
 
 export function SettingsPage() {
   const { user, refresh, logout } = useAuth()
@@ -174,6 +175,8 @@ export function SettingsPage() {
 
       <h2 className="section-title">Billing</h2>
       <BillingPanel />
+
+      <PrivacyPanel />
 
       <h2 className="section-title">Account</h2>
       <div className="card pad">

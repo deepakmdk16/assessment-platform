@@ -230,6 +230,10 @@ class AssessmentAttemptOut(BaseModel):
 
     candidate_name: str
     candidate_email: str
+    # As on SubmissionSummaryOut. Note that one person whose sittings expired on
+    # different days appears here as several erased rows: after the first
+    # erasure there is nothing left to recognise them by, which is the point.
+    erased: bool = False
     questions: list[AssessmentAttemptQuestionOut]
     passed_count: int
     total_count: int
@@ -378,6 +382,11 @@ class SubmissionOut(BaseModel):
     id: str
     question_id: str
     candidate: str
+    # As on SubmissionSummaryOut (X03). The detail view is reached by clicking a
+    # list row that already says "Erased candidate", so without this the two
+    # halves of one click-path disagree — and `code` arrives empty here with
+    # nothing to explain why.
+    erased: bool = False
     language: str
     code: str
     status: str
@@ -398,6 +407,10 @@ class SubmissionSummaryOut(BaseModel):
     question_id: str
     candidate: str
     candidate_email: str | None = None
+    # This candidate's data has been anonymised (X03). The name and address on
+    # this row are the tombstone, not a person — surfaces must say "erased"
+    # rather than render `erased-…@erased.invalid` as if it were reachable.
+    erased: bool = False
     language: str
     status: str
     agent_job_id: str | None
@@ -602,11 +615,40 @@ class InviteStatusOut(BaseModel):
 
 class CandidateStartIn(BaseModel):
     candidate_email: EmailStr
+    # Explicit agreement to be assessed and — when the sitting is monitored — to
+    # the proctoring signals being recorded (X04). Defaulted to False rather than
+    # made a required field so that a client which omits it is refused by the
+    # route with a sentence a candidate can act on, instead of by a 422 whose
+    # body is a validator dump. The route is what enforces it; this only carries
+    # the answer.
+    consent: bool = False
     # Anchored on the CandidateAttempt at first /start (A10) and reused for
     # every submission in the sitting. Optional so an old client that only
     # ever sent it at /submit keeps working; a fresh attempt just starts
     # nameless until the first submit's body backfills it.
     candidate_name: str | None = None
+
+
+class CandidateErasureOut(BaseModel):
+    """What a data-subject erasure actually touched (X03). Specific counts rather
+    than a bare 204, because the interviewer answering the request has to be able
+    to say what was done, and because a silent zero would otherwise look
+    identical to success."""
+
+    # Plain `str`, not `EmailStr`: this echoes back a path parameter, which can
+    # be any text a caller types. Validating it here would raise *after* the
+    # erasure had been committed, turning a completed request into a 500 — and
+    # the route deliberately answers 200-with-zeroes for an address it holds
+    # nothing for, so an unparseable one needs no special case.
+    candidate_email: str
+    erased: bool
+    submissions: int
+    results: int
+    attempts: int
+    slot_variants: int
+    integrity_events: int
+    drafts_deleted: int
+    invites_amended: int
 
 
 class InvitePublicOut(BaseModel):
@@ -641,6 +683,11 @@ class CandidateSubmitIn(BaseModel):
     # Which question this submits. None (or omitted) targets the invite's single
     # question; required for a multi-question assessment invite.
     question_id: str | None = None
+    # Only consulted when this submit is what *begins* the sitting — a caller
+    # that skipped /start. Once an attempt exists with consent recorded, the
+    # sitting is consented and this is ignored, so the normal flow never asks
+    # twice. See `api._get_or_start_attempt`.
+    consent: bool = False
 
 
 class CandidateSubmitOut(BaseModel):
@@ -735,6 +782,8 @@ class DashboardSubmissionOut(BaseModel):
     submission_id: str
     candidate_name: str
     candidate_email: str | None
+    # As on SubmissionSummaryOut: the name and address are a tombstone (X03).
+    erased: bool = False
     language: str
     status: str
     verdict: str | None = None
@@ -809,6 +858,9 @@ class AssessmentCandidateAnalyticsOut(BaseModel):
 
     candidate_name: str
     candidate_email: str
+    # As everywhere else (X03): the leaderboard must not rank a row labelled
+    # "[erased]" beside real names.
+    erased: bool = False
     passed_count: int
     submitted_count: int  # slots this candidate has submitted (for completion status)
     total_count: int
@@ -916,6 +968,13 @@ class IntegrityReportOut(BaseModel):
     — each event naming its own question."""
 
     monitored: bool  # false = this sitting ran unmonitored, so "no signals" means nothing
+    # What the candidate agreed to before this sitting began, and which published
+    # version of the policy they were shown (X04). Null for a sitting that
+    # predates consent being asked for — which is the honest answer, and the
+    # reason it is surfaced at all: the DPA claims consent is recorded, so the
+    # product has to be able to show it (or show that it is missing).
+    consent_at: datetime | None = None
+    consent_version: str | None = None
     summary: IntegritySummaryOut
     # Null only when there is nothing to score AND the sitting was unmonitored —
     # recorded events are always scored, whatever the flag says (suppressing real
@@ -937,6 +996,10 @@ class OrganizationOut(BaseModel):
     # "you are an admin of Acme, 3 people".
     role: str
     member_count: int
+    # The organisation's retention window in days, or null for "no policy set"
+    # (X03). Null is the default and is not the same as 0 — see
+    # `privacy.purge_expired`.
+    retention_days: int | None = None
 
 
 # Stripped before the length check, so "   " is rejected as the blank name it is
@@ -945,8 +1008,21 @@ class OrganizationOut(BaseModel):
 OrgName = Annotated[str, AfterValidator(lambda v: v.strip()), Field(min_length=1, max_length=120)]
 
 
+# A retention window a customer can actually mean. The floor of 1 day keeps 0
+# from being read as "delete everything immediately" by a mis-typed form, and
+# the ceiling of ~10 years is past any hiring-record obligation while still
+# refusing a value that is really a paste accident. Null (the default) is
+# separate from both: no policy configured, nothing is erased on a schedule.
+RetentionDays = Annotated[int, Field(ge=1, le=3650)]
+
+
 class OrganizationUpdate(BaseModel):
-    name: OrgName
+    """Both fields optional: the Privacy panel changes the retention window
+    without resending the name, and the route distinguishes an omitted field
+    from an explicit null via `model_fields_set`."""
+
+    name: OrgName | None = None
+    retention_days: RetentionDays | None = None
 
 
 class OrganizationCreate(BaseModel):

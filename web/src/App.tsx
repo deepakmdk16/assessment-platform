@@ -21,6 +21,7 @@ import { CandidatePage } from './pages/CandidatePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TeamPage } from './pages/TeamPage'
 import { JoinPage } from './pages/JoinPage'
+import { LegalPage } from './pages/LegalPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { CandidateErrorFallback, ErrorBoundary } from './components/ErrorBoundary'
 
@@ -37,6 +38,12 @@ export function App() {
           it is opened by people who have no account yet as often as by people
           who do. */}
       <Route path="/join" element={<JoinPage />} />
+      {/* The published policies (X04). Public: a candidate reads them from the
+          start gate, before identifying themselves, and a prospective customer
+          reads them before there is an account to protect. */}
+      <Route path="/privacy" element={<LegalPage doc="privacy" />} />
+      <Route path="/terms" element={<LegalPage doc="terms" />} />
+      <Route path="/dpa" element={<LegalPage doc="dpa" />} />
       <Route
         path="/t/:token"
         element={

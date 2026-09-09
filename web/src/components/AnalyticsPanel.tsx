@@ -331,7 +331,9 @@ function CrossCandidate({ data }: { data: AssessmentAnalytics }) {
               return (
                 <tr key={c.candidate_email}>
                   <td className={c.rank === 1 ? 'rank rank-1' : 'rank'}>{c.rank ?? '—'}</td>
-                  <td className="t-title">{c.candidate_name}</td>
+                  <td className="t-title">
+                    {c.erased ? 'Erased candidate' : c.candidate_name}
+                  </td>
                   <td className="num">{score(c.avg_score_pct, 0)}</td>
                   <td className="num">{percentileLabel(c.percentile)}</td>
                   <td className="num">
