@@ -68,6 +68,17 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://assessment:${POSTGRES_PASSWORD}@db:5432/assessment
       AGENT_BASE_URL: http://agent:8000
+      # The same four shared secrets the agent gets above, from the same
+      # substitution — stated here rather than left to `.env` so both services
+      # provably read ONE source. Sourcing the agent's from compose and the
+      # platform's from env_file looks equivalent and is not: any run where the
+      # two files differ (a --env-file override, say) leaves the platform
+      # sending no token and every trigger 401s at the agent with nothing in the
+      # platform's own log to say why.
+      ASSESS_API_TOKEN: ${ASSESS_API_TOKEN:?set ASSESS_API_TOKEN in .env}
+      CALLBACK_TOKEN: ${CALLBACK_TOKEN:?set CALLBACK_TOKEN in .env}
+      ASSESS_SIGNING_SECRET: ${ASSESS_SIGNING_SECRET:?set ASSESS_SIGNING_SECRET in .env}
+      CALLBACK_SIGNING_SECRET: ${CALLBACK_SIGNING_SECRET:?set CALLBACK_SIGNING_SECRET in .env}
       # Where the agent posts results back to. A hostname, so it passes the
       # agent's SSRF guard, which rejects literal private addresses.
       PLATFORM_BASE_URL: http://platform:9000
