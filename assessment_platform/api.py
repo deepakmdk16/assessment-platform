@@ -349,6 +349,7 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
         id=sub.id,
         question_id=sub.question_id,
         candidate=sub.candidate,
+        erased=privacy.is_erased(sub.candidate_email),
         language=sub.language,
         code=sub.code,
         status=sub.status,
@@ -4536,8 +4537,17 @@ def export_submissions(
         signals, blocked_pastes, risk = integrity[sub.id]
         writer.writerow(
             [
-                sub.id, sub.question_id, titles.get(sub.question_id, ""), sub.candidate,
-                sub.candidate_email or "", sub.language, sub.status,
+                sub.id,
+                sub.question_id,
+                titles.get(sub.question_id, ""),
+                # An erased row leaves the product with no identifier at all. The
+                # tombstone is an internal join key, not something to hand to a
+                # spreadsheet or an ATS import, where nobody sees the "Data
+                # erased" chip and the address looks deliverable.
+                "Erased candidate" if privacy.is_erased(sub.candidate_email) else sub.candidate,
+                "" if privacy.is_erased(sub.candidate_email) else (sub.candidate_email or ""),
+                sub.language,
+                sub.status,
                 r.verdict if r else "", r.score_pct if r else "", sub.late,
                 # Blank (not 0) when the sitting wasn't monitored — "nothing
                 # recorded" and "nothing to record" must not look alike.

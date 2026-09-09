@@ -212,15 +212,27 @@ export function SubmissionDetailPage() {
         <span className="tab on">Candidate solution</span>
         <span className="tab-meta">{sub.language}</span>
       </div>
-      <div className={`editor-wrapper${stacked ? ' editor-wrapper-review' : ''}`}>
-        <Editor
-          height="100%"
-          language={sub.language || undefined}
-          value={sub.code}
-          theme={monacoTheme(resolved)}
-          options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13 }}
-        />
-      </div>
+      {sub.erased ? (
+        // Erasure empties `code` (X03). An empty read-only editor looks like a
+        // candidate who submitted nothing, which is a different and much worse
+        // thing to believe about them than "this was destroyed on request".
+        <div className="editor-wrapper">
+          <p className="empty-state">
+            This candidate&rsquo;s data was erased. Their submitted code was destroyed and cannot
+            be recovered — the verdict and score below are what remains of the sitting.
+          </p>
+        </div>
+      ) : (
+        <div className={`editor-wrapper${stacked ? ' editor-wrapper-review' : ''}`}>
+          <Editor
+            height="100%"
+            language={sub.language || undefined}
+            value={sub.code}
+            theme={monacoTheme(resolved)}
+            options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13 }}
+          />
+        </div>
+      )}
     </>
   )
 
@@ -312,7 +324,7 @@ export function SubmissionDetailPage() {
         <span className="ide-title">{question?.title ?? sub.question_id}</span>
         <div className="ide-top-right">
           <span className="muted">
-            {sub.candidate} · {sub.language}
+            {sub.erased ? 'Erased candidate' : sub.candidate} · {sub.language}
           </span>
           {integrity && <IntegrityChip report={integrity} />}
           {sub.late && (

@@ -571,6 +571,9 @@ export interface SubmissionDetail {
   id: string
   question_id: string
   candidate: string
+  /** As on SubmissionSummary: this candidate has been erased, so `code` is
+   *  empty by destruction rather than because they submitted nothing. */
+  erased: boolean
   language: Language
   code: string
   status: string

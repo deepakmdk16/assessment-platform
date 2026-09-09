@@ -323,8 +323,37 @@ def test_every_interviewer_surface_reports_the_sitting_as_erased(client, monkeyp
 
     listed = client.get("/submissions").json()["items"]
     assert [row["erased"] for row in listed] == [True]
+    assert client.get(f"/submissions/{listed[0]['id']}").json()["erased"] is True
     quick = client.get("/questions/q1/submissions").json()["items"]
     assert [row["erased"] for row in quick] == [True]
+
+
+def test_the_csv_export_carries_no_tombstone(client, monkeypatch) -> None:
+    """The export is the surface that LEAVES the product. A tombstone landing in
+    a spreadsheet or an ATS import is read by someone who never saw the "Data
+    erased" chip, and `erased-a3f9@erased.invalid` looks deliverable enough to
+    paste into a mail client."""
+    _full_sitting(client, monkeypatch)
+    _erase(client)
+
+    body = client.get("/submissions/export").text
+    assert privacy.TOMBSTONE_DOMAIN not in body
+    assert privacy.ERASED_NAME not in body
+    assert "Erased candidate" in body
+
+
+def test_the_detail_view_agrees_with_the_list_it_was_reached_from(
+    client, monkeypatch
+) -> None:
+    """Clicking a row that says "Erased candidate" must not land on a page that
+    says "[erased]" — the two halves of one click-path have to agree."""
+    _token, sub_id = _full_sitting(client, monkeypatch)
+    _erase(client)
+    detail = client.get(f"/submissions/{sub_id}").json()
+    assert detail["erased"] is True
+    # Empty because it was destroyed, which is why the view has to say so: an
+    # empty editor otherwise reads as a candidate who submitted nothing.
+    assert detail["code"] == ""
 
 
 def test_a_live_sitting_is_not_reported_as_erased(client, monkeypatch) -> None:

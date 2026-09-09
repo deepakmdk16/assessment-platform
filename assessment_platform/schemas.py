@@ -382,6 +382,11 @@ class SubmissionOut(BaseModel):
     id: str
     question_id: str
     candidate: str
+    # As on SubmissionSummaryOut (X03). The detail view is reached by clicking a
+    # list row that already says "Erased candidate", so without this the two
+    # halves of one click-path disagree — and `code` arrives empty here with
+    # nothing to explain why.
+    erased: bool = False
     language: str
     code: str
     status: str
