@@ -158,6 +158,7 @@ forwarded link, not deliberate impersonation.
 | Method | Path                              | Auth        | Purpose                                                        |
 | ------ | --------------------------------- | ----------- | ------------------------------------------------------------- |
 | GET    | `/health`                         | none        | `{"status":"ok"}`                                             |
+| GET    | `/metrics`                        | metrics tok | Prometheus text exposition (job counts, stalled rows, grade latency). Fail-closed: 503 unless `METRICS_TOKEN` is set or `METRICS_AUTH_DISABLED=true`. Not proxied by nginx. |
 | POST   | `/auth/register`                  | none        | Register an interviewer → `{id,email,name,email_verified}` (409 if email taken, 422 weak/breached password); emails a confirmation link. |
 | POST   | `/auth/login`                     | none        | → `{access_token, token_type:"bearer"}` + refresh cookie (401 on bad creds). |
 | POST   | `/auth/refresh`                   | cookie      | → a new `{access_token}` and re-issued cookie (401 = not signed in). |

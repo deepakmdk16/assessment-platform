@@ -25,6 +25,7 @@ from test_api import _sample_question
 
 from assessment_platform import agent_client, config, observability, signing
 from assessment_platform import db as db_module
+from assessment_platform.api import app
 from assessment_platform.models import AssessmentResult, Submission
 
 MINTED = re.compile(r"^[0-9a-f]{16}$")
@@ -280,7 +281,10 @@ def test_query_string_filter_redacts_candidate_pii_by_default() -> None:
     assert "a@b.c" not in text
     assert "SECRET-TOKEN" not in text
     # The route is still identifiable — redaction, not deletion.
-    assert '"GET /invite/tok/draft?<redacted> HTTP/1.1" 200' in text
+    # The token is a path parameter and bearer-equivalent, so the path is
+    # redacted too — not just the query string it used to stop at.
+    assert '"GET /invite/<redacted>/draft?<redacted> HTTP/1.1" 200' in text
+    assert "tok" not in text.split("uvicorn.access")[1].split(" - ")[1]
 
 
 def test_query_string_filter_is_opt_out_under_log_pii(monkeypatch) -> None:
@@ -336,6 +340,53 @@ def test_metrics_exposes_every_series_even_at_zero(anon_client: TestClient) -> N
     assert samples["platform_grade_latency_seconds_count"] == 0
     assert samples["platform_grade_latency_seconds_sum"] == 0
     assert samples['platform_grade_latency_seconds_bucket{le="+Inf"}'] == 0
+
+
+def test_an_unhandled_500_still_carries_a_request_id() -> None:
+    """The one response the id exists for. Starlette's ServerErrorMiddleware sits
+    above every user middleware, so before the exception handler was added a real
+    crash — the same event Sentry files, and the only failure the SPA shows a
+    "(ref: …)" for — was the single response that lost the header."""
+
+    @app.get("/__boom_for_test")
+    def _boom() -> None:
+        raise RuntimeError("unhandled")
+
+    try:
+        # raise_server_exceptions=False so the client returns the 500 the way a
+        # browser would, instead of re-raising it into the test.
+        crashing = TestClient(app, raise_server_exceptions=False)
+        resp = crashing.get("/__boom_for_test", headers={"X-Request-Id": "crash-trace-1"})
+        assert resp.status_code == 500
+        assert resp.headers["X-Request-Id"] == "crash-trace-1"
+        # Fixed text: an unhandled exception's message is internal detail (P21).
+        assert resp.json() == {"detail": "internal error."}
+        assert "unhandled" not in resp.text
+    finally:
+        app.router.routes = [
+            r for r in app.router.routes if getattr(r, "path", None) != "/__boom_for_test"
+        ]
+
+
+def test_metrics_fails_closed_when_no_token_is_configured(
+    anon_client: TestClient, monkeypatch
+) -> None:
+    """It is the only route that reads across every organisation, so "forgot to
+    configure it" must not mean "served it to anyone who asked"."""
+    monkeypatch.setattr(config, "METRICS_TOKEN", "")
+    monkeypatch.setattr(config, "TESTING", False)
+    monkeypatch.setattr(config, "METRICS_AUTH_DISABLED", False)
+    resp = anon_client.get("/metrics")
+    assert resp.status_code == 503
+    assert "METRICS_TOKEN" in resp.json()["detail"]
+
+
+def test_metrics_opt_out_is_explicit(anon_client: TestClient, monkeypatch) -> None:
+    """Opening it up has to be said out loud, like the agent's ASSESS_AUTH_DISABLED."""
+    monkeypatch.setattr(config, "METRICS_TOKEN", "")
+    monkeypatch.setattr(config, "TESTING", False)
+    monkeypatch.setattr(config, "METRICS_AUTH_DISABLED", True)
+    assert anon_client.get("/metrics").status_code == 200
 
 
 def test_metrics_token_is_enforced_only_when_set(anon_client: TestClient, monkeypatch) -> None:
@@ -541,7 +592,12 @@ def test_scrub_event_strips_everything_a_candidate_owns() -> None:
     assert "data" not in request
     assert "cookies" not in request
     assert "query_string" not in request
-    assert request["url"] == "http://host/invite/TOK/submit"
+    # The invite token must not survive into an error report: it is
+    # bearer-equivalent, and erase_candidate amends the invite rather than
+    # deleting it, so a token sent to a third party stays live for an erased
+    # candidate and no erasure can reach it.
+    assert request["url"] == "http://host/invite/<redacted>/submit?<redacted>"
+    assert "TOK" not in request["url"]
     assert set(request["headers"]) == {"Host", "User-Agent", "Content-Type"}
     assert "user" not in scrubbed
     # The part worth reporting survives.

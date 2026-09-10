@@ -399,6 +399,10 @@ SENTRY_TRACES_SAMPLE_RATE = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0"))
 # also refuses /api/metrics outright, so the intended scrape is from inside the
 # compose network.
 METRICS_TOKEN = os.getenv("METRICS_TOKEN", "")
+# The explicit opt-out. `/metrics` is fail-closed (503 with no token) because it
+# is the one route that reads across every organisation; a dev box that wants it
+# open has to say so, exactly like the agent's ASSESS_AUTH_DISABLED.
+METRICS_AUTH_DISABLED = os.getenv("METRICS_AUTH_DISABLED", "").lower() in {"1", "true"}
 # How far back the grade-latency histogram looks. A scrape describes recent
 # behaviour; including every grade since launch would flatten a live regression
 # into a year of history.

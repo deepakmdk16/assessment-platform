@@ -53,6 +53,7 @@ unresolved, terminate.
 | [EMAIL PROVIDER] | Invitation and notification delivery | [REGION] |
 | Stripe | Payment processing (Authorised User billing data only) | [REGION] |
 | [HOSTING PROVIDER] | Application and database hosting | [REGION] |
+| [ERROR REPORTING PROVIDER] | Crash and error reports, when `SENTRY_DSN` is configured (X08). Submitted code, request bodies, cookies, query strings and invite tokens are stripped before an event is sent; a report can still carry the URL path and the timing of a candidate's request. Omit this row if error reporting is not enabled. | [REGION] |
 
 Each is engaged under written terms imposing obligations no less protective than
 these. The Processor remains liable for their performance.

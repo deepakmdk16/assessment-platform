@@ -140,7 +140,7 @@ services:
       # them here keeps the platform's half of the surface readable beside the
       # agent's, which has no env_file and depends on being listed. The defaults
       # match config.py, so an existing .env keeps behaving exactly as it did.
-      # METRICS_TOKEN guards GET /metrics only when set — worth setting, because
+      # METRICS_TOKEN guards GET /metrics, which is fail-closed (503 without it):
       # per-status submission counts are a tenant's hiring volume (nginx refuses
       # /api/metrics from outside either way; see web/nginx.conf.template).
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -148,6 +148,7 @@ services:
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
+      METRICS_AUTH_DISABLED: ${METRICS_AUTH_DISABLED:-false}
     depends_on:
       db:
         condition: service_healthy

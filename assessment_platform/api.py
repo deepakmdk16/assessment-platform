@@ -325,6 +325,29 @@ async def _request_context(request: Request, call_next: Any) -> Any:
     return response
 
 
+@app.exception_handler(Exception)
+async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+    """Turn a crash into a 500 that still carries its request id.
+
+    Starlette's ServerErrorMiddleware sits ABOVE every user middleware, so an
+    unhandled exception propagated past `_request_context` before it could stamp
+    the header: the one response the correlation id exists for — a genuine crash,
+    which is also the event Sentry files — was the one response that lacked it,
+    and the SPA's "(ref: …)" never fired for it. An exception handler runs inside
+    that middleware and can, so it is the only place this can be fixed.
+
+    The body is deliberately fixed text. An unhandled exception's message is
+    internal detail (open item P21) and a candidate is the wrong audience for it;
+    the id is what makes the report actionable instead.
+    """
+    logger.exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "internal error."},
+        headers={observability.REQUEST_ID_HEADER: observability.current_request_id()},
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Serialization helpers                                                         #
 # --------------------------------------------------------------------------- #
@@ -567,15 +590,28 @@ def health(session: Session = Depends(get_session)) -> dict:
 
 
 def _require_metrics_token(x_assess_token: str | None = Header(default=None)) -> None:
-    """Guard the scrape with a shared secret, when one is configured.
+    """Guard the scrape with a shared secret. Fail-closed.
 
-    Same enforced-only-when-set shape as `_require_callback_token` (unset => open,
-    for dev and tests). Worth setting in production: the default deploy proxies
-    every `/api/` path straight from the internet, and per-status job counts are
-    a tenant's submission volume.
+    Deliberately NOT the enforced-only-when-set shape of `_require_callback_token`.
+    This is the only route in the service that reads `Submission` and
+    `AssessmentResult` with no `org_id` filter and no `get_current_membership` —
+    it sums every organisation's volume and pass rate — so "forgot to configure
+    it" must not mean "served it to anyone who asked". The agent's equivalent
+    made the same call for the same reason (see its `_require_token`): an
+    unconfigured secret is a 503, and opening it up has to be said out loud.
     """
     expected = config.METRICS_TOKEN
-    if expected and not _secret_matches(x_assess_token, expected):
+    if not expected:
+        if config.TESTING or config.METRICS_AUTH_DISABLED:
+            return
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "metrics auth is not configured: set METRICS_TOKEN, or set "
+                "METRICS_AUTH_DISABLED=true to scrape without auth (dev only)."
+            ),
+        )
+    if not _secret_matches(x_assess_token, expected):
         raise HTTPException(status_code=401, detail=f"invalid or missing {config.AUTH_HEADER}.")
 
 

@@ -85,7 +85,8 @@ settings under its own `ASSESS_` names, because it reads only those:
 | `SENTRY_ENVIRONMENT` | `ASSESS_SENTRY_ENVIRONMENT` | `production` | The label every event is filed under |
 | `SENTRY_RELEASE` | `ASSESS_SENTRY_RELEASE` | unset | Which build an error came from, typically the deployed git sha |
 | `SENTRY_TRACES_SAMPLE_RATE` | `ASSESS_SENTRY_TRACES_SAMPLE_RATE` | `0` | Performance tracing, off by default: it is the costly half of Sentry and the half that samples request data |
-| `METRICS_TOKEN` | — (uses `ASSESS_API_TOKEN`) | unset | Shared secret for `GET /metrics`; unset leaves the scrape unauthenticated |
+| `METRICS_TOKEN` | — (uses `ASSESS_API_TOKEN`) | unset | Shared secret for `GET /metrics`. **Fail-closed:** unset means the route 503s, because it is the only one that reads across every organisation |
+| `METRICS_AUTH_DISABLED` | — (agent: `ASSESS_AUTH_DISABLED`) | `false` | The explicit opt-out for a dev box that wants an unauthenticated scrape |
 | `METRICS_WINDOW_S` | — | `86400` | How far back the platform's grade-latency histogram looks |
 | `METRICS_MAX_SAMPLES` | — | `5000` | Ceiling on rows one scrape reads for that histogram. A busy deployment hits this before the window, so the histogram then covers less than `METRICS_WINDOW_S` |
 
@@ -349,3 +350,4 @@ where they bite:
 | A UI change did not appear | `VITE_*` values are baked at build time; rebuild `web` |
 | `/api/metrics` returns 404 from outside | By design — nginx refuses it. Scrape from inside the network (§4) |
 | The metrics scrape 401s | `METRICS_TOKEN` (platform) or `ASSESS_API_TOKEN` (agent) does not match the header sent |
+| The metrics scrape 503s | No token is configured. Both services are fail-closed here: set `METRICS_TOKEN` / `ASSESS_API_TOKEN`, or `METRICS_AUTH_DISABLED=true` on a dev box |

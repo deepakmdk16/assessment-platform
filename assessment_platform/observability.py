@@ -106,15 +106,33 @@ class RequestIdFilter(logging.Filter):
         return True
 
 
-class QueryStringFilter(logging.Filter):
-    """Redact the query string from uvicorn's access lines unless LOG_PII is on.
+# The invite token is a PATH parameter on every candidate route
+# (/invite/{token}/...), and README calls it bearer-equivalent. A query string is
+# not the only place a secret travels in a URL, so both the access log and the
+# Sentry scrub go through one redactor rather than each solving half of it.
+_TOKEN_IN_PATH = re.compile(r"(/invite/)[^/?]+")
 
-    A candidate's email address and their invite token both travel in a query
-    string today (open item P08), and uvicorn logs the request line verbatim
-    regardless of LOG_PII. Structured access logs are precisely what gets shipped
-    to an aggregator, so X08 must not be the change that turns that leak
-    machine-readable. This narrows P08; it does not close it — the token is still
-    in the URL, and so still in a proxy's logs and the browser's history.
+
+def redact_url(url: str) -> str:
+    """Strip the query string and mask the invite token in a URL or path.
+
+    Correlation is what the request id is for now; a URL in a log line or a crash
+    report does not need to carry a live credential to be useful.
+    """
+    path, separator, _query = url.partition("?")
+    return _TOKEN_IN_PATH.sub(r"\1<redacted>", path) + ("?<redacted>" if separator else "")
+
+
+class QueryStringFilter(logging.Filter):
+    """Redact secrets from uvicorn's access lines unless LOG_PII is on.
+
+    Two of them: the candidate's email in a query string (open item P08) and the
+    invite token in the path of every candidate route. uvicorn logs the request
+    line verbatim regardless of LOG_PII, and structured access logs are precisely
+    what gets shipped to an aggregator — so X08 must not be the change that turns
+    either leak machine-readable. This narrows P08; it does not close it, since
+    the token still travels in the URL and so still reaches a proxy's logs and
+    the browser's history.
 
     Coupled to uvicorn's access-log call, whose args are
     `(client_addr, method, full_path, http_version, status_code)`. A test pins
@@ -130,10 +148,10 @@ class QueryStringFilter(logging.Filter):
         if not isinstance(args, tuple) or len(args) <= self._PATH_ARG:
             return True
         path = args[self._PATH_ARG]
-        if not isinstance(path, str) or "?" not in path:
+        if not isinstance(path, str):
             return True
         redacted = list(args)
-        redacted[self._PATH_ARG] = path.split("?", 1)[0] + "?<redacted>"
+        redacted[self._PATH_ARG] = redact_url(path)
         record.args = tuple(redacted)
         return True
 
@@ -247,8 +265,12 @@ def _scrub_event(event: Event, _hint: dict[str, Any]) -> Event:
                 name: value for name, value in headers.items() if name.lower() in _SAFE_HEADERS
             }
         url = request.get("url")
-        if isinstance(url, str) and "?" in url:
-            request["url"] = url.split("?", 1)[0]
+        if isinstance(url, str):
+            # The query string AND the invite token in the path. Without this an
+            # ordinary 500 on a candidate route hands a third party a live
+            # bearer-equivalent credential — one that erasure cannot reach,
+            # because erase_candidate amends the invite rather than deleting it.
+            request["url"] = redact_url(url)
     event.pop("user", None)
     return event
 

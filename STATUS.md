@@ -107,6 +107,36 @@ archiving does not stop links.**
   candidate who never sees the invitation silently misses the interview.
   _Verified: templates and Reply-To landed with X07's code half; the rest is a
   purchase and three DNS records._
+- **X31 · P2 · XS — The agent's scrape reuses its code-execution credential.**
+  `docs/DEPLOY.md` §4 tells an operator to scrape the agent with
+  `ASSESS_API_TOKEN` — the same secret that authorises `POST /assessments`. So a
+  Prometheus configured as documented holds arbitrary-code-execution rights on
+  the worker. The platform got a dedicated `METRICS_TOKEN` for exactly this
+  separation and the agent did not. Fix: a read-only `ASSESS_METRICS_TOKEN` the
+  `/metrics` dependency accepts alongside the main token, and update §4.
+  _Verified: raised by X08's integration check; DEPLOY.md:183 reads the token._
+
+- **X32 · P2 · XS — `platform_submissions_stalled` reads zero when the reaper's
+grace is disabled, disarming the alert DEPLOY.md names first.**
+  With `REAP_RUNNING_AFTER_S=0` or `TRIGGER_RETRY_AFTER_S=0` (a supported config —
+  `<= 0` means "leave those rows alone") the gauge skips the same rows the reaper
+  skips, so it reports healthy while submissions strand forever. It mirrors the
+  reaper faithfully, which is the bug: the metric exists to say the reaper is not
+  working. `platform_submissions{status=running}` still rises, so it is
+  detectable, but the prescribed alert never fires and no doc says so. Fix: count
+  stranded rows against a floor independent of the grace, or expose the disabled
+  state as its own series.
+  _Verified: raised by X08's integration check; api.py's `grace > 0` guard._
+
+- **X33 · P2 · XS — A `/metrics` scrape during a DB outage files a Sentry event
+per scrape.**
+  `/health` catches the DB failure and raises a handled 503; `/metrics` lets it
+  propagate to the new unhandled-exception handler, which logs at ERROR and (with
+  a DSN set) reports. At a 15-second scrape interval that is an error storm and a
+  quota burn at the exact moment the service is least healthy. Fix: catch the DB
+  error in `metrics` and 503 the way `health` does.
+  _Verified: raised by X08's integration check._
+
 - **X30 · P2 · S — Nothing scrapes `/metrics`, and no alert fires off it.**
   Both services now expose Prometheus text exposition (X08), but the compose
   stack has no scraper and no alerting: the numbers exist and nobody is
@@ -153,7 +183,7 @@ archiving does not stop links.**
   drill table is empty. Why: the agent is stateless, so this database is the
   entire product record; losing it is unrecoverable by any other means. Fix:
   managed Postgres with PITR at 30 days, an independent weekly dump to separate
-  storage, alerting on backup failure (ties to X08), and one actual restore
+  storage, alerting on backup failure (ties to X30), and one actual restore
   drill recorded in the table.
   _Verified: opened by this change; source: saas._
 - **X22 · P2 · S — An interviewer's own submissions are outside erasure and
