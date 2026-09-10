@@ -1,0 +1,32 @@
+# Shared by both builds in this repo (the platform API image from `Dockerfile`,
+# and the web image from `web/Dockerfile`, whose context is also this directory
+# because the SPA imports ../docs/*.md — see web/src/legal.ts).
+.git
+.github
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.serena/
+
+# Local SQLite databases. dev.db alone is ~185 MB — without this line every
+# build ships it into the context and the image.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Real secrets. The image takes its configuration from the environment at run
+# time (docker-compose.yml `env_file:`), never from a baked-in .env.
+.env
+.env.*
+!.env.example
+
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+web/blob-report/
+tests/

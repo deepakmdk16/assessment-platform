@@ -1,0 +1,92 @@
+# Serves the built SPA and fronts the API on one origin (see web/Dockerfile for
+# why they share an origin rather than the browser calling the API directly).
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Who is allowed to tell us the client's address. Defaults to loopback,
+    # i.e. "trust nobody" — correct when nginx is itself the edge. Behind a TLS
+    # terminator set TRUSTED_PROXY_CIDR to that terminator's address or subnet,
+    # or the platform rate-limits every caller as if they were the terminator.
+    set_real_ip_from ${TRUSTED_PROXY_CIDR};
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # The API. The rewrite strips the /api prefix, so /api/auth/refresh reaches
+    # the platform as /auth/refresh — the paths web/src/api.ts builds against
+    # VITE_API_BASE_URL=/api.
+    location /api/ {
+        # Resolve `platform` per request rather than once at startup. With a
+        # literal hostname in proxy_pass, nginx resolves it when it loads the
+        # config and caches that address forever — so the first time the
+        # platform container restarts (it is `restart: unless-stopped`) and
+        # comes back on a different address, every API call 502s until nginx is
+        # restarted too. 127.0.0.11 is Docker's embedded DNS; the variable in
+        # proxy_pass is what defers the lookup, and it is also why the prefix
+        # has to be stripped by an explicit rewrite instead of by a trailing
+        # slash (nginx does that rewrite only for a literal proxy_pass URI).
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $upstream http://platform:9000;
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        # ratelimit.py trusts the RIGHTMOST X-Forwarded-For entry, so that entry
+        # has to BE the client. Sending $remote_addr alone (rather than
+        # appending to whatever arrived) discards any client-forged prefix.
+        #
+        # Appending would be wrong the moment DEPLOY.md's own advice is
+        # followed: with a TLS terminator in front, the appended peer is the
+        # TERMINATOR, so every caller in the deployment collapses into one
+        # rate-limit bucket and the first few exhaust it for everybody. The
+        # realip block above is what keeps $remote_addr meaning "the client"
+        # in that setup — set TRUSTED_PROXY_CIDR to the terminator.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # The refresh cookie is scoped Path=/auth by the API (auth.py,
+        # REFRESH_COOKIE_PATH). The browser is talking to /api/auth/... here, and
+        # a cookie stored at /auth is never sent to /api/auth — so without this
+        # rewrite login appears to work and the session silently dies on the
+        # next reload, which is the exact failure putting the app and the API on
+        # one origin was meant to prevent. Covers the logout clear too: that is
+        # a Set-Cookie on the same path.
+        proxy_cookie_path /auth /api/auth;
+        # Match MAX_BODY_BYTES (config.py, 4 MB default). nginx's own default is
+        # 1 MB, which would reject a large submission here with a bare 413
+        # instead of the API's own error.
+        client_max_body_size 4m;
+        # Drafting a question calls the agent's LLM path; AGENT_DRAFT_TIMEOUT_S
+        # is 240 s, so a shorter read timeout here would 504 a request the
+        # platform is still legitimately waiting on.
+        proxy_read_timeout 300s;
+    }
+
+    # Vite emits content-hashed filenames under /assets, so they can be cached
+    # indefinitely — this is what keeps the ~3.7 MB monaco chunk off the wire on
+    # every visit (see the manualChunks comment in vite.config.ts).
+    location /assets/ {
+        # One header, not two: `expires` emits its own Cache-Control, and an
+        # intermediary that reads only the first would miss `immutable` and
+        # revalidate the 3.7 MB monaco chunk this block exists to pin.
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    # index.html itself must never be cached: it names the hashed bundles, so a
+    # stale copy pins the browser to a deployment that no longer exists.
+    location = /index.html {
+        add_header Cache-Control "no-store";
+    }
+
+    # Client-side routing: every unknown path is a react-router route.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

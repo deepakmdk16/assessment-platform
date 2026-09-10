@@ -12,7 +12,11 @@ Priority: **P0** blocks taking money or endangers customers · **P1** first payi
 customers hit it · **P2** fix before scale · **P3** polish.
 Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data + API + UI.
 
-**Sequence:** (1) deploy + ops (X05, X08, P26, X11) · (2) the rest by priority.
+**Sequence:** (1) deploy + ops (X08, P26, X11) · (2) the rest by priority.
+The stack is deployable — `docker-compose.yml` + `docs/DEPLOY.md` (X05) — but
+it is unobserved (X08) and unbacked-up (X20), so those come before real
+candidates, and the agent still needs a host that allows privileged
+containers (A07).
 Privacy (X03, X04) is built; X19 is the legal review it still waits on before
 anyone is charged. Result delivery (X06 + X23) is done end to end — email, a
 signed per-org webhook, and the settings panel that configures it. X07's code
@@ -36,16 +40,6 @@ archiving does not stop links.**
   `onRevoke`, so the web half is one prop once the routes exist.
   _Verified: live run in this audit; source: backend,frontend,live. Expiry and the
   status column landed 2026-09-08._
-- **X05 · P1 · M — No platform container, prod entrypoint, migration-on-start, or
-compose; the agent needs a privileged host.**
-  Evidence: only AssesmentAgent/Dockerfile exists; no Dockerfile for the platform or
-  web, no compose/helm/fly/render/railway/Procfile; scripts/dev.sh:18 runs alembic
-  upgrade head for dev only; the agent Dockerfile requires --privileged
-  --cgroupns=host (Dockerfile:9-19). Why: first deploy is hand-assembled; a
-  forgotten migration 500s; hosting choice is constrained. Fix: platform Dockerfile
-  (uv + alembic upgrade head && uvicorn), static web build behind nginx,
-  docker-compose wiring agent (privileged) + platform + Postgres; docs/DEPLOY.md.
-  _Verified: cited lines read in this audit; source: saas._
 - **X24 · P2 · S — The results webhook's SSRF gate is TOCTOU.**
   Evidence: `notify.webhook_url_error` resolves the host and refuses private
   addresses, then `httpx.post` resolves it again independently — a name with a
@@ -539,19 +533,9 @@ layout shift while analytics load.**
 
 ## Deploy-time env
 
-Until docs/DEPLOY.md exists (X05), the settings a deploy must not miss:
-
-- **`REGISTRATION_CODE`** — unset by default, which leaves interviewer sign-up open.
-  Must be set in production. It gates only *founding a new
-  organisation*; joining an existing one goes through an org invite, which is its
-  own credential. **XS.**
-- **`TRUST_PROXY_HEADERS=true`** behind a proxy or load balancer. Without it every
-  caller arrives from the proxy's address and all rate-limit buckets collapse into
-  one, so the first few callers exhaust the limit for everyone.
-- **`RATE_LIMIT_BACKEND=db`** for any multi-worker deploy. With `memory`, counters
-  are per process and N workers silently multiply every limit by N.
-- **SMTP** — the API now refuses to boot without a complete mailer, so this one
-  fails loudly rather than needing a checklist.
+Moved to `docs/DEPLOY.md`, which now carries the full list: what compose sets
+for you, what only the operator can supply (`REGISTRATION_CODE`, SMTP, Stripe),
+and the two settings TLS changes (`COOKIE_SECURE`, `TRUST_PROXY_HEADERS`).
 
 ## Unscheduled ideas
 
