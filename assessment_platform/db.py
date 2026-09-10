@@ -42,8 +42,14 @@ def _sqlite_enforce_foreign_keys(dbapi_connection: Any, _connection_record: Any)
 
 
 def make_engine(url: str = DATABASE_URL) -> Engine:
+    """Build the engine. `pool_pre_ping` matters once the database is over a
+    network and can restart independently (the deployed Postgres does): pooled
+    connections survive in the pool as dead sockets, and the next request on
+    each raises "server closed the connection unexpectedly" — a 500 per pooled
+    connection after every database restart. The pre-ping trades one cheap
+    round trip per checkout for that. Harmless on SQLite."""
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    return create_engine(url, connect_args=connect_args)
+    return create_engine(url, connect_args=connect_args, pool_pre_ping=True)
 
 
 engine: Engine = make_engine()

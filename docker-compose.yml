@@ -13,8 +13,19 @@
 # addressable from outside, and the API is reached through nginx so that the app
 # and the API share one origin (see web/nginx.conf).
 
+# Until X08 lands, `docker compose logs` is the whole observability story — and
+# the default json-file driver has no ceiling, so on the single VM this targets
+# it grows until it fills the disk the pgdata volume is on. Postgres then cannot
+# write WAL, and "no metrics" turns into losing the product record.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
+    networks: [backend]
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: assessment
@@ -24,20 +35,27 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       # The platform waits on this: it runs `alembic upgrade head` at boot, and
-      # that fails outright against a database still initialising.
-      test: ["CMD-SHELL", "pg_isready -U assessment -d assessment"]
+      # that fails outright against a database still initialising. Probe over
+      # TCP (-h): during initdb the image runs a temporary server bound to the
+      # unix socket ONLY, and a socket-based pg_isready answers 0 there — the
+      # platform would be released early and hit "connection refused" on 5432.
+      test: ["CMD-SHELL", "pg_isready -U assessment -d assessment -h 127.0.0.1"]
       interval: 5s
       timeout: 5s
       retries: 20
+      start_period: 30s
+    logging: *logging
     restart: unless-stopped
 
   agent:
+    networks: [grading]
     build:
       context: ${AGENT_CONTEXT:-../AssesmentAgent}
     # nsjail needs namespace + cgroup privileges to build the jail; without them
     # every run fails loudly rather than executing untrusted code unsandboxed
     # (ASSESS_SANDBOX=nsjail is set in the agent's Dockerfile). This is why the
-    # agent needs a host that allows privileged containers — see STATUS.md A07.
+    # agent needs a host that allows privileged containers — see
+    # ../AssesmentAgent/STATUS.md A07.
     privileged: true
     cgroup: host
     environment:
@@ -52,13 +70,16 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # Pin the provider. Left unset, the agent auto-selects Ollama whenever
       # ANTHROPIC_API_KEY is absent and then fails every LLM call in a container
-      # that has no Ollama — STATUS.md A02. Pinning it here is the deployment
+      # that has no Ollama — ../AssesmentAgent/STATUS.md A02. Pinning it here
+      # is the deployment
       # half of that workaround; the code fix is still open.
       ASSESS_LLM_PROVIDER: ${ASSESS_LLM_PROVIDER:-anthropic}
       ASSESS_TRUST_PROXY_HEADERS: "false"
+    logging: *logging
     restart: unless-stopped
 
   platform:
+    networks: [edge, backend, grading]
     build:
       context: .
     # Everything not wired below — SMTP, JWT_SECRET, Stripe, rate limits — comes
@@ -101,22 +122,40 @@ services:
         condition: service_healthy
       agent:
         condition: service_started
+    logging: *logging
     restart: unless-stopped
 
   web:
+    networks: [edge]
     build:
       context: .
       dockerfile: web/Dockerfile
       args:
         # Baked into the bundle at build time — changing it needs a rebuild.
         VITE_API_BASE_URL: /api
-        VITE_PRODUCT_NAME: ${VITE_PRODUCT_NAME:-}
+        VITE_PRODUCT_NAME: ${VITE_PRODUCT_NAME:-assess.dev}
+    environment:
+      # Whose X-Forwarded-For nginx believes. Loopback (trust nobody) is right
+      # when nginx is the edge; behind a TLS terminator this must be that
+      # terminator, or every caller shares one rate-limit bucket.
+      TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-127.0.0.1}
     ports:
       - "${WEB_PORT:-80}:80"
     depends_on:
       platform:
         condition: service_started
+    logging: *logging
     restart: unless-stopped
+
+networks:
+  # The agent executes untrusted code, so it is deliberately NOT on the database
+  # network: code that escapes the jail can still reach whatever its container
+  # can, and that must not include the product record. It shares `grading` with
+  # the platform only, which is the minimum the callback needs. `edge` is nginx
+  # to the API; `backend` is the API to Postgres.
+  edge:
+  backend:
+  grading:
 
 volumes:
   pgdata:

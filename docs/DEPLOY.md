@@ -60,8 +60,12 @@ Also required by the application itself, and equally non-optional:
 
 - **`JWT_SECRET`** — sessions are forgeable without it.
 - **SMTP** — the API refuses to boot without a complete mailer, because a server
-  that cannot send mail accepts invites it then silently never delivers. See
-  `.env.example`; `ALLOW_UNCONFIGURED_EMAIL=true` is for offline dev only.
+  that cannot send mail accepts invites it then silently never delivers. Note
+  the preflight checks that the five variables are *present*, not that they
+  work: `.env.example` ships the Gmail placeholders uncommented, so a
+  straight `cp` boots a server whose every send then fails at the provider.
+  Replace them, and send yourself one invite before trusting it.
+  `ALLOW_UNCONFIGURED_EMAIL=true` is for offline dev only.
 - **`REGISTRATION_CODE`** — unset leaves interviewer sign-up open to the world.
   It gates only *founding a new organisation*; joining an existing one goes
   through an org invite, which is its own credential.
@@ -69,22 +73,26 @@ Also required by the application itself, and equally non-optional:
   degrade; the agent reports quality as unavailable.
 - **Stripe keys** if you are charging (`.env.example` → billing).
 
-The values Compose sets itself — `DATABASE_URL`, `AGENT_BASE_URL`,
-`PLATFORM_BASE_URL`, `FRONTEND_BASE_URL`, `TRUST_PROXY_HEADERS`,
-`RATE_LIMIT_BACKEND`, `AUTO_CREATE_TABLES`, `COOKIE_SECURE` — override `.env`,
-because they are only correct inside this network. Change them in
-`docker-compose.yml`, not in `.env`, or your edit will appear to do nothing.
+The values Compose hardcodes — `DATABASE_URL`, `AGENT_BASE_URL`,
+`PLATFORM_BASE_URL`, `TRUST_PROXY_HEADERS`, `RATE_LIMIT_BACKEND`,
+`AUTO_CREATE_TABLES` — override `.env`, because they are only correct inside
+this network. Change them in `docker-compose.yml`, not in `.env`, or your edit
+will appear to do nothing. `COOKIE_SECURE`, `WEB_PORT`, `TRUSTED_PROXY_CIDR`,
+`VITE_PRODUCT_NAME` and `PUBLIC_BASE_URL` are the opposite — compose reads them
+*from* `.env`, so set those there.
 
 ## 2. Bring it up
 
 ```bash
 docker compose up -d --build
-docker compose ps          # every service healthy
+docker compose ps          # db, platform and web report (healthy)
 docker compose logs -f platform
 ```
 
 The first build takes a while: the agent compiles nsjail from source and
-installs eight language toolchains.
+installs eight language toolchains. The agent shows `running` rather than
+`(healthy)` — its image defines no health probe; the platform's own boot would
+fail if the agent were unreachable.
 
 `platform` waits for Postgres to pass `pg_isready`, then runs
 `alembic upgrade head` before binding its port. A failed migration is a boot
@@ -114,11 +122,19 @@ Two settings depend on this and are wrong by default without it:
   derivation would drop `Secure` from the session cookie. Set it to `false` only
   for a plain-`http` trial — a browser drops a `Secure` cookie sent over http,
   and the session then silently never persists.
-- **`TRUST_PROXY_HEADERS=true`** assumes exactly **one** hop in front of the API.
-  `ratelimit.py` trusts the rightmost `X-Forwarded-For` entry, which is the one
-  nginx appended. Adding a CDN in front of your terminator makes that entry the
-  terminator rather than the client, and every caller shares one rate-limit
-  bucket again.
+- **`TRUSTED_PROXY_CIDR`** must name your terminator. `ratelimit.py` trusts the
+  rightmost `X-Forwarded-For` entry, and nginx sets that entry to `$remote_addr`
+  — which is the *terminator* until nginx is told to believe the terminator's
+  own `X-Forwarded-For`. Leave it at the loopback default behind TLS and every
+  caller in the deployment shares one rate-limit bucket, so the first few
+  failed logins lock out everybody:
+
+  ```
+  TRUSTED_PROXY_CIDR=10.0.0.0/8      # or the terminator's exact address
+  ```
+
+  With a CDN in front of the terminator, list the chain — `real_ip_recursive`
+  is on, so nginx walks left past every address you have declared trusted.
 
 ## Upgrading
 
@@ -154,8 +170,12 @@ where they bite:
   *before* real candidates exist.
 - **No metrics, tracing or error reporting** (X08). Failed callbacks, grading
   latency and error rates are visible only in `docker compose logs`.
-- **Timestamps are timezone-naive** (P14). Correct on Postgres today because
-  everything is written in UTC, but it is an unguarded invariant.
+- **Timestamps are timezone-naive** (P14), and nothing pins the session time
+  zone. This compose stack is correct only because both images happen to default
+  to UTC (verified: `SHOW timezone` = UTC in `db`, `time.tzname` = UTC in
+  `platform`). Point `DATABASE_URL` at a managed Postgres in another zone, or set
+  `TZ` on either container, and every deadline and expiry shifts by that offset
+  with nothing to catch it. Until P14 closes, keep both on UTC.
 - **Rate limits are per-IP, not per-tenant** (X09). An office behind one NAT
   shares a bucket.
 - **The agent's LLM provider is pinned to `anthropic`** in `docker-compose.yml`.
