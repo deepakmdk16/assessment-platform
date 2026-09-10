@@ -13,10 +13,17 @@
 # addressable from outside, and the API is reached through nginx so that the app
 # and the API share one origin (see web/nginx.conf).
 
-# Until X08 lands, `docker compose logs` is the whole observability story — and
-# the default json-file driver has no ceiling, so on the single VM this targets
+# The default json-file driver has no ceiling, so on the single VM this targets
 # it grows until it fills the disk the pgdata volume is on. Postgres then cannot
-# write WAL, and "no metrics" turns into losing the product record.
+# write WAL, and a logging default turns into losing the product record. 10m x 5
+# is that ceiling, per container.
+#
+# X08 means logs are no longer the whole observability story — there are metrics
+# and error reporting now — but they are still where an incident is actually
+# reconstructed, and LOG_FORMAT=json makes every line several times larger than
+# the text line it replaces. The same 50 MB therefore buys noticeably less
+# history: an operator who turns JSON on should raise max-size or ship the lines
+# off the box, rather than assume the retention here is unchanged.
 x-logging: &logging
   driver: json-file
   options:
@@ -75,6 +82,18 @@ services:
       # half of that workaround; the code fix is still open.
       ASSESS_LLM_PROVIDER: ${ASSESS_LLM_PROVIDER:-anthropic}
       ASSESS_TRUST_PROXY_HEADERS: "false"
+      # Observability (X08). This service has no `env_file:`, so a variable that
+      # is not named here never reaches it — and the agent reads ASSESS_-prefixed
+      # names, so the unprefixed LOG_FORMAT/SENTRY_DSN the platform reads from
+      # .env are invisible to it. Every one has a default: a required variable
+      # here would break `docker compose up` for an operator upgrading with an
+      # existing .env. Unset DSN = Sentry never initialises.
+      ASSESS_LOG_LEVEL: ${ASSESS_LOG_LEVEL:-INFO}
+      ASSESS_LOG_FORMAT: ${ASSESS_LOG_FORMAT:-text}
+      ASSESS_SENTRY_DSN: ${ASSESS_SENTRY_DSN:-}
+      ASSESS_SENTRY_ENVIRONMENT: ${ASSESS_SENTRY_ENVIRONMENT:-production}
+      ASSESS_SENTRY_RELEASE: ${ASSESS_SENTRY_RELEASE:-}
+      ASSESS_SENTRY_TRACES_SAMPLE_RATE: ${ASSESS_SENTRY_TRACES_SAMPLE_RATE:-0}
     logging: *logging
     restart: unless-stopped
 
@@ -117,6 +136,18 @@ services:
       RATE_LIMIT_BACKEND: db
       # Production evolves the schema through Alembic only (see db.py).
       AUTO_CREATE_TABLES: "false"
+      # Observability (X08). These do arrive through `env_file:` as well; naming
+      # them here keeps the platform's half of the surface readable beside the
+      # agent's, which has no env_file and depends on being listed. The defaults
+      # match config.py, so an existing .env keeps behaving exactly as it did.
+      # METRICS_TOKEN guards GET /metrics only when set — worth setting, because
+      # per-status submission counts are a tenant's hiring volume (nginx refuses
+      # /api/metrics from outside either way; see web/nginx.conf.template).
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy

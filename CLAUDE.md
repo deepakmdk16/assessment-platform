@@ -90,6 +90,16 @@ deterministic grade.
   the path of a callback the agent is waiting on. The webhook URL is
   customer-supplied and fetched server-side, so `webhook_url_error` is an SSRF
   gate applied twice — when the URL is saved and again when it is used.
+- `observability.py` — the operational surface (X08): the `X-Request-Id`
+  contextvar that gives one id to submit → trigger → grade → callback (forwarded
+  on the agent hop by `agent_client`, echoed back on the callback), the JSON log
+  format (`LOG_FORMAT=json`) with the access-line query-string redaction that
+  keeps candidate PII out of an aggregator, DSN-gated Sentry scrubbed of
+  candidate code and emails, and the Prometheus rendering behind `GET /metrics`.
+  Those metrics are **derived by query** from stored rows, never accumulated in
+  memory — an in-process counter counts per worker, the same trap
+  `RATE_LIMIT_BACKEND` documents. The agent, having no database, does the
+  opposite and says so.
 - `auth.py` — interviewer auth: bcrypt hashing + stateless JWT bearer.
 - `agent_client.py` — the outbound call that triggers the agent (the mock
   boundary in tests).

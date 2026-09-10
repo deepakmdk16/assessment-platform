@@ -17,6 +17,7 @@ import asyncio
 import csv
 import io
 import logging
+import logging.config
 import re
 import secrets
 import uuid
@@ -38,7 +39,7 @@ from fastapi import (
     Response,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import delete, func, or_, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -54,6 +55,7 @@ from . import (
     email_templates,
     integrity,
     notify,
+    observability,
     privacy,
     signing,
     stripe_client,
@@ -220,6 +222,15 @@ def _require_email_configured() -> None:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Logging and error reporting first, so a failure in the rest of this hook is
+    # itself formatted and reported. Configured HERE rather than only in `main()`
+    # because `main()` is skipped by `uvicorn assessment_platform.api:app`, by
+    # gunicorn, and by uvicorn's own reload child — all of which do run a
+    # lifespan. Skipped under test, where reformatting the root logger would
+    # fight the suite's own log assertions.
+    if not config.TESTING:
+        configure_logging()
+        observability.init_sentry()
     # Fail fast, before the port is bound: a mail misconfiguration is cheap to fix
     # now and expensive to discover from a candidate's silence later.
     _require_email_configured()
@@ -266,6 +277,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # `allow_headers="*"` covers what the SPA may SEND; a response header stays
+    # invisible to cross-origin JavaScript unless it is exposed by name. Without
+    # this the SPA cannot read the request id it is meant to quote in an error.
+    expose_headers=[observability.REQUEST_ID_HEADER],
 )
 
 
@@ -286,6 +301,28 @@ async def _limit_body_size(request: Request, call_next: Any) -> Any:
             content={"detail": f"request body exceeds {config.MAX_BODY_BYTES} bytes."},
         )
     return await call_next(request)
+
+
+@app.middleware("http")
+async def _request_context(request: Request, call_next: Any) -> Any:
+    """Give every request a correlation id, in the logs and on the response.
+
+    Registered LAST, which in Starlette means outermost: `_limit_body_size`
+    returns its 413 without calling downstream, and a rejected oversized body is
+    exactly the kind of event someone later asks about by id. Outermost is also
+    what puts the id on the record before any other middleware logs anything.
+
+    The id is adopted from the caller when it sent one, so an operator can trace
+    a request the SPA (or another service) already named, and minted otherwise.
+    """
+    request_id = observability.adopt_request_id(
+        request.headers.get(observability.REQUEST_ID_HEADER)
+    )
+    # So a Sentry report and the log lines around it share a key.
+    observability.tag_request(request_id)
+    response = await call_next(request)
+    response.headers[observability.REQUEST_ID_HEADER] = request_id
+    return response
 
 
 # --------------------------------------------------------------------------- #
@@ -527,6 +564,146 @@ def health(session: Session = Depends(get_session)) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=503, detail="database unavailable") from exc
     return {"status": "ok"}
+
+
+def _require_metrics_token(x_assess_token: str | None = Header(default=None)) -> None:
+    """Guard the scrape with a shared secret, when one is configured.
+
+    Same enforced-only-when-set shape as `_require_callback_token` (unset => open,
+    for dev and tests). Worth setting in production: the default deploy proxies
+    every `/api/` path straight from the internet, and per-status job counts are
+    a tenant's submission volume.
+    """
+    expected = config.METRICS_TOKEN
+    if expected and not _secret_matches(x_assess_token, expected):
+        raise HTTPException(status_code=401, detail=f"invalid or missing {config.AUTH_HEADER}.")
+
+
+# Every status/verdict is emitted even at zero, so a scraper sees a series go to
+# zero rather than a series disappear — the two look identical in a graph and
+# mean opposite things.
+_SUBMISSION_STATUSES = ("pending", "running", "done", "error")
+_VERDICTS = ("PASS", "FAIL", "ERROR")
+
+
+@app.get(
+    "/metrics",
+    response_class=PlainTextResponse,
+    dependencies=[Depends(_require_metrics_token)],
+)
+def metrics(session: Session = Depends(get_session)) -> str:
+    """Prometheus text exposition of the numbers X08 asks for (job counts, grade
+    latency, delivery failures).
+
+    Derived by query from rows already stored, not accumulated in memory: an
+    in-process counter counts per worker, so N workers would each report a
+    different fraction of the truth — the mistake `config.RATE_LIMIT_BACKEND`
+    documents for rate limits. It costs a few aggregates per scrape instead, and
+    survives a restart, which a counter does not.
+
+    No `response_model` (CONVENTIONS "every route"): the body is text exposition,
+    not JSON, so `PlainTextResponse` is what pins the shape.
+    """
+    now = datetime.now(timezone.utc)
+
+    counts: dict[str, int] = {
+        str(status): int(count)
+        for status, count in session.execute(
+            select(Submission.status, func.count()).group_by(col(Submission.status))
+        ).all()
+    }
+    verdicts: dict[str, int] = {
+        str(verdict): int(count)
+        for verdict, count in session.execute(
+            select(AssessmentResult.verdict, func.count()).group_by(col(AssessmentResult.verdict))
+        ).all()
+    }
+    giveups = int(
+        session.exec(
+            select(func.count())
+            .select_from(Submission)
+            .where(Submission.status == "error")
+            .where(col(Submission.attempts) >= config.MAX_TRIGGER_ATTEMPTS)
+        ).one()
+    )
+
+    # Newest first, then filtered to the window in Python: SQLite stores these
+    # columns naive and Postgres aware, so a WHERE against an aware datetime does
+    # not mean the same thing on both. The reaper resolves the same problem the
+    # same way (`as_utc` after the fetch).
+    cutoff = now - timedelta(seconds=config.METRICS_WINDOW_S)
+    graded = session.execute(
+        select(AssessmentResult.received_at, Submission.created_at)
+        .join(Submission, col(AssessmentResult.submission_id) == col(Submission.id))
+        .order_by(col(AssessmentResult.received_at).desc())
+        .limit(config.METRICS_MAX_SAMPLES)
+    ).all()
+    latencies: list[float] = []
+    for received_at, created_at in graded:
+        if as_utc(received_at) < cutoff:
+            continue
+        seconds = (as_utc(received_at) - as_utc(created_at)).total_seconds()
+        # A negative delta is clock skew, not a grade that finished before it
+        # started; it would drag the histogram's _sum below zero.
+        if seconds >= 0:
+            latencies.append(seconds)
+
+    # Stranded rows: what the reaper is about to pick up. Persistently non-zero
+    # means the callback path (or the reaper itself) is broken — the single most
+    # useful number here, and the one X08 names first.
+    stalled = {"pending": 0, "running": 0}
+    # Two columns, not whole ORM rows: this metric matters most during an agent
+    # outage, which is exactly when the backlog is largest, so hydrating every
+    # stranded Submission on a 15-second scrape would be at its most expensive
+    # precisely when the server is least healthy. The age comparison stays in
+    # Python for the same reason the reaper does it there — SQLite stores these
+    # columns naive and Postgres aware, so one WHERE would not mean one thing.
+    stranded = session.execute(
+        select(Submission.status, Submission.updated_at).where(
+            col(Submission.status).in_(("pending", "running"))
+        )
+    ).all()
+    for status, updated_at in stranded:
+        grace = (
+            config.TRIGGER_RETRY_AFTER_S if status == "pending" else config.REAP_RUNNING_AFTER_S
+        )
+        if grace > 0 and as_utc(updated_at) < now - timedelta(seconds=grace):
+            stalled[status] += 1
+
+    return observability.render(
+        [
+            observability.metric(
+                "platform_submissions",
+                "Submissions stored, by grading status.",
+                "gauge",
+                [({"status": status}, counts.get(status, 0)) for status in _SUBMISSION_STATUSES],
+            ),
+            observability.metric(
+                "platform_submissions_stalled",
+                "Submissions past their re-trigger grace and awaiting the reaper.",
+                "gauge",
+                [({"state": state}, count) for state, count in sorted(stalled.items())],
+            ),
+            observability.metric(
+                "platform_grade_giveups",
+                "Submissions abandoned after MAX_TRIGGER_ATTEMPTS; each needs a human.",
+                "gauge",
+                [({}, giveups)],
+            ),
+            observability.metric(
+                "platform_results",
+                "Stored agent results, by verdict.",
+                "gauge",
+                [({"verdict": verdict}, verdicts.get(verdict, 0)) for verdict in _VERDICTS],
+            ),
+            observability.histogram(
+                "platform_grade_latency_seconds",
+                "Submit to stored result, over the last METRICS_WINDOW_S "
+                "(the most recent METRICS_MAX_SAMPLES grades at most).",
+                latencies,
+            ),
+        ]
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -5024,17 +5201,22 @@ def assessments_callback(
 
 
 def configure_logging() -> None:
-    """Root logger for the server process.
+    """Logging for the whole server process.
 
     Uvicorn configures only its own loggers, so without this every `logger.info`
     in this package — the correlation breadcrumbs the agent→callback path is
     meant to be debugged with, the reaper's notices — was silently dropped in
     production (only WARNING+ reached stderr via the last-resort handler, with
-    no timestamps). Level comes from LOG_LEVEL (default INFO).
+    no timestamps). Level comes from LOG_LEVEL (default INFO), format from
+    LOG_FORMAT (text or json); every line carries the request id either way.
+
+    A dictConfig rather than the `basicConfig` this used to be: uvicorn's loggers
+    set `propagate = False`, so a root-only format left the access lines in
+    uvicorn's own format and the output half-converted, and `basicConfig` is a
+    no-op once any handler exists (which, under uvicorn, is always).
     """
-    logging.basicConfig(
-        level=config.LOG_LEVEL,
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    logging.config.dictConfig(
+        observability.logging_config(config.LOG_LEVEL, json_format=config.LOG_FORMAT == "json")
     )
 
 

@@ -66,6 +66,7 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pyjwt" },
     { name = "python-dotenv" },
+    { name = "sentry-sdk" },
     { name = "sqlmodel" },
     { name = "stripe" },
     { name = "uvicorn", extra = ["standard"] },
@@ -88,6 +89,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pyjwt", specifier = ">=2.8" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "sentry-sdk", specifier = ">=2.0" },
     { name = "sqlmodel", specifier = ">=0.0.22" },
     { name = "stripe", specifier = ">=15.6.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.51.0" },
@@ -1270,6 +1272,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/3a/3c/37d0ecb729a7cc2d393ea7dce316fc585680f35d93b8d62139d7d0a3700c/ruff-0.15.21-py3-none-win32.whl", hash = "sha256:01f8d5be84823c172b389e123174f781f9daf86d6c58719d603f941932195cdd", size = 10896555, upload-time = "2026-07-09T20:01:26.941Z" },
     { url = "https://files.pythonhosted.org/packages/c0/b8/e43466b2a6067ce91e669068f6e28d6c719a920f014b070d5c8731725de3/ruff-0.15.21-py3-none-win_amd64.whl", hash = "sha256:d4b8d9a2f0f12b816b50447f6eccb9f4bb01a6b82c86b50fb3b5354b458dc6d3", size = 12038772, upload-time = "2026-07-09T20:01:29.497Z" },
     { url = "https://files.pythonhosted.org/packages/dd/75/e90ab9aeece218a9fc5a5bc3ec97d0ee6bb3c4ff95869463c1de58e29a1c/ruff-0.15.21-py3-none-win_arm64.whl", hash = "sha256:6e83115d4b9377c1cbc13abf0e051f069fab0ef815ea0504a8a008cee24dd0a8", size = 11375265, upload-time = "2026-07-09T20:01:31.772Z" },
+]
+
+[[package]]
+name = "sentry-sdk"
+version = "2.69.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/10/16/85874f5e51f8d0767ee8c4b4c460c5ea2bc8a1b613d641d9d9577ba39d3a/sentry_sdk-2.69.1.tar.gz", hash = "sha256:f9284b417540b0784b994fa021eb6f1e30ae1cce593d83541274d03c93966eff", size = 1043599, upload-time = "2026-09-08T14:18:19.505Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/43/eb/17040f8a60c300fe4cc349088d3e351b88812f478b57a0af05a49af7cb7c/sentry_sdk-2.69.1-py3-none-any.whl", hash = "sha256:2d2556d9a14db548982b914cbed2a2dc07b6e55d941a620752f89a2afccfd78d", size = 528587, upload-time = "2026-09-08T14:18:18.151Z" },
 ]
 
 [[package]]

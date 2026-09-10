@@ -12,11 +12,12 @@ Priority: **P0** blocks taking money or endangers customers · **P1** first payi
 customers hit it · **P2** fix before scale · **P3** polish.
 Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data + API + UI.
 
-**Sequence:** (1) deploy + ops (X08, P26, X11) · (2) the rest by priority.
-The stack is deployable — `docker-compose.yml` + `docs/DEPLOY.md` (X05) — but
-it is unobserved (X08) and unbacked-up (X20), so those come before real
-candidates, and the agent still needs a host that allows privileged
-containers (A07).
+**Sequence:** (1) deploy + ops (X20, P26, X11) · (2) the rest by priority.
+The stack is deployable — `docker-compose.yml` + `docs/DEPLOY.md` (X05) — and
+now observable: `/metrics`, JSON logs carrying a request id that spans both
+services, and DSN-gated Sentry (X08). It is still unbacked-up (X20), so that
+comes before real candidates, and the agent still needs a host that allows
+privileged containers (A07).
 Privacy (X03, X04) is built; X19 is the legal review it still waits on before
 anyone is charged. Result delivery (X06 + X23) is done end to end — email, a
 signed per-org webhook, and the settings panel that configures it. X07's code
@@ -106,13 +107,19 @@ archiving does not stop links.**
   candidate who never sees the invitation silently misses the interview.
   _Verified: templates and Reply-To landed with X07's code half; the rest is a
   purchase and three DNS records._
-- **X08 · P1 · S — No metrics, tracing or error reporting in either service.**
-  Evidence: grep Sentry|opentelemetry|prometheus|/metrics in both packages: none;
-  agent /health is static; platform logging unconfigured (P19). Why: no way to see
-  failed callbacks, grading latency or error rates. Fix: Sentry in both services;
-  /metrics (job count, grade latency, callback failures); structured JSON logs with
-  request ids.
-  _Verified: cited lines read in this audit; source: saas._
+- **X30 · P2 · S — Nothing scrapes `/metrics`, and no alert fires off it.**
+  Both services now expose Prometheus text exposition (X08), but the compose
+  stack has no scraper and no alerting: the numbers exist and nobody is
+  watching them, which is a smaller gap than X08 but the same shape. The agent
+  is on the internal `grading` network with no published port, so a scraper has
+  to live inside the stack or be given a path to it. Fix: a Prometheus (or
+  equivalent) service in `docker-compose.yml` scraping both targets, and alerts
+  on the three signals that mean results are being lost —
+  `platform_submissions_stalled`, `platform_grade_giveups`, and
+  `agent_callbacks_total{outcome="failed"}`. Until then an operator reads them
+  by hand; `docs/DEPLOY.md` says how.
+  _Verified: opened by X08, which built the exposition but deliberately stopped
+  short of adding infrastructure nobody had asked for._
 - **X09 · P1 · S — Rate limits are per-IP, never per-tenant, in both services.**
   Evidence: platform config.py:145-167 and api.py:433,461,2480 key on client_ip;
   agent ratelimit.py per-IP and in-memory (A13). Why: an office behind one NAT
@@ -210,6 +217,11 @@ draft GET query string.**
   web/src/api.ts:322); uvicorn logs the query string regardless of LOG_PII;
   test_logging_redaction.py covers only email_client. Why: PII + bearer-equivalent
   token in plain logs. Fix: carry the email in a header or POST body.
+  Narrowed but NOT closed by X08: `observability.QueryStringFilter` now redacts
+  the query string from this server's access lines unless `LOG_PII` is on, so the
+  aggregator no longer ingests it. The token still travels in the URL, so it is
+  still in nginx's access log, the browser's history and any Referer — which is
+  what moving it out of the query string fixes.
   _Verified: cited lines read in this audit; source: backend._
 - **P11 · P2 · M — N+1 and heavy list queries.**
   Evidence: list_questions lazy-loads test_cases per row and ships full test cases +

@@ -42,6 +42,12 @@ LOG_PII = os.getenv("LOG_PII", "").lower() in {"1", "true"}
 # breadcrumbs (callback correlation, the stale-running reaper) actually print.
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
+# "json" emits one JSON object per line for a log aggregator to ingest; "text"
+# keeps the human-readable format. Text by default because the default reader is
+# a developer tailing `docker compose logs`; DEPLOY.md tells an operator with an
+# aggregator to set json. Either way every line carries the request id.
+LOG_FORMAT = os.getenv("LOG_FORMAT", "text").lower()
+
 # Hard ceiling on any request body, enforced from Content-Length before the JSON
 # is parsed. The per-field caps in schemas.py bound what we STORE; this bounds
 # what we are willing to READ, so an unauthenticated candidate route can't make
@@ -366,6 +372,41 @@ RETENTION_INTERVAL_S = 0 if TESTING else int(os.getenv("RETENTION_INTERVAL_S", "
 # rewrite of the policy cannot retroactively claim their agreement to words they
 # never saw. Bump it whenever docs/PRIVACY.md changes materially.
 PRIVACY_POLICY_VERSION = os.getenv("PRIVACY_POLICY_VERSION", "2026-09-08")
+
+
+# Observability (X08). All three surfaces — error reporting, the metrics scrape
+# and the structured logs above — are off or inert until an operator configures
+# them, so a dev box and the test suite behave exactly as they did before.
+#
+# Sentry. Unset DSN = no error reporting and no sentry_sdk import side effects.
+# Never enabled under TESTING: `.env` is loaded at import, so a developer's real
+# DSN must not make the suite ship events. See observability.init_sentry for what
+# is scrubbed before an event leaves — candidate code and emails must not.
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+SENTRY_ENVIRONMENT = os.getenv("SENTRY_ENVIRONMENT", "production")
+# Which build an error came from; typically the deployed git sha. None lets
+# Sentry group without one rather than mislabel everything as one release.
+SENTRY_RELEASE = os.getenv("SENTRY_RELEASE") or None
+# Performance tracing, off by default: it is the expensive half of Sentry's
+# pricing and the half with the largest PII surface (it samples request data on
+# every route). 0.0-1.0.
+SENTRY_TRACES_SAMPLE_RATE = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0"))
+
+# GET /metrics. Guarded by a shared secret when set, and unauthenticated when not
+# (dev/tests) — the same enforced-only-when-configured shape as CALLBACK_TOKEN.
+# Setting it matters in production: the default deploy proxies every /api/ path
+# from the internet, and the scrape exposes per-tenant volume. DEPLOY.md's nginx
+# also refuses /api/metrics outright, so the intended scrape is from inside the
+# compose network.
+METRICS_TOKEN = os.getenv("METRICS_TOKEN", "")
+# How far back the grade-latency histogram looks. A scrape describes recent
+# behaviour; including every grade since launch would flatten a live regression
+# into a year of history.
+METRICS_WINDOW_S = int(os.getenv("METRICS_WINDOW_S", str(24 * 3600)))
+# Ceiling on the rows one scrape reads for that histogram, newest first. A scrape
+# runs on a timer and must stay cheap; when the window holds more than this, the
+# histogram describes the most recent MAX_SAMPLES grades and `_count` says so.
+METRICS_MAX_SAMPLES = int(os.getenv("METRICS_MAX_SAMPLES", "5000"))
 
 
 def billing_enabled() -> bool:
