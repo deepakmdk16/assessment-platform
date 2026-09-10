@@ -20,6 +20,24 @@ server {
     gzip_types text/css application/javascript application/json image/svg+xml;
     gzip_min_length 1024;
 
+    # The metrics scrape is an internal endpoint and must not be internet-facing:
+    # it reports per-status submission counts and grade latencies, which are a
+    # tenant's hiring volume. The `location /api/` block below proxies every path
+    # under it with no authentication of its own, so this longer prefix exists
+    # purely to carve this one path back out — nginx selects the LONGEST matching
+    # prefix, so /api/metrics (and anything under it) lands here instead of at
+    # the proxy — prefix length decides that, not the order of the blocks. 404
+    # rather than 403, so the endpoint is not advertised to whoever is probing.
+    #
+    # The intended scrape runs inside the compose network, straight at
+    # platform:9000/metrics with `X-Assess-Token: $METRICS_TOKEN` — the agent and
+    # the platform are both on internal networks with no published port, so a
+    # Prometheus that needs them belongs on that network too. See
+    # docs/DEPLOY.md -> Monitoring.
+    location /api/metrics {
+        return 404;
+    }
+
     # The API. The rewrite strips the /api prefix, so /api/auth/refresh reaches
     # the platform as /auth/refresh — the paths web/src/api.ts builds against
     # VITE_API_BASE_URL=/api.
@@ -51,6 +69,17 @@ server {
         # in that setup — set TRUSTED_PROXY_CIDR to the terminator.
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # Correlation. nginx mints $request_id itself (32 hex characters, one per
+        # request), and the platform ADOPTS an inbound X-Request-Id when it is
+        # well formed — ^[A-Za-z0-9_-]{1,64}$, which this always is — rather than
+        # minting its own. So the id on a platform log line, on the agent hop and
+        # on the result callback is the same id nginx used, and a request can be
+        # traced back to nginx's own access log. Add $request_id to nginx's
+        # log_format to have it appear there; the stock `combined` format omits
+        # it. This overwrites anything the client sent, which costs nothing here:
+        # the SPA only READS the id back off the response (web/src/api.ts shows
+        # it as `ref:` on a 5xx) and never sends one.
+        proxy_set_header X-Request-Id $request_id;
         # The refresh cookie is scoped Path=/auth by the API (auth.py,
         # REFRESH_COOKIE_PATH). The browser is talking to /api/auth/... here, and
         # a cookie stored at /auth is never sent to /api/auth — so without this

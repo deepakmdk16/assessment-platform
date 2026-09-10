@@ -76,7 +76,10 @@ is handled by Stripe on their own pages.
   monitored sitting, the integrity signals.
 - **Sub-processors**, listed in [the DPA](DPA.md): the LLM provider that produces
   the written assessment summary, the email provider that delivers invitations,
-  Stripe for payments, and [HOSTING PROVIDER].
+  Stripe for payments, [HOSTING PROVIDER], and — where your employer has enabled
+  error reporting — the provider that receives crash reports. Your code, the
+  contents of your requests and your invite link are stripped from those reports
+  before they are sent.
 - **Nobody else.** Candidate data is never sold, never used to train models, and
   never used to advertise.
 

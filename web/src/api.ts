@@ -60,13 +60,28 @@ export function clearToken(): void {
   accessToken = null
 }
 
+/** The correlation id the API stamps on every response (X08). Readable from
+ *  another origin only because the API names it in `expose_headers`. */
+const REQUEST_ID_HEADER = 'X-Request-Id'
+
 export class ApiError extends Error {
   status: number
 
-  constructor(status: number, message: string) {
-    super(message)
+  /** The failing response's `X-Request-Id` — the same id in the platform's
+   *  logs, in Sentry, and on the agent hop — or null when the response carried
+   *  none (a gateway or a network-level failure short of the app). */
+  requestId: string | null
+
+  constructor(status: number, message: string, requestId: string | null = null) {
+    // Pages render `err.message` and nothing else, so the reference travels in
+    // the text; giving it a slot of its own would mean new UI on every page.
+    // Only a 5xx gets it: that is the failure the person at the screen can do
+    // nothing about except report it, whereas a 4xx already says what to change
+    // and would just be diluted by an id nobody needs to quote.
+    super(requestId && status >= 500 ? `${message} (ref: ${requestId})` : message)
     this.name = 'ApiError'
     this.status = status
+    this.requestId = requestId
   }
 }
 
@@ -182,7 +197,7 @@ async function request<T>(
     if (noOrganization) {
       noOrganizationHandler?.()
     }
-    throw new ApiError(res.status, message)
+    throw new ApiError(res.status, message, res.headers.get(REQUEST_ID_HEADER))
   }
 
   if (res.status === 204) {
@@ -553,7 +568,7 @@ async function authedFetch(path: string, retried = false): Promise<Response> {
  *  download. */
 export async function exportSubmissionsCsv(): Promise<void> {
   const res = await authedFetch('/submissions/export')
-  if (!res.ok) throw new ApiError(res.status, res.statusText)
+  if (!res.ok) throw new ApiError(res.status, res.statusText, res.headers.get(REQUEST_ID_HEADER))
   const url = URL.createObjectURL(await res.blob())
   const a = document.createElement('a')
   a.href = url
@@ -568,7 +583,7 @@ export async function exportSubmissionsCsv(): Promise<void> {
  *  trigger a browser download. A file, not JSON, so it bypasses `request`. */
 export async function downloadSubmissionReport(submissionId: string): Promise<void> {
   const res = await authedFetch(`/submissions/${submissionId}/report`)
-  if (!res.ok) throw new ApiError(res.status, res.statusText)
+  if (!res.ok) throw new ApiError(res.status, res.statusText, res.headers.get(REQUEST_ID_HEADER))
   const url = URL.createObjectURL(await res.blob())
   const a = document.createElement('a')
   a.href = url

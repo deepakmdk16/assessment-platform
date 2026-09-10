@@ -25,7 +25,7 @@ from collections.abc import Callable
 
 import httpx
 
-from . import config
+from . import config, observability
 from .config import AGENT_BASE_URL, AGENT_DRAFT_TIMEOUT_S, AGENT_RUN_TIMEOUT_S, AGENT_TIMEOUT_S
 from .models import Question, Submission
 from .signing import SIGNATURE_HEADER, sign
@@ -42,6 +42,19 @@ async def _signed_post(url: str, body: dict, *, timeout: float) -> httpx.Respons
     thread from FastAPI's pool — the whole point of these being agent calls."""
     content = json.dumps(body).encode()
     headers = {"Content-Type": "application/json", **_auth_headers()}
+    # Carry this request's correlation id across the hop, so the agent's own logs
+    # — and the callback it later posts back — sit under the same id as the
+    # submission that started it. A header, not a payload field: the callback
+    # envelope is byte-frozen and mirrored in the agent repo, and the HMAC covers
+    # the body only, so neither is disturbed.
+    #
+    # Omitted outside a request. The reaper and the retention sweep call in with
+    # the "-" sentinel, and "-" matches the agent's id pattern, so it would be
+    # adopted there as a genuine id — every reaper-driven grade would log under
+    # the same meaningless key. The agent's own callback guards this identically.
+    request_id = observability.current_request_id()
+    if request_id != observability.NO_REQUEST_ID:
+        headers[observability.REQUEST_ID_HEADER] = request_id
     if config.ASSESS_SIGNING_SECRET:
         headers[SIGNATURE_HEADER] = sign(config.ASSESS_SIGNING_SECRET, content)
     async with httpx.AsyncClient(timeout=timeout) as client:
