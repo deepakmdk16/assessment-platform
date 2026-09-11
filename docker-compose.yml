@@ -1,5 +1,5 @@
-# Deployable wiring for the whole system: Postgres, the agent (privileged, runs
-# untrusted candidate code), the platform API, and nginx serving the SPA.
+# Deployable wiring for the whole system: Postgres, the agent (runs untrusted
+# candidate code), the platform API, and nginx serving the SPA.
 # docs/DEPLOY.md is the walkthrough — including what must be in .env first.
 #
 #   docker compose up -d --build
@@ -58,13 +58,28 @@ services:
     networks: [grading]
     build:
       context: ${AGENT_CONTEXT:-../AssesmentAgent}
-    # nsjail needs namespace + cgroup privileges to build the jail; without them
-    # every run fails loudly rather than executing untrusted code unsandboxed
-    # (ASSESS_SANDBOX=nsjail is set in the agent's Dockerfile). This is why the
-    # agent needs a host that allows privileged containers — see
-    # ../AssesmentAgent/STATUS.md A07.
-    privileged: true
-    cgroup: host
+    # Least privilege for the one container that runs untrusted code. The server
+    # inside is an unprivileged user holding no capabilities; the five below
+    # exist only for the image's root entrypoint, which delegates the
+    # container's own cgroup to that user and then drops every one of them
+    # before anything else runs. Without them nsjail cannot build its jail and
+    # every run fails loudly rather than executing code unsandboxed.
+    # ../AssesmentAgent/deploy/docker-run.flags is the authoritative list, with
+    # the reason for each — keep this block in step with it.
+    cgroup: private
+    cap_drop: [ALL]
+    cap_add: [SYS_ADMIN, CHOWN, SETUID, SETGID, SETPCAP]
+    security_opt:
+      - no-new-privileges:true
+      - systempaths=unconfined
+      # Must be loaded on the host first (docs/DEPLOY.md, Prerequisites).
+      - apparmor=${AGENT_APPARMOR_PROFILE:-assess-nsjail}
+      # Resolved against this file's directory, like the build context.
+      - seccomp=${AGENT_CONTEXT:-../AssesmentAgent}/deploy/seccomp.json
+    # An outer bound on the whole container, jails included. It shares this
+    # host with Postgres, and compilers run with no memory ceiling of their own.
+    mem_limit: ${AGENT_MEM_LIMIT:-2g}
+    pids_limit: 512
     environment:
       # Shared secrets: the platform authenticates to the agent with
       # ASSESS_API_TOKEN and verifies the callback with CALLBACK_TOKEN; the
