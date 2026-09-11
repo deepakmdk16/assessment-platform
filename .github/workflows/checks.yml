@@ -47,6 +47,15 @@ jobs:
         run: npm ci
         working-directory: web
 
+      # mypy's incremental cache: ~10s cold in CI, under a second warm. Keyed per
+      # commit so each run saves a fresh one; restore-keys picks up the latest.
+      - name: Cache mypy
+        uses: actions/cache@v4
+        with:
+          path: .mypy_cache
+          key: mypy-${{ runner.os }}-${{ hashFiles('uv.lock') }}-${{ github.sha }}
+          restore-keys: mypy-${{ runner.os }}-${{ hashFiles('uv.lock') }}-
+
       - name: Run checkpoints (pytest, ruff, mypy, web gates, secret scan)
         run: bash scripts/checkpoints.sh
 
