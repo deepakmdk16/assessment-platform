@@ -337,9 +337,10 @@ Still open before production:
 
 ## Deployment
 
-`docker-compose.yml` brings up the whole system — Postgres, the agent (privileged,
-because nsjail needs namespace and cgroup capabilities), the platform API, and
-nginx serving the SPA and proxying the API on one origin:
+`docker-compose.yml` brings up the whole system — Postgres, the agent (an
+unprivileged server, though its host must allow the few start-up capabilities
+nsjail needs — see `docs/DEPLOY.md`), the platform API, and nginx serving the
+SPA and proxying the API on one origin:
 
 ```bash
 cp .env.example .env    # fill in the required secrets first

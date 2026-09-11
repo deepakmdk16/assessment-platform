@@ -5,18 +5,21 @@ Four containers: Postgres, the **agent** (runs untrusted candidate code), the
 fronting the API on one origin. `docker-compose.yml` in the repository root
 wires them together; this file is the walkthrough.
 
-> **Read the host requirement first.** The agent must run privileged
-> (`--privileged --cgroupns=host`) so nsjail can build its jail. That rules out
-> Cloud Run, Fly, Railway, Render and Fargate — this stack needs a VM you
-> control, or a Kubernetes cluster that permits privileged pods. STATUS.md A07
-> tracks narrowing that requirement; until it closes, plan for a VM.
+> **Read the host requirement first.** The agent does not run privileged: its
+> server is an unprivileged user with no capabilities. But building nsjail's jail
+> still needs more than an ordinary container gets — five capabilities at start
+> (dropped by the entrypoint before any candidate code runs), a custom seccomp
+> profile, and on Ubuntu 23.10 or later a host AppArmor profile (Prerequisites).
+> Cloud Run, Fly, Railway, Render and Fargate grant none of that, so plan for a
+> VM you control — ideally one of its own, since this file puts it beside
+> Postgres.
 
 ## What runs where
 
 | Service | Image | Exposed | Notes |
 | --- | --- | --- | --- |
 | `db` | `postgres:17-alpine` | internal | Volume `pgdata`; the entire product record |
-| `agent` | built from `../AssesmentAgent` | internal | Privileged. Never expose it — it executes untrusted code |
+| `agent` | built from `../AssesmentAgent` | internal | Unprivileged; see the host requirement. Never expose it — it executes untrusted code |
 | `platform` | built from `./Dockerfile` | internal | Runs `alembic upgrade head` at boot, then uvicorn on 9000 |
 | `web` | built from `./web/Dockerfile` | `WEB_PORT` | Static SPA + `/api/` reverse proxy to `platform` |
 
@@ -27,8 +30,25 @@ reload without loosening it. It also makes `CORS_ORIGINS` irrelevant here.
 
 ## Prerequisites
 
-- Docker Engine 25+ with Compose v2 (`cgroup: host` needs Compose ≥ 2.15).
-- A host that allows privileged containers, with cgroup v2 (any current Linux).
+- Docker Engine 25+ with Compose v2 (`cgroup:` needs Compose ≥ 2.15).
+- A Linux host with cgroup v2 that lets a container start with `CAP_SYS_ADMIN`
+  and a custom seccomp profile. Validated on Ubuntu 24.04 (AppArmor);
+  SELinux-enforcing hosts (RHEL, Fedora) are untested.
+- On a host that restricts unprivileged user namespaces —
+  `sysctl kernel.apparmor_restrict_unprivileged_userns` prints `1`, the default
+  on Ubuntu 23.10 and later — the agent's AppArmor profile, loaded before the
+  first `docker compose up`. Installed under `/etc/apparmor.d/` it is reloaded
+  at every boot:
+
+  ```bash
+  sudo install -m 0644 ../AssesmentAgent/deploy/apparmor/assess-nsjail /etc/apparmor.d/
+  sudo apparmor_parser -r /etc/apparmor.d/assess-nsjail
+  ```
+
+  On a host without that restriction, set `AGENT_APPARMOR_PROFILE=unconfined`
+  in `.env` instead: the profile grants nothing but user namespaces. On Docker
+  Desktop or Colima the host is their Linux VM, not macOS — read the sysctl and
+  load the profile there (`colima ssh -- sudo apparmor_parser -r <absolute path>`).
 - Both repositories checked out side by side. The agent's build context defaults
   to `../AssesmentAgent`; set `AGENT_CONTEXT` if yours differ.
 - A DNS name for `PUBLIC_BASE_URL` and, in front of it, something terminating
@@ -100,8 +120,8 @@ The values Compose hardcodes — `DATABASE_URL`, `AGENT_BASE_URL`,
 `AUTO_CREATE_TABLES` — override `.env`, because they are only correct inside
 this network. Change them in `docker-compose.yml`, not in `.env`, or your edit
 will appear to do nothing. `COOKIE_SECURE`, `WEB_PORT`, `TRUSTED_PROXY_CIDR`,
-`VITE_PRODUCT_NAME`, `PUBLIC_BASE_URL` and the observability variables above are
-the opposite — compose reads them *from* `.env` (as `${VAR:-default}`, so an
+`VITE_PRODUCT_NAME`, `PUBLIC_BASE_URL`, `AGENT_APPARMOR_PROFILE`,
+`AGENT_MEM_LIMIT` and the observability variables above are the opposite — compose reads them *from* `.env` (as `${VAR:-default}`, so an
 existing `.env` upgrades unchanged), so set those there.
 
 ## 2. Bring it up
@@ -288,8 +308,18 @@ which is both the expensive half of the bill and the larger PII surface.
 ## Upgrading
 
 ```bash
+git -C ../AssesmentAgent pull   # the agent first: this compose file reads its deploy/
 git pull && docker compose up -d --build
 ```
+
+The two checkouts move together: `docker-compose.yml` reads the agent's
+`deploy/seccomp.json`, and `platform` waits on `agent` — so an agent that cannot
+start takes the platform and web down with it, not just grading.
+
+**Upgrading from a release where the agent ran privileged:** pull both
+repositories and load the AppArmor profile (Prerequisites) before `up`. Without
+it the agent container is refused at start — loudly, rather than running
+anything unsandboxed.
 
 The platform container migrates on every start, and Alembic is a no-op at head.
 Take a database backup first: migrations are not reversible in practice.
@@ -343,7 +373,9 @@ where they bite:
 | Symptom | Cause |
 | --- | --- |
 | `platform` exits at boot with an email error | The mailer preflight. Fill in the five SMTP variables |
-| Agent runs fail with a sandbox error | The container is not privileged, or the host lacks cgroup v2 |
+| `agent` will not start: the AppArmor profile cannot be loaded | Not loaded on the host (Prerequisites), or `AGENT_APPARMOR_PROFILE` names another |
+| `agent` exits at start with a message from its entrypoint | The message names the cause — the host is on cgroup v1, or the service's `cgroup`, `cap_add` or `security_opt` differ from what `docker-compose.yml` ships |
+| Correct submissions come back FAIL with nsjail's own log as their output, while the agent's `/health` is ok | The jail cannot be built: `AGENT_APPARMOR_PROFILE=unconfined` on a host that restricts user namespaces, or seccomp/AppArmor settings changed from the shipped ones. The agent does not check this at start yet (its STATUS A34) |
 | Invite links point at the wrong host | `PUBLIC_BASE_URL` — it is baked into every minted link |
 | Signed requests 401 between the services | The four shared secrets differ between the two containers |
 | Login succeeds but the session drops on reload | `COOKIE_SECURE=true` served over plain http |

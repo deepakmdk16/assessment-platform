@@ -64,12 +64,14 @@ these. The Processor remains liable for their performance.
 implemented: bcrypt password hashing with breach-corpus checking; short-lived
 access tokens with server-side revocation; per-organisation scoping of every
 authenticated query; token-gated candidate links bound to their recipients;
-execution of submitted code in an OS-level sandbox with egress blocked and memory
-and process limits; encrypted transport; secrets supplied by environment only.
+execution of submitted code in an OS-level sandbox, run by an unprivileged worker
+with no system capabilities, with egress blocked, a system-call filter, memory,
+process and CPU limits, and no access to other candidates' submissions;
+encrypted transport; secrets supplied by environment only.
 
 **Known gaps at the time of writing** — disclose or fix before signing: see
 [STATUS.md](../STATUS.md) for the open hardening items, in particular the
-worker's privilege model and the absence of monitoring and alerting.
+absence of monitoring and alerting.
 
 ## 6. Assistance to the Controller
 

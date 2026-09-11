@@ -16,8 +16,9 @@ Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data
 The stack is deployable — `docker-compose.yml` + `docs/DEPLOY.md` (X05) — and
 now observable: `/metrics`, JSON logs carrying a request id that spans both
 services, and DSN-gated Sentry (X08). It is still unbacked-up (X20), so that
-comes before real candidates, and the agent still needs a host that allows
-privileged containers (A07).
+comes before real candidates. The agent no longer runs privileged (A07), but it
+still needs a VM that grants it `CAP_SYS_ADMIN` at start and, on Ubuntu 23.10+,
+a host AppArmor profile — managed container platforms remain ruled out.
 Privacy (X03, X04) is built; X19 is the legal review it still waits on before
 anyone is charged. Result delivery (X06 + X23) is done end to end — email, a
 signed per-org webhook, and the settings panel that configures it. X07's code
@@ -307,7 +308,9 @@ payloads 500 or get stored.**
   for url 'http://<agent-host>:8000/run'" to an unauthenticated candidate; 677/764
   do the same to interviewers; _agent_detail (602) sanitises only the 400 case. Why:
   leaks internal topology and agent status. Fix: log exc, return a fixed message
-  ("grader unavailable, try again").
+  ("grader unavailable, try again"). Since agent A07 the same branches can also
+  echo the agent's new infra_error for a toolchain the jail can't see ("runtime
+  not installed: … not on the jail PATH: 'ruby'").
   _Verified: cited lines read in this audit; source: quality._
 - **P22 · P2 · M — api.py is a 3,196-line god-module with the split seams already
 drawn.**
