@@ -327,15 +327,6 @@ drawn.**
   serializers → mappers.py; one generic _owned(Model, id, current, session) +
   _page(stmt, limit, offset); drop manual updated_at.
   _Verified: cited lines read in this audit; source: quality,backend._
-- **P23 · P2 · XS — The platform test suite is ~6× slower than the agent's because
-every test pays bcrypt cost 12.**
-  Evidence: tests/conftest.py:124-128 registers + logs in per test → auth.py:27
-  bcrypt.gensalt() default rounds; --durations shows ~0.36 s setup per test; live:
-  266 tests in 77.65 s vs agent 265 tests in 12.9 s including real subprocesses.
-  Why: the pre-push gate and dev loop pay ~90 s for hashing. Fix: BCRYPT_ROUNDS env
-  (default 12, tests 4) read in auth.py, or an autouse fixture monkeypatching
-  gensalt.
-  _Verified: live run in this audit; source: quality,live._
 - **P26 · P2 · S — The cross-repo parity gates (signing.py, callback contract) never
 run in CI.**
   Evidence: scripts/checkpoints.sh (agent :41,59; platform :70,88) skip the

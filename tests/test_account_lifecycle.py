@@ -62,6 +62,12 @@ def test_register_enforces_password_length(anon_client: TestClient) -> None:
     assert _register(anon_client, "b@x.io", "y" * 72).status_code == 201
 
 
+def test_the_suite_hashes_at_bcrypt_cost_4() -> None:
+    # conftest lowers bcrypt to 4 rounds (the suite took 178s at production cost). If
+    # auth stops calling bcrypt.gensalt through the module, that patch silently lapses.
+    assert auth.hash_password(PW).startswith("$2b$04$")
+
+
 def test_register_rejects_breached_password(anon_client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(api, "is_breached_password", lambda _pw: True)
     resp = _register(anon_client, "a@x.io")

@@ -20,6 +20,7 @@ os.environ.setdefault("PLATFORM_TESTING", "1")
 from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
 
+import bcrypt
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -31,6 +32,17 @@ from assessment_platform import db as db_module
 from assessment_platform.api import app
 from assessment_platform.db import get_session
 from assessment_platform.ratelimit import limiter
+
+# Hash at bcrypt's minimum cost. Nearly every test registers an interviewer, and at
+# production cost that was ~150s of a 178s suite. auth.hash_password is unchanged.
+_production_gensalt = bcrypt.gensalt
+
+
+def _cheap_gensalt(rounds: int = 12, prefix: bytes = b"2b") -> bytes:
+    return _production_gensalt(4, prefix)
+
+
+bcrypt.gensalt = _cheap_gensalt
 
 
 def async_return(value: Any) -> Callable[..., Awaitable[Any]]:

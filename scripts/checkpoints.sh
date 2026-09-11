@@ -12,12 +12,24 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-echo "==> pytest";           uv run pytest -q
-echo "==> ruff check";       uv run ruff check .
-echo "==> mypy";             uv run mypy
-
-echo "==> web: typecheck / lint / unit / build"
-( cd web && npm run typecheck && npm run lint && npm run test && npm run build )
+# The Python and web halves share nothing, so they run concurrently. Each half's
+# output is buffered and printed whole afterwards, so the two logs don't interleave.
+_py_log="$(mktemp)"; _web_log="$(mktemp)"
+trap 'rm -f "$_py_log" "$_web_log"' EXIT
+echo "==> python + web halves (in parallel)"
+( echo "==> pytest";     uv run pytest -q
+  echo "==> ruff check"; uv run ruff check .
+  echo "==> mypy";       uv run mypy ) >"$_py_log" 2>&1 &
+_py_pid=$!
+( echo "==> web: typecheck / lint / unit / build"
+  cd web && npm run typecheck && npm run lint && npm run test && npm run build ) >"$_web_log" 2>&1 &
+_web_pid=$!
+_py_rc=0;  wait "$_py_pid"  || _py_rc=$?
+_web_rc=0; wait "$_web_pid" || _web_rc=$?
+cat "$_py_log" "$_web_log"
+if [ "$_py_rc" -ne 0 ] || [ "$_web_rc" -ne 0 ]; then
+  echo "❌ python half exited $_py_rc, web half exited $_web_rc (output above)"; exit 1
+fi
 
 if [ "${RUN_E2E:-0}" = "1" ]; then
   echo "==> web: e2e (Playwright)"
