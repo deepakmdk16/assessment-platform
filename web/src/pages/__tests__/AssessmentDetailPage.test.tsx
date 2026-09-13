@@ -30,7 +30,7 @@ const assessment: AssessmentOut = {
   id: 'week-1',
   title: 'Backend Screen',
   org_name: null,
-  logo_url: null,
+  logo_sha: null,
   proctored: true,
   duration_minutes: 90,
   status: 'active',
@@ -299,7 +299,6 @@ describe('AssessmentDetailPage — edit settings', () => {
         duration_minutes: 90,
         slots: [{ question_id: 'two-sum' }],
         org_name: null,
-        logo_url: null,
         proctored: false,
       }),
     )

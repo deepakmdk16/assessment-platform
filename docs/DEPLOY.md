@@ -18,7 +18,7 @@ wires them together; this file is the walkthrough.
 
 | Service | Image | Exposed | Notes |
 | --- | --- | --- | --- |
-| `db` | `postgres:17-alpine` | internal | Volume `pgdata`; the entire product record |
+| `db` | `postgres:17-alpine` | internal | Volume `pgdata`; the entire product record, including uploaded logos (P3b stores them as `bytea`, capped at 256 KB each, so this is kilobytes per tenant — not a reason to plan for object storage yet) |
 | `agent` | built from `../AssesmentAgent` | internal | Unprivileged; see the host requirement. Never expose it — it executes untrusted code |
 | `platform` | built from `./Dockerfile` | internal | Runs `alembic upgrade head` at boot, then uvicorn on 9000 |
 | `web` | built from `./web/Dockerfile` | `WEB_PORT` | Static SPA + `/api/` reverse proxy to `platform` |

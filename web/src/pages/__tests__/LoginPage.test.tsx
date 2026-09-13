@@ -63,8 +63,6 @@ describe('LoginPage', () => {
       id: '1',
       email: 'a@b.com',
       name: 'Ada',
-      default_org_name: null,
-      default_logo_url: null,
       email_verified: true,
     })
 

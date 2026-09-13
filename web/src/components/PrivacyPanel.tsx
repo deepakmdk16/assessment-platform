@@ -102,13 +102,13 @@ export function PrivacyPanel() {
   }
 
   if (!loaded) return <div className="card pad muted">Loading…</div>
-  // Nothing at all for a plain member — including the section heading, which
-  // would otherwise sit above empty space.
+  // Nothing at all for a plain member. Since P3a the section is not reachable
+  // for one either, but a panel that decides this for itself cannot be dropped
+  // onto a surface that forgot to ask.
   if (!isAdmin) return null
 
   return (
     <>
-      <h2 className="section-title">Privacy</h2>
       <div className="card pad">
         <div className="card-title">Data retention</div>
         <p className="draft-hint">

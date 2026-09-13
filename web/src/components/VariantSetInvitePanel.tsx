@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, ApiError } from '../api'
+import { api } from '../api'
+import { apiMessage, type ErrorMessage } from '../errors'
 import { ExpiryField } from './ExpiryField'
 import { InviteTable } from './InviteTable'
 import { describeRecipients, parseRecipients } from '../invites'
@@ -19,7 +20,7 @@ export function VariantSetInvitePanel({
   const [expiresAt, setExpiresAt] = useState<string | null>(null)
   const [overrides, setOverrides] = useState<Record<string, string>>({})
   const [sending, setSending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ErrorMessage | null>(null)
 
   const recipients = useMemo(() => parseRecipients(raw), [raw])
 
@@ -59,7 +60,7 @@ export function VariantSetInvitePanel({
       setRaw('')
       setOverrides({})
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to send invites.')
+      setError(apiMessage(err, 'Failed to send invites.'))
     } finally {
       setSending(false)
     }

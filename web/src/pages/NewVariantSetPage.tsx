@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../api'
+import { apiMessage, type ErrorMessage } from '../errors'
 import { LANGUAGES } from '../types'
 import type { Language, VariantDraftOut, VariantIn } from '../types'
 
@@ -21,7 +22,7 @@ export function NewVariantSetPage() {
 
   const [drafting, setDrafting] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ErrorMessage | null>(null)
 
   async function handleDraft() {
     if (!brief.trim()) {
@@ -45,9 +46,7 @@ export function NewVariantSetPage() {
       setTitle(res.variants[0]?.question.title ?? brief.slice(0, 60))
     } catch (err) {
       setError(
-        err instanceof ApiError
-          ? err.message
-          : 'Couldn’t draft the variant set. Check your connection and try again.',
+        apiMessage(err, 'Couldn’t draft the variant set. Check your connection and try again.'),
       )
     } finally {
       setDrafting(false)

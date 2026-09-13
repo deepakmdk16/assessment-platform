@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
+import { apiMessage, type ErrorMessage } from '../errors'
 import { badgeClass, difficultyClass } from '../badges'
 import { ExpiryField } from '../components/ExpiryField'
 import { IntegrityCell } from '../components/IntegrityPanel'
@@ -40,7 +41,7 @@ export function QuestionDetailPage() {
   const [recipients, setRecipients] = useState('')
   const [inviteExpiresAt, setInviteExpiresAt] = useState<string | null>(null)
   const [creatingInvite, setCreatingInvite] = useState(false)
-  const [inviteError, setInviteError] = useState<string | null>(null)
+  const [inviteError, setInviteError] = useState<ErrorMessage | null>(null)
   const [revokingToken, setRevokingToken] = useState<string | null>(null)
   const [revokeError, setRevokeError] = useState<{ token: string; message: string } | null>(null)
   // Emailing is best-effort, so a created invite may still not have reached
@@ -147,7 +148,7 @@ export function QuestionDetailPage() {
       setSentTo(invite.deliveries.filter((d) => d.sent).map((d) => d.recipient))
       closeInviteDialog()
     } catch (err) {
-      setInviteError(err instanceof ApiError ? err.message : 'Failed to generate invite')
+      setInviteError(apiMessage(err, 'Failed to generate invite'))
     } finally {
       setCreatingInvite(false)
     }

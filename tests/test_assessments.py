@@ -138,7 +138,7 @@ def test_update_locks_question_set_once_invited(client) -> None:
         "/assessments/a1",
         json={
             "title": "A v2", "question_ids": current_ids, "duration_minutes": 30,
-            "org_name": "Acme", "logo_url": "https://cdn.example.com/a.png",
+            "org_name": "Acme",
         },
     )
     assert resp.status_code == 200
@@ -401,27 +401,54 @@ def test_submissions_list_surfaces_assessment_link(client, monkeypatch) -> None:
 
 
 def test_assessment_branding_roundtrip(client) -> None:
-    """A12: org_name/logo_url are stored and echoed back, and PUT can change them."""
+    """A12/P3b: `org_name` is stored and editable; the logo is not sent at all.
+
+    The logo is a snapshot of the organisation's, taken at creation — so there
+    is nothing for a client to set here, and a PUT that has no field for it must
+    not clear it either.
+    """
     _make_questions(client, "q1")
     created = client.post(
         "/assessments",
-        json={
-            "id": "a1", "title": "A", "question_ids": ["q1"],
-            "org_name": "Acme Corp", "logo_url": "https://cdn.example.com/acme.png",
-        },
+        json={"id": "a1", "title": "A", "question_ids": ["q1"], "org_name": "Acme Corp"},
     ).json()
     assert created["org_name"] == "Acme Corp"
-    assert created["logo_url"] == "https://cdn.example.com/acme.png"
+    assert created["logo_sha"] is None  # the organisation has no logo in this fixture
 
     updated = client.put(
         "/assessments/a1",
-        json={
-            "title": "A", "question_ids": ["q1"],
-            "org_name": "New Name", "logo_url": None,
-        },
+        json={"title": "A", "question_ids": ["q1"], "org_name": "New Name"},
     ).json()
     assert updated["org_name"] == "New Name"
-    assert updated["logo_url"] is None
+
+
+def test_an_assessment_defaults_to_the_organisations_name(client) -> None:
+    """P3b: omitting `org_name` brands with the organisation rather than nothing.
+
+    The per-person default it used to come from is gone, and an unbranded
+    candidate header is a worse default than the company's actual name.
+    """
+    _make_questions(client, "q1")
+    org_name = client.get("/orgs/current").json()["name"]
+    created = client.post(
+        "/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1"]}
+    ).json()
+    assert created["org_name"] == org_name
+
+
+def test_an_edit_that_omits_the_name_does_not_unbrand_the_assessment(client) -> None:
+    """PUT is full-replace, and `org_name` has a default of None — so without the
+    same fallback creation uses, saving the edit dialog with the name box empty
+    would put an assessment in a state creation cannot produce: no branding at
+    all, on a header that has always shown the company."""
+    _make_questions(client, "q1")
+    org_name = client.get("/orgs/current").json()["name"]
+    client.post("/assessments", json={"id": "a1", "title": "A", "question_ids": ["q1"]})
+
+    updated = client.put(
+        "/assessments/a1", json={"title": "A", "question_ids": ["q1"]}
+    ).json()
+    assert updated["org_name"] == org_name
 
 
 def test_candidate_view_carries_assessment_branding(client, monkeypatch) -> None:
@@ -432,14 +459,14 @@ def test_candidate_view_carries_assessment_branding(client, monkeypatch) -> None
         "/assessments",
         json={
             "id": "a1", "title": "Backend Screen", "question_ids": ["q1"],
-            "org_name": "Acme Corp", "logo_url": "https://cdn.example.com/acme.png",
+            "org_name": "Acme Corp",
         },
     )
     tok = client.post("/assessments/a1/invites", json={"recipients": ["cand@x.io"]}).json()["token"]
     data = client.post(f"/invite/{tok}/start", json={"candidate_email": "cand@x.io", "consent": True}).json()
     assert data["assessment_title"] == "Backend Screen"
     assert data["org_name"] == "Acme Corp"
-    assert data["logo_url"] == "https://cdn.example.com/acme.png"
+    assert data["logo_sha"] is None
 
     # A legacy single-question invite has no Assessment to brand from.
     legacy_tok = client.post(
@@ -449,8 +476,13 @@ def test_candidate_view_carries_assessment_branding(client, monkeypatch) -> None
         f"/invite/{legacy_tok}/start", json={"candidate_email": "legacy@x.io", "consent": True}
     ).json()
     assert legacy_data["assessment_title"] is None
-    assert legacy_data["org_name"] is None
-    assert legacy_data["logo_url"] is None
+    # …but the organisation still brands it (P3b). A quick-screen sitting used to
+    # be the one candidate surface with no company on it at all, and only because
+    # the branding lived on an Assessment it does not have. Safe here and not on
+    # the pre-start probe: /start has required the caller to identify as an
+    # invited recipient first.
+    assert legacy_data["org_name"] == client.get("/orgs/current").json()["name"]
+    assert legacy_data["logo_sha"] is None  # this organisation has uploaded none
 
 
 def test_delete_blocked_by_invite(client) -> None:

@@ -53,7 +53,7 @@ function billing(over: Partial<Billing> = {}): Billing {
 
 function org(role: 'admin' | 'member'): Organization {
   return {
-    id: 1, name: 'Acme', role, member_count: 1, retention_days: null,
+    id: 1, name: 'Acme', role, member_count: 1, logo_sha: null, retention_days: null,
     results_webhook_url: null, results_webhook_secret: null,
   }
 }

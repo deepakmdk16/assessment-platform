@@ -164,7 +164,6 @@ forwarded link, not deliberate impersonation.
 | POST   | `/auth/refresh`                   | cookie      | → a new `{access_token}` and re-issued cookie (401 = not signed in). |
 | POST   | `/auth/logout`                    | none        | Clears this browser's refresh cookie (204).                   |
 | GET    | `/auth/me`                        | bearer      | Current interviewer.                                          |
-| PATCH  | `/auth/me`                        | bearer      | Update workspace defaults (branding).                         |
 | DELETE | `/auth/me`                        | bearer      | Delete the account. Takes the organisation with it only if you are its last member; 409 if you are its only admin and others remain. Body `{password}` (403 wrong password). |
 | POST   | `/auth/change-password`           | bearer      | `{current_password,new_password}` → fresh session; every other device is signed out. |
 | POST   | `/auth/forgot-password`           | none        | `{email}` → 202 either way; emails a one-hour, single-use reset link if the address has an account. |
@@ -176,6 +175,9 @@ forwarded link, not deliberate impersonation.
 | POST   | `/orgs`                           | bearer      | Found an organisation, for an account that belongs to none (409 if it already does). |
 | GET    | `/orgs/current`                   | bearer      | The caller's organisation, their role in it, and its size.   |
 | PATCH  | `/orgs/current`                   | bearer      | Rename it (admin only).                                      |
+| PUT    | `/orgs/current/logo`              | bearer      | Upload the organisation's logo (admin only, multipart `file`). PNG/JPEG/WebP, ≤256 KB; decoded and re-encoded server-side, so EXIF and polyglots do not survive. **422** with the reason if refused. |
+| DELETE | `/orgs/current/logo`              | bearer      | Remove it (admin only). Idempotent; assessments that snapshotted it keep it. |
+| GET    | `/logos/{sha256}`                 | public      | Serve a logo by content address. Immutable, one-year cache, ETag. |
 | GET    | `/orgs/current/members`           | bearer      | The roster (any member).                                     |
 | PATCH  | `/orgs/current/members/{id}`      | bearer      | Change a role (admin only); **409** for the last admin.      |
 | DELETE | `/orgs/current/members/{id}`      | bearer      | Remove someone (admin only); their work stays with the organisation. |

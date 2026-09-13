@@ -15,6 +15,8 @@ function crumbFor(pathname: string): string {
   if (pathname === '/variant-sets') return 'Variant sets'
   if (pathname.startsWith('/variant-sets/')) return 'Variant set'
   if (pathname === '/team') return 'Team'
+  // Every section shares one crumb: the rail beside it already says which.
+  if (pathname.startsWith('/settings')) return 'Settings'
   return ''
 }
 

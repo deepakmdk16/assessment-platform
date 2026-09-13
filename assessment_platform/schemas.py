@@ -161,10 +161,10 @@ class AssessmentCreate(_AssessmentSlots):
     id: str | None = None
     title: str
     duration_minutes: int | None = Field(default=None, gt=0)  # None = untimed total
-    # Per-assessment branding (A12): shown on the candidate IDE header. Both
-    # optional; logo_url is a URL reference, never base64.
+    # Per-assessment branding (A12). `org_name` is optional and defaults to the
+    # organisation's own name. The logo is NOT settable here: it is snapshotted
+    # from the organisation at creation (P3b), so there is nothing to send.
     org_name: str | None = None
-    logo_url: str | None = None
     # Integrity monitoring (I1). Defaults on; a caller that omits it gets a
     # monitored sitting, which is what the pre-I1 clients should now do.
     proctored: bool = True
@@ -176,7 +176,6 @@ class AssessmentUpdate(_AssessmentSlots):
     title: str
     duration_minutes: int | None = Field(default=None, gt=0)
     org_name: str | None = None
-    logo_url: str | None = None
     proctored: bool = True
 
 
@@ -197,7 +196,9 @@ class AssessmentOut(BaseModel):
     title: str
     duration_minutes: int | None
     org_name: str | None
-    logo_url: str | None
+    # The logo this assessment was created with, as a content address: fetch it
+    # from GET /logos/{sha256}. Frozen at creation — see `models.Assessment`.
+    logo_sha: str | None
     proctored: bool = True
     status: str
     created_at: datetime
@@ -496,9 +497,6 @@ class InterviewerOut(BaseModel):
     id: int
     email: str
     name: str
-    # Workspace-level default branding (A12) — prefills a new assessment's org/logo.
-    default_org_name: str | None = None
-    default_logo_url: str | None = None
     # Whether the emailed confirmation link was followed. Informational for now:
     # nothing is gated on it, the UI just nags.
     email_verified: bool = False
@@ -531,13 +529,6 @@ class DeleteAccountIn(BaseModel):
     # Re-entering the password is what stops a walked-away-from session (or a
     # lifted access token) from deleting the account.
     password: str
-
-
-class InterviewerUpdate(BaseModel):
-    # Partial update of the caller's own workspace settings (PATCH /auth/me).
-    # Only the fields sent are changed; sending an explicit null clears one.
-    default_org_name: str | None = None
-    default_logo_url: str | None = None
 
 
 class LoginIn(BaseModel):
@@ -658,6 +649,11 @@ class InviteStatusOut(BaseModel):
     # which has no Assessment — the question's own title must never stand in.
     assessment_title: str | None = None
     org_name: str | None = None
+    # The organisation's logo, by content address (P3b/W21). Safe here for the
+    # same reason `org_name` above is: an assessment invite's gate already names
+    # the organisation, and a quick-screen invite has no assessment, so this is
+    # null exactly where naming the company would be a new disclosure.
+    logo_sha: str | None = None
     question_count: int = 1
     # Total time budget for the sitting in minutes; None = untimed.
     duration_minutes: int | None = None
@@ -750,7 +746,11 @@ class InvitePublicOut(BaseModel):
     # unbranded assessment (candidate UI falls back to a generic header).
     assessment_title: str | None = None
     org_name: str | None = None
-    logo_url: str | None = None
+    # The content address of the logo to show, or None. Served from this
+    # deployment (GET /logos/{sha256}) rather than from whatever host a URL used
+    # to point at — so opening an assessment no longer tells a third party the
+    # candidate's IP address and the moment they sat down (P3b).
+    logo_sha: str | None = None
     # Whether this sitting is monitored (I1): the candidate UI enforces fullscreen
     # and blocks outside pastes only when true. An assessment invite reads its
     # Assessment.proctored; a legacy single-question ("Quick screen") invite has no
@@ -1088,6 +1088,10 @@ class OrganizationOut(BaseModel):
     # "you are an admin of Acme, 3 people".
     role: str
     member_count: int
+    # The organisation's logo as a content address, or null for none (P3b).
+    # Serve it from GET /logos/{sha256}; move it with PUT/DELETE
+    # /orgs/current/logo.
+    logo_sha: str | None = None
     # The organisation's retention window in days, or null for "no policy set"
     # (X03). Null is the default and is not the same as 0 — see
     # `privacy.purge_expired`.

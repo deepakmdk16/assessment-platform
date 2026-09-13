@@ -224,17 +224,15 @@ retention.**
   `OrgInviteOut.accepted_at` can never be non-null on any response and
   `Membership.invited_by` is written by `_join_org` and read by nothing — the
   audit trail the OrgInvite docstring says the rows are kept for has no reader.
-  `Interviewer.default_org_name`/`default_logo_url` are still per-person
-  ("workspace"-level) in a product where the workspace is now a shared
-  `Organization` with its own name, so two admins keep separate branding
-  defaults. `GET /auth/me` carries no organisation, so its name appears in
+  `GET /auth/me` carries no organisation, so its name appears in
   exactly one place in the SPA. Question/assessment/variant-set ids remain one
   global slug namespace, so an explicit-id create is an existence oracle across
   organisations. Several open items above still cite `api.py:NNNN` line numbers
   that X01 moved by ~800-1000 lines. Why: none of these is user-visible today;
   together they are the tail of the org migration. Fix: a read surface for
-  accepted invitations, decide whether branding defaults move to the org, and
-  re-anchor the stale citations.
+  accepted invitations, and re-anchor the stale citations. (The branding half is
+  closed: P3b moved it to `Organization.name`/`logo_sha` and dropped the
+  per-person columns along with `PATCH /auth/me`.)
 
 - **P07 · P2 · XS — CSV export is vulnerable to formula injection.**
   Evidence: api.py:2872-2884 writes candidate-supplied candidate, candidate_email
@@ -384,14 +382,6 @@ ErrorBoundary only logs; 401 redirect loses returnTo.**
   one api.test.ts.
   _Verified: single-audit claim, not independently re-verified; source:
   frontend,quality._
-- **W13 · P2 · XS — The logo URL is rendered unvalidated in the candidate's
-browser.**
-  Evidence: NewAssessmentPage.tsx:207-208 live-previews whatever is typed;
-  AssessmentFlow.tsx:288 renders it for candidates; check whether schemas.py
-  validates logo_url (https only). Why: http:// logos trigger mixed content; the
-  candidate's IP is sent to an arbitrary host. Fix: require https:// client- and
-  server-side.
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
 - **W14 · P2 · S — Accessibility: the remaining three.**
   Evidence: every picker row has an identical "Add" (NewAssessmentPage.tsx); the
   ARIA tablist has no arrow-key handling (AssessmentFlow.tsx); the Monaco Tab-trap
@@ -438,6 +428,9 @@ gate.**
   (api.py `_check_invite_capacity`, `billing.consume`), 403 to the candidate at
   `_require_sitting_quota`; no threshold email, and no mail of our own when Stripe
   reports `past_due` (the banner is only visible to someone who opens Settings).
+  P3a narrowed this: a 402 now carries a link to `/settings/billing`
+  (`web/src/errors.tsx`), so the refusal is actionable — but it is still the
+  first warning anyone gets.
   Why: the first time an interviewer learns the plan is exhausted is while trying
   to invite a candidate they have already scheduled. Fix: an email at ~80% of any
   allowance and one on `past_due`, both once per period per organisation.
@@ -449,7 +442,11 @@ headers or HTTPS enforcement docs.**
   on the proxy, undocumented). Why: CVEs in bookworm toolchains/node/react go
   unnoticed; headers depend on an undocumented proxy. Fix: Dependabot (pip, npm,
   docker, actions) + pip-audit/npm audit --audit-level=high in CI;
-  HSTS/CSP/X-Frame-Options at the proxy, documented.
+  HSTS/CSP/X-Frame-Options at the proxy, documented. P3b narrowed the CSP half:
+  no candidate surface loads an image from a customer-supplied host any more
+  (logos are served from `/api/logos/{sha}`, same-origin behind nginx), so P9a's
+  planned `img-src 'self' data: blob:` needs no widening — P9a should confirm a
+  branded assessment still renders once the header lands.
   _Verified: cited lines read in this audit; source: saas._
 - **X12 · P2 · M — Candidate identity is a claim; recipient enumeration via
 /start.**
@@ -557,13 +554,6 @@ layout shift while analytics load.**
   strict; recommendedTypeChecked + jsx-a11y.
   _Verified: cited lines read in this audit; source: quality. The analytics layout
   shift was fixed with a reserved-height skeleton 2026-09-08._
-- **W21 · P3 · XS — The start gate cannot show the logo before identification.**
-  Evidence: `GET /invite/{token}` now carries the title, organisation, question
-  count, duration and languages, and the gate renders them (P2a, 2026-09-13);
-  `logo_url` still arrives only in the /start payload. Fix: add `logo_url` to
-  `InviteStatusOut` and render it on the gate — do it in P3b (logo upload),
-  which changes where the logo lives.
-  _Verified: cited lines read in this audit; source: frontend,saas._
 
 ---
 
@@ -605,6 +595,77 @@ Minor findings from the P2a review round, deferred rather than fixed there.
   notice could now render that field instead of restating a contact sentence —
   decide first whether a human-review request should reach the platform's
   support mailbox at all, or only the hiring team.
+
+## P3b review leftovers — 2026-09-13
+
+Minor findings from the P3b review round, deferred rather than fixed there.
+
+- **The orphan sweep does not run on assessment deletion.**
+  `_drop_unreferenced_logo` (`assessment_platform/api.py`) is called when the
+  organisation's logo is replaced or removed. Deleting the assessment that
+  snapshotted a superseded logo leaves the `OrgAsset` row behind, and
+  `GET /logos/{sha}` keeps serving the old branding. Narrower than it sounds,
+  and the integration check pinned why: `privacy.purge_expired` never deletes an
+  `Assessment` row, and `DELETE /assessments/{id}` refuses while any invite
+  points at it — so the only assessment that can trigger this is one no
+  candidate was ever sent. Bytes, not a leak: the address is unguessable and it
+  is the organisation's own image. Fix, if ever: a periodic pass over
+  unreferenced assets rather than a second hand-rolled hook.
+- **A dangling `logo_sha` draws a broken image rather than falling back.** Every
+  branded header is `logo_sha ? <img> : <span className="ide-mark">`
+  (`web/src/pages/CandidatePage.tsx`, `AssessmentFlow.tsx`,
+  `AssessmentDetailPage.tsx`), with no `onError`. The *null* case has a clean
+  fallback; the *dead address* case — reachable only via the race below — is the
+  one that renders worst, on a candidate's screen, permanently. Fix: one shared
+  logo component that hides itself on error.
+- **The candidate's dead-end notices carry no logo.** `CandidateNotice.tsx`
+  shows neither name nor image, on the screens someone lands on when a link is
+  spent. `GET /logos/{sha}` is public and would work there. (The invitation
+  email deliberately stays imageless — a remote image in a message works as a
+  tracking pixel.)
+- **A multipart body with no `Content-Length` is not bounded before it is
+  parsed.** `_limit_body_size` (`assessment_platform/api.py`) checks a declared
+  length, and the JSON routes have schema caps behind it; `PUT
+  /orgs/current/logo` is the first route where neither applies, because
+  Starlette spools the part before `await file.read(cap + 1)` runs. Admin-only
+  and authenticated, so the attacker is a customer's own admin or a stolen
+  token. Fix: a streamed read that aborts past the cap, or a parser-level limit.
+- **An assessment created concurrently with a logo replacement can reference a
+  just-deleted asset.** Under READ COMMITTED, `create_assessment` can read
+  `organization.logo_sha = A` before `set_org_logo` moves it to B, sweeps A
+  (seeing no reference yet) and commits — leaving the new assessment pointing at
+  a 404 permanently, since its logo is frozen at creation. Needs a row lock on
+  the organisation, or a foreign key from `assessment.logo_sha` to the asset.
+
+## P3a review leftovers — 2026-09-13
+
+Minor findings from the P3a review round, deferred rather than fixed there.
+
+- **`GET /orgs/current` is fetched twice on three of the six sections.** The
+  Settings shell reads it for the role (`web/src/pages/SettingsPage.tsx:32`) and
+  `BillingPanel.tsx:172`, `NotificationsPanel.tsx:39` and `PrivacyPanel.tsx:39`
+  each read it again for their own data. Harmless but wasteful, and the two
+  copies can disagree. Fix: pass the `Organization` down from the shell, which
+  also closes the next item.
+- **A section heading can sit above an empty panel.** The shell renders
+  `<h2>{label}</h2>` (`web/src/pages/SettingsPage.tsx:100`) whichever way the
+  panel goes; if a panel's own `getOrg` rejects it returns `null`, so the
+  section title stands over nothing. Only reachable when the shell's fetch
+  succeeded and the panel's failed.
+- **Two error helpers in TeamPage.** The local `message()`
+  (`web/src/pages/TeamPage.tsx:8`) and the shared `apiMessage()` differ only in
+  the 402 branch, and six of the seven call sites still use the local one — so
+  the Billing link appears on the invite form and nowhere else on that page.
+- **`apiMessage` returns JSX, not data.** `web/src/errors.tsx:19` is why six
+  error states widened from `string` to `ErrorMessage`, which costs them
+  logging, comparison and snapshotting; `describeDraftFailure` — a pure
+  classifier — now needs a Router to test. A `{ text, action? }` shape rendered
+  through one error component would keep the states as strings.
+- **The 402 link can appear inside an open `<dialog>`.** On
+  `web/src/pages/QuestionDetailPage.tsx` the invite refusal renders inside the
+  modal opened with `showModal()`; following the link unmounts the page without
+  calling `close()`. Browsers pop a removed element from the top layer, so this
+  is a broken invariant rather than a visible bug.
 
 ## P2b review leftovers — 2026-09-13
 

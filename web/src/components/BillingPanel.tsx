@@ -187,7 +187,8 @@ export function BillingPanel() {
   }, [])
 
   // Stripe hosts both pages, so leaving this origin IS the flow — the browser
-  // comes back to /settings with the subscription already reported by webhook.
+  // comes back to /settings/billing with the subscription already reported by
+  // webhook.
   async function leaveFor(get: () => Promise<{ url: string }>) {
     setError(null)
     setBusy(true)

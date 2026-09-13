@@ -60,6 +60,13 @@ deterministic grade.
 - `integrity.py` — DB-free risk scoring over a sitting's integrity signals
   (score/level/reasons, I1); a triage hint, never proof, and never part of a
   verdict.
+- `blobstore.py` + `images.py` — the organisation's logo (P3b). `images` decodes
+  and **re-encodes** every upload (which is what strips EXIF and kills polyglot
+  files) and refuses SVG outright; `blobstore` is the three-method seam an object
+  store would slot into, with the bytes today in an `OrgAsset` row addressed by
+  sha256. Nothing outside `blobstore` touches `OrgAsset.data`. A logo is served
+  from this deployment, never from a customer-supplied URL — a candidate's
+  browser must not be told to fetch anything from a host we do not control.
 - `billing.py` — plans, monthly quotas and usage metering (X02). Plans are a
   frozen table in code, not rows; `consume` claims an allowance with a
   conditional UPDATE *before* the money is spent, `record` counts what happened

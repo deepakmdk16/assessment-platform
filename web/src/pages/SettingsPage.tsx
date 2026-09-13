@@ -1,321 +1,115 @@
-import { useState, type FormEvent } from 'react'
-import { api, ApiError, setToken } from '../api'
+import { useEffect, useId, useState } from 'react'
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
+import { api } from '../api'
 import { useAuth } from '../auth/AuthContext'
-import { BillingPanel } from '../components/BillingPanel'
-import { NotificationsPanel } from '../components/NotificationsPanel'
-import { PrivacyPanel } from '../components/PrivacyPanel'
+import { DEFAULT_SECTION, SETTINGS_SECTIONS } from '../settings-sections'
 
+/** Settings: one route per section, with a rail to move between them (P3a).
+ *
+ *  The rail lists only what this person may open, which makes loading the role
+ *  a four-state affair, and every shortcut through it is visible:
+ *
+ *  - unknown → treat as member, and an admin refreshing on /settings/privacy is
+ *    bounced out before the answer arrives;
+ *  - unknown → treat as admin, and the panel flashes open for someone the next
+ *    tick redirects;
+ *  - failed → treat as member, and one network blip silently demotes an admin
+ *    for the rest of the session, `replace` taking the URL with it.
+ *
+ *  So an admin-only section waits while the role is loading, and says so if the
+ *  load failed. Only a role actually known to be `member` redirects.
+ */
 export function SettingsPage() {
-  const { user, refresh, logout } = useAuth()
-  const [orgName, setOrgName] = useState(user?.default_org_name ?? '')
-  const [logoUrl, setLogoUrl] = useState(user?.default_logo_url ?? '')
-  const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const { user } = useAuth()
+  const navigate = useNavigate()
+  const { section } = useParams<{ section: string }>()
+  const selectId = useId()
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null)
+  const [roleFailed, setRoleFailed] = useState(false)
 
-  const [resendSent, setResendSent] = useState(false)
-  const [resendError, setResendError] = useState<string | null>(null)
-  const [resending, setResending] = useState(false)
-
-  const [currentPw, setCurrentPw] = useState('')
-  const [newPw, setNewPw] = useState('')
-  const [confirmPw, setConfirmPw] = useState('')
-  const [pwError, setPwError] = useState<string | null>(null)
-  const [pwChanged, setPwChanged] = useState(false)
-  const [changing, setChanging] = useState(false)
-
-  const [deletePw, setDeletePw] = useState('')
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-  const [deleting, setDeleting] = useState(false)
-
-  async function handleSave() {
-    setError(null)
-    setSaved(false)
-    setSaving(true)
-    try {
-      await api.updateMe({
-        default_org_name: orgName.trim() || null,
-        default_logo_url: logoUrl.trim() || null,
+  useEffect(() => {
+    let cancelled = false
+    // The role comes from the organisation, not the login: which parts of
+    // Settings exist for you is the roster's business (X01).
+    void api
+      .getOrg()
+      .then((org) => {
+        if (!cancelled) setIsAdmin(org.role === 'admin')
       })
-      await refresh()
-      setSaved(true)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to save settings')
-    } finally {
-      setSaving(false)
+      .catch(() => {
+        // Unknown, not "member": this must not quietly cost an admin their own
+        // sections, so the gated route says what happened instead of leaving.
+        if (!cancelled) setRoleFailed(true)
+      })
+    return () => {
+      cancelled = true
     }
-  }
+  }, [])
 
-  async function handleResend() {
-    setResendError(null)
-    setResendSent(false)
-    setResending(true)
-    try {
-      await api.resendVerification()
-      setResendSent(true)
-    } catch (err) {
-      setResendError(err instanceof ApiError ? err.message : 'Failed to resend the link')
-    } finally {
-      setResending(false)
-    }
-  }
-
-  async function handleChangePassword(e: FormEvent) {
-    e.preventDefault()
-    setPwError(null)
-    setPwChanged(false)
-    if (newPw !== confirmPw) {
-      setPwError("Passwords don't match.")
-      return
-    }
-    setChanging(true)
-    try {
-      const result = await api.changePassword(currentPw, newPw)
-      // The new token keeps this tab signed in; every other device is signed out.
-      setToken(result.access_token)
-      setCurrentPw('')
-      setNewPw('')
-      setConfirmPw('')
-      setPwChanged(true)
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setPwError(err.status === 403 ? 'Current password is incorrect.' : err.message)
-      } else {
-        setPwError('Failed to change password')
-      }
-    } finally {
-      setChanging(false)
-    }
-  }
-
-  async function handleDelete(e: FormEvent) {
-    e.preventDefault()
-    setDeleteError(null)
-    setDeleting(true)
-    try {
-      await api.deleteAccount(deletePw)
-      logout()
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setDeleteError(err.status === 403 ? 'Password is incorrect.' : err.message)
-      } else {
-        setDeleteError('Failed to delete account')
-      }
-      setDeleting(false)
-    }
-  }
+  const visible = SETTINGS_SECTIONS.filter((s) => isAdmin === true || !s.admin)
+  const current = SETTINGS_SECTIONS.find((s) => s.id === section)
+  const gated = current?.admin === true
 
   if (!user) return null
+  // An unknown section, or one this person is known not to have. Either way the
+  // answer is the same: the first section, not a blank panel or a 403 to read.
+  if (!current || (gated && isAdmin === false)) {
+    return <Navigate to={`/settings/${DEFAULT_SECTION}`} replace />
+  }
+  // The role decides whether this section exists at all, so while it is in
+  // flight there is nothing honest to draw — not even its name.
+  if (gated && isAdmin === null && !roleFailed) return null
 
   return (
-    <div className="wizard">
+    <>
       <div className="page-head">
         <div>
           <h1>Settings</h1>
-          <div className="sub">Your workspace defaults, plan and account security.</div>
+          <div className="sub">{current.sub}</div>
         </div>
       </div>
 
-      <h2 className="section-title">Workspace</h2>
-      <div className="card pad">
-        <div className="card-title">Default branding</div>
-        <p className="draft-hint">
-          Pre-fills the branding on every new assessment so you don&rsquo;t re-enter it each time.
-          Candidates see it on their IDE header when they open the assessment. Leave blank to default
-          to the generic &ldquo;Coding assessment&rdquo; header.
-        </p>
-        <div className="stack">
-          <div className="grid2">
-            <div className="field">
-              <label htmlFor="default_org_name">Organization name</label>
-              <input
-                id="default_org_name"
-                placeholder="e.g. Acme Corp"
-                value={orgName}
-                onChange={(e) => {
-                  setOrgName(e.target.value)
-                  setSaved(false)
-                }}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="default_logo_url">Logo URL</label>
-              <input
-                id="default_logo_url"
-                placeholder="https://…"
-                value={logoUrl}
-                onChange={(e) => {
-                  setLogoUrl(e.target.value)
-                  setSaved(false)
-                }}
-              />
-            </div>
+      <div className="settings-layout">
+        <nav className="subnav" aria-label="Settings sections">
+          {visible.map((s) => (
+            <Link
+              key={s.id}
+              to={`/settings/${s.id}`}
+              className={s.id === current.id ? 'on' : undefined}
+              aria-current={s.id === current.id ? 'page' : undefined}
+            >
+              {s.label}
+            </Link>
+          ))}
+        </nav>
+
+        <div>
+          {/* The rail's shape below the breakpoint: same sections, one control. */}
+          <div className="subnav-select">
+            <label htmlFor={selectId}>Section</label>
+            <select
+              id={selectId}
+              value={current.id}
+              onChange={(e) => navigate(`/settings/${e.target.value}`)}
+            >
+              {visible.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
           </div>
-          {(orgName.trim() || logoUrl.trim()) && (
-            <div className="ide-title-preview">
-              {logoUrl.trim() && <img src={logoUrl.trim()} alt="" className="ide-brand-logo" />}
-              <span>
-                {orgName.trim() && `${orgName.trim()} — `}
-                Coding assessment
-              </span>
-            </div>
+
+          <h2 className="section-title">{current.label}</h2>
+          {gated && roleFailed ? (
+            <p role="alert" className="form-error">
+              Couldn’t check what you’re allowed to see here. Reload the page to try again.
+            </p>
+          ) : (
+            current.panel()
           )}
         </div>
-        {error && (
-          <p role="alert" className="form-error">
-            {error}
-          </p>
-        )}
-        {saved && <p className="form-success">Saved.</p>}
-        <div className="card-actions">
-          <button type="button" className="btn accent" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : 'Save defaults'}
-          </button>
-        </div>
       </div>
-
-      <h2 className="section-title">Billing</h2>
-      <BillingPanel />
-
-      <NotificationsPanel />
-
-      <PrivacyPanel />
-
-      <h2 className="section-title">Account</h2>
-      <div className="card pad">
-        <dl className="account-kv">
-          <dt>Name</dt>
-          <dd>{user.name}</dd>
-          <dt>Email</dt>
-          <dd>
-            {user.email}
-            {user.email_verified ? (
-              <span className="chip chip-good">Confirmed</span>
-            ) : (
-              <>
-                <span className="chip chip-warn">Not confirmed</span>
-                <button
-                  type="button"
-                  className="btn sec sm"
-                  onClick={handleResend}
-                  disabled={resending || resendSent}
-                >
-                  Resend link
-                </button>
-              </>
-            )}
-          </dd>
-          <dt>Sessions</dt>
-          <dd className="muted">
-            Signed in on this browser for up to 30 days. Changing your password signs out every
-            other device.
-          </dd>
-        </dl>
-        {resendError && (
-          <p role="alert" className="form-error">
-            {resendError}
-          </p>
-        )}
-        {resendSent && <p className="form-success">Sent. Check {user.email} for the new link.</p>}
-      </div>
-
-      <h2 className="section-title">Security</h2>
-      <form className="card pad" onSubmit={handleChangePassword}>
-        <div className="card-title">Change password</div>
-        {pwError && (
-          <p role="alert" className="form-error">
-            {pwError}
-          </p>
-        )}
-        {pwChanged && (
-          <p className="form-success">Password changed. Other devices have been signed out.</p>
-        )}
-        <div className="stack">
-          <div className="grid2">
-            <div className="field">
-              <label htmlFor="cp-cur">Current password</label>
-              <input
-                id="cp-cur"
-                type="password"
-                value={currentPw}
-                onChange={(e) => setCurrentPw(e.target.value)}
-                autoComplete="current-password"
-                required
-              />
-            </div>
-            <div />
-            <div className="field">
-              <label htmlFor="cp-new">New password</label>
-              <input
-                id="cp-new"
-                type="password"
-                value={newPw}
-                onChange={(e) => setNewPw(e.target.value)}
-                autoComplete="new-password"
-                minLength={12}
-                required
-              />
-              <p className="field-hint">
-                At least 12 characters. Passwords that appear in known breaches are refused.
-              </p>
-            </div>
-            <div className="field">
-              <label htmlFor="cp-new2">Confirm new password</label>
-              <input
-                id="cp-new2"
-                type="password"
-                value={confirmPw}
-                onChange={(e) => setConfirmPw(e.target.value)}
-                autoComplete="new-password"
-                required
-              />
-            </div>
-          </div>
-        </div>
-        <div className="card-actions">
-          <button type="submit" className="btn" disabled={changing}>
-            Change password
-          </button>
-          <span className="field-hint">Every other device is signed out.</span>
-        </div>
-      </form>
-
-      <form className="card pad danger" onSubmit={handleDelete}>
-        <div className="card-title">Delete account</div>
-        {deleteError && (
-          <p role="alert" className="form-error">
-            {deleteError}
-          </p>
-        )}
-        <p className="draft-hint">
-          Deletes your login. What happens to the work depends on who else is in your
-          organisation: if you are its last member, the questions, variant sets, assessments,
-          invites and every candidate submission and result go with you, and candidates&rsquo;
-          links stop working immediately. If colleagues remain, all of that stays with the
-          organisation and only your account and your name against it are removed &mdash; and if
-          you are its only admin, promote someone else first or this will be refused. This
-          can&rsquo;t be undone.
-        </p>
-        <div className="grid2">
-          <div className="field">
-            <label htmlFor="del-pw">Confirm with your password</label>
-            <input
-              id="del-pw"
-              type="password"
-              value={deletePw}
-              onChange={(e) => setDeletePw(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </div>
-        </div>
-        <div className="card-actions">
-          <button type="submit" className="btn danger" disabled={!deletePw || deleting}>
-            Delete my account
-          </button>
-          <span className="field-hint">Enabled once the password is filled in.</span>
-        </div>
-      </form>
-    </div>
+    </>
   )
 }

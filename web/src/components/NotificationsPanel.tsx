@@ -124,7 +124,6 @@ export function NotificationsPanel() {
 
   return (
     <>
-      <h2 className="section-title">Notifications</h2>
       <div className="card pad">
         <div className="card-title">Send results to another system</div>
         <p className="draft-hint">

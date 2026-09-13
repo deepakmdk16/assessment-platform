@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { api, ApiError } from '../api'
-import { useAuth } from '../auth/AuthContext'
+import { api, ApiError, logoSrc } from '../api'
 import { difficultyClass } from '../badges'
 import type { QuestionOut, VariantSetSummary } from '../types'
 
@@ -11,14 +10,18 @@ type Slot = { kind: 'question' | 'set'; id: string }
 export function NewAssessmentPage() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { user } = useAuth()
   const [title, setTitle] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(60)
   const [indefinite, setIndefinite] = useState(false)
-  // Prefilled from the interviewer's workspace default branding (A12); still
-  // editable per assessment, and only this assessment's value is stored.
-  const [orgName, setOrgName] = useState(user?.default_org_name ?? '')
-  const [logoUrl, setLogoUrl] = useState(user?.default_logo_url ?? '')
+  // An override for this assessment only. Left blank, the server brands with
+  // the organisation's own name (P3b), and the logo is snapshotted from the
+  // organisation either way — there is nothing to set here.
+  const [orgName, setOrgName] = useState('')
+  // What the server will brand with if the box is left blank, plus the logo it
+  // will snapshot — the preview mimics the candidate header, and that header
+  // leads with the logo.
+  const [defaultOrgName, setDefaultOrgName] = useState('')
+  const [defaultLogoSha, setDefaultLogoSha] = useState<string | null>(null)
   // Integrity monitoring (I1) — on unless the interviewer deliberately relaxes
   // this sitting.
   const [proctored, setProctored] = useState(true)
@@ -39,6 +42,17 @@ export function NewAssessmentPage() {
 
   useEffect(() => {
     let cancelled = false
+    // Only for the preview: the server applies this default whatever we send.
+    void api
+      .getOrg()
+      .then((o) => {
+        if (cancelled) return
+        setDefaultOrgName(o.name)
+        setDefaultLogoSha(o.logo_sha)
+      })
+      .catch(() => {
+        // The preview simply shows the title alone. Not worth an error here.
+      })
     Promise.all([api.listQuestions(false, 0, 200), api.listVariantSets(false, 0, 200)])
       .then(([qPage, sPage]) => {
         if (cancelled) return
@@ -98,7 +112,6 @@ export function NewAssessmentPage() {
           s.kind === 'question' ? { question_id: s.id } : { variant_set_id: s.id },
         ),
         org_name: orgName.trim() || null,
-        logo_url: logoUrl.trim() || null,
         proctored,
       })
       navigate(`/assessments/${created.id}`, { state: { justCreated: true } })
@@ -181,34 +194,29 @@ export function NewAssessmentPage() {
           the generic &ldquo;Coding assessment&rdquo; header.
         </p>
         <div className="stack">
-          <div className="grid2">
-            <div className="field">
-              <label htmlFor="org_name">Organization name</label>
-              <input
-                id="org_name"
-                placeholder="e.g. Acme Corp"
-                value={orgName}
-                onChange={(e) => setOrgName(e.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="logo_url">Logo URL</label>
-              <input
-                id="logo_url"
-                placeholder="https://…"
-                value={logoUrl}
-                onChange={(e) => setLogoUrl(e.target.value)}
-              />
-            </div>
+          <div className="field org-name-field">
+            <label htmlFor="org_name">Organization name</label>
+            <input
+              id="org_name"
+              placeholder="Your organisation's name"
+              value={orgName}
+              onChange={(e) => setOrgName(e.target.value)}
+            />
+            <p className="field-hint">
+              Leave blank to use your organisation&rsquo;s name. The logo comes from Settings
+              &rarr; Workspace and is fixed once this assessment is created.
+            </p>
           </div>
-          {(orgName.trim() || logoUrl.trim()) && (
+          {/* Blank means "use the organisation's name", so the preview shows
+              that rather than hiding — a header with no company on it is not a
+              state this form can produce. */}
+          {(orgName.trim() || defaultOrgName) && (
             <div className="ide-title-preview">
-              {logoUrl.trim() && (
-                <img src={logoUrl.trim()} alt="" className="ide-brand-logo" />
+              {defaultLogoSha && (
+                <img src={logoSrc(defaultLogoSha)} alt="" className="ide-brand-logo" />
               )}
               <span>
-                {orgName.trim() && `${orgName.trim()} — `}
-                {title.trim() || 'Assessment title'}
+                {orgName.trim() || defaultOrgName} &mdash; {title.trim() || 'Assessment title'}
               </span>
             </div>
           )}

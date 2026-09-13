@@ -54,6 +54,7 @@ const org = (over: Partial<Organization> = {}): Organization => ({
   name: 'Acme Corp',
   role: 'admin',
   member_count: 2,
+  logo_sha: null,
   retention_days: null,
     results_webhook_url: null,
     results_webhook_secret: null,
@@ -84,8 +85,6 @@ function setUp(
     id: String(overrides.self ?? 1),
     email: 'ada@acme.io',
     name: 'Ada Lovelace',
-    default_org_name: null,
-    default_logo_url: null,
     email_verified: true,
   }
   vi.mocked(api.getOrg).mockResolvedValue(overrides.org ?? org())

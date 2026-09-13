@@ -72,8 +72,6 @@ describe('VerifyEmailPage', () => {
       id: '2',
       email: 'other@acme.com',
       name: 'Other',
-      default_org_name: null,
-      default_logo_url: null,
       email_verified: true,
     }
     vi.mocked(api.verifyEmail).mockResolvedValue(undefined)
@@ -89,8 +87,6 @@ describe('VerifyEmailPage', () => {
       id: '1',
       email: 'jane@acme.com',
       name: 'Jane',
-      default_org_name: null,
-      default_logo_url: null,
       email_verified: false,
     }
     vi.mocked(api.verifyEmail).mockResolvedValue(undefined)
