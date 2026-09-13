@@ -70,9 +70,10 @@ class SqlBlobStore:
     carried by the same backup as everything else — none of which is true of a
     file written to local disk.
 
-    Two organisations that upload identical bytes get **two rows**, one each.
-    Sharing one would mean either tenant's delete could take the other's logo,
-    and would leak the fact that they use the same image.
+    Two organisations that upload identical bytes get **two rows**, one each, so
+    that neither tenant's delete can take the other's logo. `read` and `head`
+    are addressed by sha alone and `delete` by (org, sha): serving is public and
+    has no caller to scope by, while removing is always somebody's.
     """
 
     def put(self, session: Session, *, org_id: int, kind: str, image: NormalizedImage) -> str:

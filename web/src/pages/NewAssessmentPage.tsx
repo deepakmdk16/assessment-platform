@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { api, ApiError } from '../api'
+import { api, ApiError, logoSrc } from '../api'
 import { difficultyClass } from '../badges'
 import type { QuestionOut, VariantSetSummary } from '../types'
 
@@ -17,8 +17,11 @@ export function NewAssessmentPage() {
   // the organisation's own name (P3b), and the logo is snapshotted from the
   // organisation either way — there is nothing to set here.
   const [orgName, setOrgName] = useState('')
-  // What the server will brand with if the box is left blank.
+  // What the server will brand with if the box is left blank, plus the logo it
+  // will snapshot — the preview mimics the candidate header, and that header
+  // leads with the logo.
   const [defaultOrgName, setDefaultOrgName] = useState('')
+  const [defaultLogoSha, setDefaultLogoSha] = useState<string | null>(null)
   // Integrity monitoring (I1) — on unless the interviewer deliberately relaxes
   // this sitting.
   const [proctored, setProctored] = useState(true)
@@ -43,7 +46,9 @@ export function NewAssessmentPage() {
     void api
       .getOrg()
       .then((o) => {
-        if (!cancelled) setDefaultOrgName(o.name)
+        if (cancelled) return
+        setDefaultOrgName(o.name)
+        setDefaultLogoSha(o.logo_sha)
       })
       .catch(() => {
         // The preview simply shows the title alone. Not worth an error here.
@@ -207,6 +212,9 @@ export function NewAssessmentPage() {
               state this form can produce. */}
           {(orgName.trim() || defaultOrgName) && (
             <div className="ide-title-preview">
+              {defaultLogoSha && (
+                <img src={logoSrc(defaultLogoSha)} alt="" className="ide-brand-logo" />
+              )}
               <span>
                 {orgName.trim() || defaultOrgName} &mdash; {title.trim() || 'Assessment title'}
               </span>

@@ -4271,6 +4271,10 @@ def _candidate_question_view(
     # Pass the candidate's email so a variant-set slot (VS2) resolves (and freezes)
     # to this candidate's own variant; None before /start just lists placeholders.
     email = attempt.candidate_email if attempt is not None else None
+    # Only needed for a quick-screen invite's branding, which has no Assessment
+    # to read it from; `support.invite_org` is the one place that knows how an
+    # invite reaches its organisation.
+    organization = support.invite_org(invite, session) if invite.assessment is None else None
     questions = _invite_questions(invite, session, email)
     deadline = _deadline_for(attempt.started_at, _invite_duration(invite, session)) if attempt else None
     # Which of these questions this candidate has already submitted, so the UI can
@@ -4312,12 +4316,25 @@ def _candidate_question_view(
         questions=public,
         languages=config.SUPPORTED_LANGUAGES,
         deadline=deadline,
-        # Per-assessment branding (A12) — None for a legacy single-question
-        # invite or an unbranded assessment; the candidate UI falls back to a
-        # generic header in either case.
+        # Branding (A12/P3b). The title is the assessment's and stays None for a
+        # quick-screen invite, which has none. The organisation's name and logo
+        # do NOT: a quick-screen sitting used to be the one candidate surface
+        # with no company on it at all, for no reason anyone chose — the branding
+        # simply lived on an object it lacked. Falling back to the organisation
+        # is safe *here* because /start has already required the caller to
+        # identify as an invited recipient. The pre-start probe deliberately does
+        # not do this — see `InviteStatusOut.logo_sha`.
         assessment_title=invite.assessment.title if invite.assessment else None,
-        org_name=invite.assessment.org_name if invite.assessment else None,
-        logo_sha=invite.assessment.logo_sha if invite.assessment else None,
+        org_name=(
+            invite.assessment.org_name
+            if invite.assessment
+            else (organization.name if organization else None)
+        ),
+        logo_sha=(
+            invite.assessment.logo_sha
+            if invite.assessment
+            else (organization.logo_sha if organization else None)
+        ),
         # Integrity monitoring (I1), frozen on the invite when it was minted.
         proctored=invite.proctored,
         # Whether this sitting can take feedback at the end (P2b) — see

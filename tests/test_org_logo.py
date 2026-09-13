@@ -297,6 +297,33 @@ def test_uploading_requires_auth(anon_client: TestClient) -> None:
     assert anon_client.delete("/orgs/current/logo").status_code == 401
 
 
+def test_a_quick_screen_sitting_is_branded_by_the_organisation(client: TestClient) -> None:
+    """The one candidate surface that used to carry no company at all.
+
+    A quick-screen invite has no Assessment, so the branding that lived there
+    was simply absent. Post-/start it comes from the organisation instead — the
+    caller has identified as an invited recipient by then, which is the same bar
+    P2b used for the org-tagged support address.
+    """
+    sha = upload(client, png_bytes()).json()["logo_sha"]
+    client.post("/questions", json=question_payload())
+    tok = client.post(
+        "/questions/sum_n/invites", json={"recipients": ["quick@x.io"]}
+    ).json()["token"]
+
+    # The PRE-start probe still says nothing: whoever holds this link has not
+    # identified, and a quick-screen gate names no organisation to begin with.
+    probe = client.get(f"/invite/{tok}")
+    assert probe.json()["org_name"] is None
+    assert probe.json()["logo_sha"] is None
+
+    started = client.post(
+        f"/invite/{tok}/start", json={"candidate_email": "quick@x.io", "consent": True}
+    ).json()
+    assert started["logo_sha"] == sha
+    assert started["org_name"] == client.get("/orgs/current").json()["name"]
+
+
 # --------------------------------------------------------------------------- #
 # Replacement, snapshots and deletion                                           #
 # --------------------------------------------------------------------------- #

@@ -476,8 +476,13 @@ def test_candidate_view_carries_assessment_branding(client, monkeypatch) -> None
         f"/invite/{legacy_tok}/start", json={"candidate_email": "legacy@x.io", "consent": True}
     ).json()
     assert legacy_data["assessment_title"] is None
-    assert legacy_data["org_name"] is None
-    assert legacy_data["logo_sha"] is None
+    # …but the organisation still brands it (P3b). A quick-screen sitting used to
+    # be the one candidate surface with no company on it at all, and only because
+    # the branding lived on an Assessment it does not have. Safe here and not on
+    # the pre-start probe: /start has required the caller to identify as an
+    # invited recipient first.
+    assert legacy_data["org_name"] == client.get("/orgs/current").json()["name"]
+    assert legacy_data["logo_sha"] is None  # this organisation has uploaded none
 
 
 def test_delete_blocked_by_invite(client) -> None:

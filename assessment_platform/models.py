@@ -137,9 +137,10 @@ class OrgAsset(SQLModel, table=True):
 
     **Content-addressed.** `sha256` is the address, and the bytes stored are the
     *re-encoded* ones, so the address names exactly what will be served. Two
-    organisations uploading the same file get two rows: deduplicating across
-    tenants would let one of them delete the other's logo, and would leak the
-    fact that they share one.
+    organisations uploading the same file get two rows, because one shared row
+    would let either tenant's delete take the other's logo. It does not hide
+    that they use the same image — identical bytes have one address, and both
+    publish it — only that neither can remove the other's copy.
 
     The bytes live in the row (`bytea` on Postgres, `BLOB` on SQLite) rather
     than on a disk this process happens to have. That keeps a logo surviving a

@@ -600,15 +600,29 @@ Minor findings from the P2a review round, deferred rather than fixed there.
 
 Minor findings from the P3b review round, deferred rather than fixed there.
 
-- **The orphan sweep runs on two of the four paths that can drop the last
-  reference to a logo.** `_drop_unreferenced_logo`
-  (`assessment_platform/api.py`) is called when the organisation's logo is
-  replaced or removed. Deleting the assessment that snapshotted a superseded
-  logo — by hand, or through `privacy.purge_expired` — leaves the `OrgAsset`
-  row behind, and `GET /logos/{sha}` keeps serving the old branding. Bytes, not
-  a leak: the address is unguessable and it is the organisation's own image.
-  Fix: sweep on assessment deletion too, or replace the hand-rolled refcount
-  with a periodic pass over unreferenced assets.
+- **The orphan sweep does not run on assessment deletion.**
+  `_drop_unreferenced_logo` (`assessment_platform/api.py`) is called when the
+  organisation's logo is replaced or removed. Deleting the assessment that
+  snapshotted a superseded logo leaves the `OrgAsset` row behind, and
+  `GET /logos/{sha}` keeps serving the old branding. Narrower than it sounds,
+  and the integration check pinned why: `privacy.purge_expired` never deletes an
+  `Assessment` row, and `DELETE /assessments/{id}` refuses while any invite
+  points at it — so the only assessment that can trigger this is one no
+  candidate was ever sent. Bytes, not a leak: the address is unguessable and it
+  is the organisation's own image. Fix, if ever: a periodic pass over
+  unreferenced assets rather than a second hand-rolled hook.
+- **A dangling `logo_sha` draws a broken image rather than falling back.** Every
+  branded header is `logo_sha ? <img> : <span className="ide-mark">`
+  (`web/src/pages/CandidatePage.tsx`, `AssessmentFlow.tsx`,
+  `AssessmentDetailPage.tsx`), with no `onError`. The *null* case has a clean
+  fallback; the *dead address* case — reachable only via the race below — is the
+  one that renders worst, on a candidate's screen, permanently. Fix: one shared
+  logo component that hides itself on error.
+- **The candidate's dead-end notices carry no logo.** `CandidateNotice.tsx`
+  shows neither name nor image, on the screens someone lands on when a link is
+  spent. `GET /logos/{sha}` is public and would work there. (The invitation
+  email deliberately stays imageless — a remote image in a message works as a
+  tracking pixel.)
 - **A multipart body with no `Content-Length` is not bounded before it is
   parsed.** `_limit_body_size` (`assessment_platform/api.py`) checks a declared
   length, and the JSON routes have schema caps behind it; `PUT
