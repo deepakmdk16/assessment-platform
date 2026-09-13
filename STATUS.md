@@ -435,18 +435,13 @@ gate.**
   to invite a candidate they have already scheduled. Fix: an email at ~80% of any
   allowance and one on `past_due`, both once per period per organisation.
   _Verified: read in the X02 branch; source: X02 follow-up._
-- **X11 · P2 · XS — No dependency vulnerability scanning, Dependabot, security
-headers or HTTPS enforcement docs.**
+- **X11 · P2 · XS — No dependency vulnerability scanning or Dependabot.**
   Evidence: .github/ in both repos has only workflows/; checkpoints.sh secret scan
-  is regex-only; no pip-audit/npm audit in CI; no security-headers middleware (rely
-  on the proxy, undocumented). Why: CVEs in bookworm toolchains/node/react go
-  unnoticed; headers depend on an undocumented proxy. Fix: Dependabot (pip, npm,
-  docker, actions) + pip-audit/npm audit --audit-level=high in CI;
-  HSTS/CSP/X-Frame-Options at the proxy, documented. P3b narrowed the CSP half:
-  no candidate surface loads an image from a customer-supplied host any more
-  (logos are served from `/api/logos/{sha}`, same-origin behind nginx), so P9a's
-  planned `img-src 'self' data: blob:` needs no widening — P9a should confirm a
-  branded assessment still renders once the header lands.
+  is regex-only; no pip-audit/npm audit in CI. Why: CVEs in bookworm
+  toolchains/node/react go unnoticed. Fix: Dependabot (pip, npm, docker, actions)
+  + pip-audit/npm audit --audit-level=high in CI.
+  The headers half is closed: P9a ships CSP, nosniff, Referrer-Policy and an
+  opt-in HSTS in `web/nginx-security-headers.conf`, documented in DEPLOY.md §3.
   _Verified: cited lines read in this audit; source: saas._
 - **X12 · P2 · M — Candidate identity is a claim; recipient enumeration via
 /start.**
@@ -704,6 +699,22 @@ Minor findings from the P2b review round, deferred rather than fixed there.
   `_purge_org`'s "every table with an org_id is in this list" rule true, and it
   costs the write path one org lookup; if the rule is relaxed, the column and its
   index can go.
+
+## P9a review leftovers — 2026-09-14
+
+- Nothing in CI builds the web image, so the nginx config and the CSP are
+  covered only by the file invariants in `tests/test_security_headers.py`. A
+  dependency that later needs a CDN, an inline style or a cross-origin fetch
+  would pass every check here and fail in production. Fix: a CI job that builds
+  `web/Dockerfile`, runs the container and curls `/`, `/assets/<file>` and
+  `/.well-known/security.txt` — the checks this branch ran by hand.
+- `security.txt` has no `Policy:` field. RFC 9116 wants an absolute URI and the
+  page it would name (`/security`) does not exist yet — it ships with P9b, which
+  should add the field in the same change.
+- The `Source` link is absent from the candidate's dead-end notices
+  (`CandidateNotice.tsx`) and from the interviewer auth screens, which render no
+  shell. Both are AGPL §13 surfaces a strict reading would want; the start
+  screen, the legal pages and the app shell cover the ordinary paths.
 
 ## Unscheduled ideas
 

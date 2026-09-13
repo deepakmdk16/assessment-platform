@@ -185,6 +185,14 @@ describe('CandidatePage', () => {
     expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
   })
 
+  it('offers the running version’s source on the start screen (AGPL §13)', async () => {
+    // The candidate never sees the app shell, so this row is the only place the
+    // offer can be made to them.
+    renderCandidatePage()
+    const href = (await screen.findByRole('link', { name: /^source/i })).getAttribute('href')
+    expect(href).toContain('github.com')
+  })
+
   it('cannot start until the candidate has consented', async () => {
     const user = userEvent.setup()
     renderCandidatePage()

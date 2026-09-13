@@ -15,6 +15,7 @@ import remarkGfm from 'remark-gfm'
 import { useParams } from 'react-router-dom'
 
 import { DOCS, ROUTES, splitFrontmatter, type LegalDoc } from '../legal'
+import { SourceLink } from '../components/SourceLink'
 
 export function LegalPage({ doc }: { doc?: LegalDoc }) {
   // Rendered both as a fixed route (`<LegalPage doc="privacy" />`) and, for the
@@ -60,6 +61,8 @@ export function LegalPage({ doc }: { doc?: LegalDoc }) {
         <a href="/terms">Terms</a>
         <span aria-hidden="true">·</span>
         <a href="/dpa">Data processing</a>
+        <span aria-hidden="true">·</span>
+        <SourceLink />
       </p>
     </div>
   )

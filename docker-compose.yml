@@ -181,11 +181,28 @@ services:
         # Baked into the bundle at build time — changing it needs a rebuild.
         VITE_API_BASE_URL: /api
         VITE_PRODUCT_NAME: ${VITE_PRODUCT_NAME:-assess.dev}
+        # AGPL §13. Unset in a plain `docker compose build`, which is right for
+        # a working copy: the link then points at the repository rather than at
+        # a commit that may not be pushed. DEPLOY.md §2 sets it on a deploy.
+        VITE_SOURCE_COMMIT: ${SOURCE_COMMIT:-}
+        # A fork MUST set this, or the offer points at a sha that does not exist
+        # in the repository it names. Empty falls back to upstream, which is
+        # correct only for a deployment built from upstream.
+        VITE_SOURCE_URL: ${SOURCE_URL:-}
     environment:
       # Whose X-Forwarded-For nginx believes. Loopback (trust nobody) is right
       # when nginx is the edge; behind a TLS terminator this must be that
       # terminator, or every caller shares one rate-limit bucket.
       TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-127.0.0.1}
+      # Strict-Transport-Security's value; empty means the header is not sent.
+      # Only set this once TLS actually terminates in front of nginx.
+      HSTS_HEADER: ${HSTS_HEADER:-}
+      # /.well-known/security.txt is published only when there is an address to
+      # publish. SECURITY_CONTACT overrides; otherwise the support address the
+      # rest of the platform already uses does double duty.
+      SECURITY_CONTACT: ${SECURITY_CONTACT:-}
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
     ports:
       - "${WEB_PORT:-80}:80"
     depends_on:
