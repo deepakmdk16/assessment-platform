@@ -1,5 +1,5 @@
 ---
-version: 2026-09-08
+version: 2026-09-13
 status: DRAFT TEMPLATE — NOT LEGAL ADVICE, NOT YET REVIEWED
 ---
 
@@ -58,6 +58,21 @@ Name, email address, hashed password, organisation membership, and — for payin
 customers — billing details. **Card details never reach this platform**; payment
 is handled by Stripe on their own pages.
 
+## Cookies and local storage
+
+Only what the service needs in order to work. There are no analytics or
+advertising cookies, and no third-party scripts on candidate pages.
+
+| Name | Who | What it is | How long |
+|---|---|---|---|
+| `refresh_token` | Interviewers | An httpOnly cookie that keeps you signed in | 30 days, or until you sign out |
+| `assessment-theme` | Anyone who picks a theme | Your light or dark choice, in your browser's local storage | Until you clear your browser data |
+| `assessment-draft:…` | Candidates | An autosave of your unsent code for one sitting, in your browser's local storage. The key is derived from your address, not your address itself | Until you submit, when it is cleared — or until you clear your browser data |
+
+Because nothing here is optional or used for tracking, there is no cookie
+banner. That changes the day any analytics or marketing script is added — and
+none may be added to candidate pages.
+
 ## Lawful basis
 
 - **Candidates:** the customer's basis, typically their legitimate interest in
@@ -98,6 +113,17 @@ hiring statistics do not silently change.
 **Where a customer has set no window, data is kept until they delete it or you
 ask them to.** [COMPANY] does not impose a window, because doing so would delete
 customers' hiring records without their instruction.
+
+## Automated assessment
+
+Your code is run against the question's test cases and scored automatically,
+and an AI model writes a short summary of it for the interviewer. **The AI does
+not decide anything about your application.** The score is deterministic and
+the summary is advisory; a person at the employer reads both and makes any
+decision, as Article 22 GDPR requires for decisions with legal or similarly
+significant effects. To ask for a human review of your result, or to contest
+it, contact the interviewer who invited you, or [PRIVACY CONTACT EMAIL]. The
+same notice is shown on the start screen before you begin.
 
 ## Your rights
 

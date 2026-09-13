@@ -146,9 +146,10 @@ deterministic grade.
 
 - **The platform stores; it never grades.** `AssessmentResult` is a faithful
   record of the agent's callback. No verdict/score logic lives here.
-- **Never leak the answer key.** The candidate view (`GET /invite/{token}`)
+- **Never leak the answer key.** The candidate view (`POST /invite/{token}/start`)
   returns only prompt/constraints/public example — never test cases or expected
-  outputs. There is a test that asserts their absence; keep it.
+  outputs. The pre-start probe (`GET /invite/{token}`) returns the shape of the
+  sitting, never a question's title or prompt. Tests assert both; keep them.
 - **Auth enforced when configured.** Bearer/shared-secret checks activate only
   when their env var is set (dev/tests run without). Interviewer routes are
   bearer-guarded **and organisation-scoped** (see the next bullet); candidate

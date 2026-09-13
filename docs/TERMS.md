@@ -1,5 +1,5 @@
 ---
-version: 2026-09-08
+version: 2026-09-13
 status: DRAFT TEMPLATE — NOT LEGAL ADVICE, NOT YET REVIEWED
 ---
 

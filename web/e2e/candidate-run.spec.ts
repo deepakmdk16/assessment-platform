@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test'
-import { registerInterviewer, createQuestion, createInvite, startAsCandidate } from './helpers'
+import {
+  registerInterviewer,
+  createQuestion,
+  createInvite,
+  startAsCandidate,
+  confirmSubmit,
+} from './helpers'
 
 test('candidate runs code against their own input, then against the test cases', async ({
   page,
@@ -33,6 +39,7 @@ test('candidate runs code against their own input, then against the test cases',
 
   // Neither run recorded an attempt: Submit still works afterwards.
   await candidate.getByRole('button', { name: 'Submit' }).click()
+  await confirmSubmit(candidate)
   await expect(candidate.getByRole('heading', { name: 'Submitted' })).toBeVisible()
   await context.close()
 })

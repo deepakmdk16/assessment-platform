@@ -15,9 +15,13 @@ behavior; this covers what a reviewer can verify in a diff.
 
 - **Two layers, kept separate:** persistence in `models.py` (SQLModel tables),
   API shapes in `schemas.py`. Don't return ORM rows whose fields would leak.
-- **The candidate view is answer-key-free by construction.** Anything served at
-  `GET /invite/{token}` goes through `InvitePublicOut`, which has no
-  `test_cases`/`expected`. Never widen it. The absence test must stay green.
+- **The candidate view is answer-key-free by construction.** The problem is
+  served only by `POST /invite/{token}/start`, through `InvitePublicOut`, which
+  has no `test_cases`/`expected`. The pre-start probe `GET /invite/{token}`
+  returns `InviteStatusOut`: liveness plus the shape of the sitting (monitored,
+  title, organisation, question count, duration, languages) and never a
+  question's title or prompt. Widen either only on purpose — the absence tests
+  and the probe's closed key set (`tests/test_slice1.py`) must stay green.
 - **Timestamps:** every table carries `created_at`; mutable rows also carry
   `updated_at` (bump it on write). Use timezone-aware UTC (`_utcnow`).
 - **Flag early / degrade gracefully when tightening a shared invariant.** When you

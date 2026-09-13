@@ -10,7 +10,7 @@ from conftest import async_return, register_interviewer
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from assessment_platform import agent_client
+from assessment_platform import agent_client, config
 from assessment_platform import db as db_module
 from assessment_platform.models import Invite
 
@@ -464,3 +464,45 @@ def test_delete_blocked_by_invite(client) -> None:
     resp = client.delete("/assessments/a1")
     assert resp.status_code == 409
     assert "invite" in resp.json()["detail"]
+
+
+# --- P2a: the pre-start probe describes the sitting without revealing the problem
+
+
+def test_probe_describes_an_assessment_sitting_without_the_problem(client) -> None:
+    _make_questions(client, "q1", "q2")
+    aid = client.post(
+        "/assessments",
+        json={
+            "title": "Backend engineer screen",
+            "question_ids": ["q1", "q2"],
+            "duration_minutes": 45,
+            "org_name": "Northwind Labs",
+        },
+    ).json()["id"]
+    token = client.post(f"/assessments/{aid}/invites", json={"recipients": ["c@x.io"]}).json()[
+        "token"
+    ]
+    body = client.get(f"/invite/{token}").json()
+    assert body["status"] == "active"
+    assert body["assessment_title"] == "Backend engineer screen"
+    assert body["org_name"] == "Northwind Labs"
+    assert body["question_count"] == 2
+    assert body["duration_minutes"] == 45
+    assert body["languages"] == config.SUPPORTED_LANGUAGES
+    # Still no question data before the candidate identifies themselves.
+    for leaked in ("question", "questions", "prompt"):
+        assert leaked not in body
+
+
+def test_probe_describes_an_untimed_single_question_invite(client) -> None:
+    _make_questions(client, "q1")
+    token = client.post("/questions/q1/invites", json={"recipients": ["c@x.io"]}).json()["token"]
+    body = client.get(f"/invite/{token}").json()
+    # A quick-screen invite has no assessment, so no title or organisation — and
+    # the question's own title must not stand in for it.
+    assert body["assessment_title"] is None
+    assert body["org_name"] is None
+    assert body["question_count"] == 1
+    assert body["duration_minutes"] is None
+    assert body["languages"] == config.SUPPORTED_LANGUAGES

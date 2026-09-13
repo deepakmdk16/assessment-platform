@@ -371,7 +371,7 @@ RETENTION_INTERVAL_S = 0 if TESTING else int(os.getenv("RETENTION_INTERVAL_S", "
 # `CandidateAttempt.consent_version` at the moment they agree, so a later
 # rewrite of the policy cannot retroactively claim their agreement to words they
 # never saw. Bump it whenever docs/PRIVACY.md changes materially.
-PRIVACY_POLICY_VERSION = os.getenv("PRIVACY_POLICY_VERSION", "2026-09-08")
+PRIVACY_POLICY_VERSION = os.getenv("PRIVACY_POLICY_VERSION", "2026-09-13")
 
 
 # Observability (X08). All three surfaces — error reporting, the metrics scrape

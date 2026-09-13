@@ -1,10 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ThemeProvider } from '../../theme/ThemeContext'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CandidatePage } from '../CandidatePage'
-import { api } from '../../api'
+import { api, ApiError } from '../../api'
 import type { InviteStartResponse } from '../../types'
 
 vi.mock('../../api', () => {
@@ -109,6 +109,21 @@ function renderCandidatePage() {
   )
 }
 
+/** A manual submit asks first (P2a): confirm through the dialog it opens. */
+async function confirmSubmit(user: ReturnType<typeof userEvent.setup>) {
+  const dialog = await screen.findByRole('dialog')
+  await user.click(within(dialog).getByRole('button', { name: /^submit$/i }))
+}
+
+/** Fill the gate as Jane and start. */
+async function passGate(user: ReturnType<typeof userEvent.setup>) {
+  expect(await screen.findByLabelText(/^name$/i)).toBeInTheDocument()
+  await user.type(screen.getByLabelText(/^name$/i), 'Jane Doe')
+  await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+  await user.click(screen.getByLabelText(/i agree to my assessment/i))
+  await user.click(screen.getByRole('button', { name: /start/i }))
+}
+
 describe('CandidatePage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -150,6 +165,7 @@ describe('CandidatePage', () => {
     expect(screen.getByLabelText(/language/i)).toHaveValue('python')
     await user.type(screen.getByLabelText(/code editor/i), 'print("hi")')
     await user.click(screen.getByRole('button', { name: /^submit$/i }))
+    await confirmSubmit(user)
 
     await waitFor(() => {
       expect(api.submitCandidate).toHaveBeenCalledWith('tok123', {
@@ -236,6 +252,7 @@ describe('CandidatePage', () => {
     // Submit the current question — the call carries its question_id.
     await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
     await user.click(screen.getByRole('button', { name: /submit this question/i }))
+    await confirmSubmit(user)
     await waitFor(() => {
       expect(api.submitCandidate).toHaveBeenCalledWith(
         'tok123',
@@ -308,6 +325,7 @@ describe('CandidatePage', () => {
     await screen.findByRole('tab', { name: /Two Sum/i })
     await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
     await user.click(screen.getByRole('button', { name: /submit this question/i }))
+    await confirmSubmit(user)
     await waitFor(() => expect(api.submitCandidate).toHaveBeenCalledTimes(1))
 
     // Still on the IDE with one question left — no completion screen yet.
@@ -316,6 +334,7 @@ describe('CandidatePage', () => {
     await user.click(screen.getByRole('tab', { name: /Merge Intervals/i }))
     await user.type(screen.getByLabelText(/code editor/i), 'print(2)')
     await user.click(screen.getByRole('button', { name: /submit this question/i }))
+    await confirmSubmit(user)
     await waitFor(() => expect(api.submitCandidate).toHaveBeenCalledTimes(2))
 
     expect(await screen.findByRole('heading', { name: /assessment complete/i })).toBeInTheDocument()
@@ -446,6 +465,7 @@ describe('CandidatePage', () => {
 
     await user.type(await screen.findByLabelText(/code editor/i), 'print("hi")')
     await user.click(screen.getByRole('button', { name: /^submit$/i }))
+    await confirmSubmit(user)
 
     expect(await screen.findByRole('heading', { name: /already recorded/i })).toBeInTheDocument()
   })
@@ -595,9 +615,12 @@ describe('CandidatePage', () => {
     await user.click(screen.getByRole('button', { name: /start/i }))
     await user.type(await screen.findByLabelText(/code editor/i), 'print("hi")')
     await user.click(screen.getByRole('button', { name: /^submit$/i }))
+    await confirmSubmit(user)
 
     expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
-    expect(localStorage.getItem('assessment-draft:tok123')).toBeNull()
+    for (let i = 0; i < localStorage.length; i++) {
+      expect(localStorage.key(i)).not.toMatch(/^assessment-draft:tok123/)
+    }
   })
 
   it('shows an error for an expired invite', async () => {
@@ -851,5 +874,256 @@ describe('CandidatePage — the fullscreen block actually blocks (UI-D / W05)', 
     expect(await screen.findByLabelText(/code editor/i)).toHaveAttribute('readonly')
     expect(screen.getByRole('button', { name: /^run$/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /submit/i })).toBeDisabled()
+  })
+})
+
+describe('P2a — start screen, confirmation and leaving', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    integrityState.mustReturnToFullscreen = false
+  })
+
+  /** Does the page ask the browser to confirm before unloading right now? */
+  function unloadPrevented(): boolean {
+    const e = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(e)
+    return e.defaultPrevented
+  }
+
+  it('describes a timed sitting on the start screen, with the AI notice', async () => {
+    vi.mocked(api.getInvite).mockResolvedValue({
+      status: 'active',
+      assessment_title: 'Backend engineer screen',
+      org_name: 'Northwind Labs',
+      question_count: 3,
+      duration_minutes: 60,
+      languages: ['python', 'go'],
+    })
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: 'Backend engineer screen' })).toBeInTheDocument()
+    expect(screen.getByText('Northwind Labs')).toBeInTheDocument()
+    expect(screen.getByText(/this sitting is timed\. a 60-minute clock/i)).toBeInTheDocument()
+    expect(screen.getByText('60 min')).toBeInTheDocument()
+    expect(screen.getByText('python, go')).toBeInTheDocument()
+    expect(screen.getByText(/how your work is assessed/i)).toBeInTheDocument()
+    expect(screen.getByText(/a person at northwind labs makes any decision/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no time limit/i)).not.toBeInTheDocument()
+  })
+
+  it('describes an untimed quick-screen sitting, with no title standing in', async () => {
+    vi.mocked(api.getInvite).mockResolvedValue({
+      status: 'active',
+      assessment_title: null,
+      org_name: null,
+      question_count: 1,
+      duration_minutes: null,
+      languages: ['python'],
+    })
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
+    expect(screen.getByText(/there’s no time limit/i)).toBeInTheDocument()
+    expect(screen.getByText('No limit')).toBeInTheDocument()
+    expect(screen.queryByText(/this sitting is timed/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/a person makes any decision/i)).toBeInTheDocument()
+  })
+
+  it('asks before a manual submit, and sends nothing until confirmed', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+    renderCandidatePage()
+    await passGate(user)
+    await user.type(await screen.findByLabelText(/code editor/i), 'print(1)')
+
+    await user.click(screen.getByRole('button', { name: /^submit$/i }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('heading', { name: 'Submit?' })).toBeInTheDocument()
+    expect(within(dialog).getByText(/can’t change your code after this/i)).toBeInTheDocument()
+    expect(api.submitCandidate).not.toHaveBeenCalled()
+
+    // Cancel: back to the editor with the code intact and nothing sent.
+    await user.click(within(dialog).getByRole('button', { name: /cancel/i }))
+    expect(api.submitCandidate).not.toHaveBeenCalled()
+    expect(screen.getByLabelText(/code editor/i)).toHaveValue('print(1)')
+
+    await user.click(screen.getByRole('button', { name: /^submit$/i }))
+    await confirmSubmit(user)
+    await waitFor(() => expect(api.submitCandidate).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
+  })
+
+  it('submits at time-up without asking', async () => {
+    // The restored draft is what the deadline pass sends; the confirmation is
+    // for the candidate's own click only.
+    localStorage.setItem(
+      'assessment-draft:tok123:jane@example.com',
+      JSON.stringify({ code: 'saved work', language: 'python' }),
+    )
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue({
+      ...startResponse,
+      deadline: new Date(Date.now() - 1000).toISOString(), // already expired
+    })
+    vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+    renderCandidatePage()
+    await passGate(userEvent.setup())
+
+    await waitFor(() =>
+      expect(api.submitCandidate).toHaveBeenCalledWith(
+        'tok123',
+        expect.objectContaining({ code: 'saved work' }),
+      ),
+    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
+  })
+
+  it('multi-question: says how many other questions are still unsubmitted', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(multiStartResponse)
+    vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+    renderCandidatePage()
+    await passGate(user)
+    await screen.findByRole('tab', { name: /Two Sum/i })
+
+    await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
+    await user.click(screen.getByRole('button', { name: /submit this question/i }))
+    let dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/1 other question hasn’t been submitted yet/i)).toBeInTheDocument()
+    expect(api.submitCandidate).not.toHaveBeenCalled()
+    await user.click(within(dialog).getByRole('button', { name: /^submit$/i }))
+    await waitFor(() => expect(api.submitCandidate).toHaveBeenCalledTimes(1))
+
+    await user.click(screen.getByRole('tab', { name: /Merge Intervals/i }))
+    await user.type(screen.getByLabelText(/code editor/i), 'print(2)')
+    await user.click(screen.getByRole('button', { name: /submit this question/i }))
+    dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/this is your last question/i)).toBeInTheDocument()
+  })
+
+  it('"Submit and leave" sends every written answer and ends the sitting', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(multiStartResponse)
+    vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+    renderCandidatePage()
+    await passGate(user)
+    await screen.findByRole('tab', { name: /Two Sum/i })
+    await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
+
+    // Then they drop out of fullscreen. The mocked hook is read on render, so
+    // a navigation is what brings the prompt up.
+    integrityState.mustReturnToFullscreen = true
+    await user.click(screen.getByRole('tab', { name: /Merge Intervals/i }))
+    await user.click(await screen.findByRole('button', { name: /leave assessment/i }))
+    await user.click(screen.getByRole('button', { name: /submit and leave/i }))
+
+    const dialog = await screen.findByRole('dialog', { name: /submit and leave\?/i })
+    expect(within(dialog).getByText(/1 answer with code will be submitted/i)).toBeInTheDocument()
+    expect(within(dialog).getByText(/1 question has no code yet and stays open/i)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: /submit and leave/i }))
+
+    await waitFor(() => expect(api.submitCandidate).toHaveBeenCalledTimes(1))
+    expect(api.submitCandidate).toHaveBeenCalledWith(
+      'tok123',
+      expect.objectContaining({ question_id: 'q1', code: 'print(1)' }),
+    )
+    // Not "ended": the server keeps the sitting open, and the screen says so.
+    expect(await screen.findByRole('heading', { name: /answers submitted/i })).toBeInTheDocument()
+    expect(screen.getByText(/1 of 2 questions were submitted for grading/i)).toBeInTheDocument()
+    expect(screen.getByText(/1 question is still unanswered/i)).toBeInTheDocument()
+  })
+
+  it('"Submit and leave" still works when every written answer is already in', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(multiStartResponse)
+    vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+    renderCandidatePage()
+    await passGate(user)
+    await screen.findByRole('tab', { name: /Two Sum/i })
+    await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
+    await user.click(screen.getByRole('button', { name: /submit this question/i }))
+    await confirmSubmit(user)
+    await waitFor(() => expect(api.submitCandidate).toHaveBeenCalledTimes(1))
+
+    integrityState.mustReturnToFullscreen = true
+    await user.click(screen.getByRole('tab', { name: /Merge Intervals/i }))
+    await user.click(await screen.findByRole('button', { name: /leave assessment/i }))
+    await user.click(screen.getByRole('button', { name: /submit and leave/i }))
+    const dialog = await screen.findByRole('dialog', { name: /submit and leave\?/i })
+    expect(within(dialog).getByText(/nothing new to submit/i)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: /submit and leave/i }))
+
+    expect(await screen.findByRole('heading', { name: /answers submitted/i })).toBeInTheDocument()
+    expect(api.submitCandidate).toHaveBeenCalledTimes(1) // nothing re-sent
+  })
+
+  it('"Submit and leave" stays on the editor when an answer could not be sent', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(multiStartResponse)
+    vi.mocked(api.submitCandidate).mockRejectedValue(new ApiError(503, 'unavailable'))
+    renderCandidatePage()
+    await passGate(user)
+    await screen.findByRole('tab', { name: /Two Sum/i })
+    await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
+
+    integrityState.mustReturnToFullscreen = true
+    await user.click(screen.getByRole('tab', { name: /Merge Intervals/i }))
+    await user.click(await screen.findByRole('button', { name: /leave assessment/i }))
+    await user.click(screen.getByRole('button', { name: /submit and leave/i }))
+    const dialog = await screen.findByRole('dialog', { name: /submit and leave\?/i })
+    await user.click(within(dialog).getByRole('button', { name: /submit and leave/i }))
+
+    await waitFor(() => expect(api.submitCandidate).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText(/couldn’t be sent/i)).toBeInTheDocument()
+    // Still in the sitting, with the answer intact, so they can try again.
+    expect(screen.queryByRole('heading', { name: /answers submitted|assessment complete/i })).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/code editor/i)).toBeInTheDocument()
+  })
+
+  it('warns before the page unloads while the editor is open, and not after submitting', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+    renderCandidatePage()
+
+    expect(await screen.findByLabelText(/^name$/i)).toBeInTheDocument()
+    expect(unloadPrevented()).toBe(false) // nothing to lose on the gate
+    await passGate(user)
+    await screen.findByLabelText(/code editor/i)
+    expect(unloadPrevented()).toBe(true)
+
+    await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
+    await user.click(screen.getByRole('button', { name: /^submit$/i }))
+    await confirmSubmit(user)
+    await screen.findByRole('heading', { name: /submitted/i })
+    expect(unloadPrevented()).toBe(false)
+  })
+
+  it('keeps the address out of the draft key, and still reads a draft saved under the old one', async () => {
+    localStorage.setItem(
+      'assessment-draft:tok123:jane@example.com',
+      JSON.stringify({ code: 'saved work', language: 'python' }),
+    )
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+    renderCandidatePage()
+    await passGate(userEvent.setup())
+
+    expect(await screen.findByLabelText(/code editor/i)).toHaveValue('saved work')
+    expect(localStorage.getItem('assessment-draft:tok123:jane@example.com')).toBeNull()
+    const keys: string[] = []
+    for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i) ?? '')
+    const draftKeys = keys.filter((k) => k.startsWith('assessment-draft:tok123:'))
+    expect(draftKeys).toHaveLength(1)
+    expect(draftKeys[0]).not.toMatch(/jane|example/)
   })
 })
