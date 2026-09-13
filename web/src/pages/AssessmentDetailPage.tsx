@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
+import { apiMessage, type ErrorMessage } from '../errors'
 import { badgeClass, difficultyVerdictLabel, ratingClass } from '../badges'
 import { ExpiryField } from '../components/ExpiryField'
 import { IntegrityCell } from '../components/IntegrityPanel'
@@ -19,7 +20,7 @@ export function AssessmentDetailPage() {
   const [sending, setSending] = useState(false)
   const [sentTo, setSentTo] = useState<string[]>([])
   const [undelivered, setUndelivered] = useState<InviteDelivery[]>([])
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ErrorMessage | null>(null)
   // Edit dialog (settings only — title/timer/monitoring/branding). The question
   // set is deliberately not editable here: post-invite the server locks it (A9),
   // and pre-invite it would mean rebuilding the whole builder on this page.
@@ -69,7 +70,7 @@ export function AssessmentDetailPage() {
       setRecipients('')
       setInviteExpiresAt(null)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to create invite')
+      setError(apiMessage(err, 'Failed to create invite'))
     } finally {
       setSending(false)
     }

@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { ThemeToggle } from './ThemeToggle'
 import { PRODUCT_NAME } from '../branding'
+import { DEFAULT_SECTION } from '../settings-sections'
 
 function initials(name: string): string {
   return name
@@ -96,7 +97,7 @@ export function Sidebar() {
           Team
         </Link>
         <Link
-          to="/settings"
+          to={`/settings/${DEFAULT_SECTION}`}
           className={onSettings ? 'on' : undefined}
           aria-current={onSettings ? 'page' : undefined}
         >

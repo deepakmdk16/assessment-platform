@@ -24,6 +24,7 @@ import { JoinPage } from './pages/JoinPage'
 import { LegalPage } from './pages/LegalPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { CandidateErrorFallback, ErrorBoundary } from './components/ErrorBoundary'
+import { DEFAULT_SECTION } from './settings-sections'
 
 export function App() {
   return (
@@ -187,8 +188,13 @@ export function App() {
         }
       />
 
+      {/* Settings is one route per section (P3a), so a section can be linked to
+          — a 402 points at /settings/billing — and the back button works inside
+          it. Bare /settings redirects; an unknown or forbidden section is sent
+          back to the first one by the page itself. */}
+      <Route path="/settings" element={<Navigate to={`/settings/${DEFAULT_SECTION}`} replace />} />
       <Route
-        path="/settings"
+        path="/settings/:section"
         element={
           <ProtectedRoute>
             <AppLayout>

@@ -618,6 +618,37 @@ def test_checkout_returns_a_hosted_url_and_remembers_the_customer(
         assert s.get(Organization, _org_id()).stripe_customer_id == "cus_new"
 
 
+def test_checkout_and_portal_return_to_the_billing_section(
+    client, stripe_configured, monkeypatch
+) -> None:
+    """The URLs Stripe sends the admin back to must be routes that exist.
+
+    Settings is one route per section (P3a), and bare `/settings` redirects to
+    Workspace — so an admin returning from checkout would land on the branding
+    form rather than the plan they just paid for. Nothing else in the suite
+    reads these strings, which is exactly why they drifted once.
+    """
+    seen: dict[str, str] = {}
+
+    def _checkout(**kwargs: Any) -> str:
+        seen.update({k: v for k, v in kwargs.items() if isinstance(v, str)})
+        return "https://checkout.stripe.test/s"
+
+    def _portal(**kwargs: Any) -> str:
+        seen.update({k: v for k, v in kwargs.items() if isinstance(v, str)})
+        return "https://portal.stripe.test/s"
+
+    monkeypatch.setattr(stripe_client, "create_customer", lambda *_a, **_k: "cus_new")
+    monkeypatch.setattr(stripe_client, "create_checkout_session", _checkout)
+    assert client.post("/billing/checkout", json={"plan": "growth"}).status_code == 200
+    assert seen["success_url"].endswith("/settings/billing?billing=success")
+    assert seen["cancel_url"].endswith("/settings/billing?billing=cancelled")
+
+    monkeypatch.setattr(stripe_client, "create_portal_session", _portal)
+    assert client.post("/billing/portal").status_code == 200
+    assert seen["return_url"].endswith("/settings/billing")
+
+
 def test_the_customer_is_created_once(client, stripe_configured, monkeypatch) -> None:
     calls: list[int] = []
 

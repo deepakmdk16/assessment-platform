@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth/AuthContext'
+import { apiMessage, type ErrorMessage } from '../errors'
 import { parseServerDate } from '../invites'
 import type { Member, OrgInvite, Organization, OrgRole } from '../types'
 
@@ -424,7 +425,7 @@ function InviteForm({ onInvited }: { onInvited: (invite: OrgInvite) => void }) {
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<OrgRole>('member')
   const [sending, setSending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ErrorMessage | null>(null)
   const [result, setResult] = useState<OrgInvite | null>(null)
 
   async function handleSubmit(e: FormEvent) {
@@ -438,7 +439,7 @@ function InviteForm({ onInvited }: { onInvited: (invite: OrgInvite) => void }) {
       setResult(invite)
       setEmail('')
     } catch (err) {
-      setError(message(err, 'Failed to send the invitation'))
+      setError(apiMessage(err, 'Failed to send the invitation'))
     } finally {
       setSending(false)
     }

@@ -438,6 +438,9 @@ gate.**
   (api.py `_check_invite_capacity`, `billing.consume`), 403 to the candidate at
   `_require_sitting_quota`; no threshold email, and no mail of our own when Stripe
   reports `past_due` (the banner is only visible to someone who opens Settings).
+  P3a narrowed this: a 402 now carries a link to `/settings/billing`
+  (`web/src/errors.tsx`), so the refusal is actionable — but it is still the
+  first warning anyone gets.
   Why: the first time an interviewer learns the plan is exhausted is while trying
   to invite a candidate they have already scheduled. Fix: an email at ~80% of any
   allowance and one on `past_due`, both once per period per organisation.
@@ -605,6 +608,36 @@ Minor findings from the P2a review round, deferred rather than fixed there.
   notice could now render that field instead of restating a contact sentence —
   decide first whether a human-review request should reach the platform's
   support mailbox at all, or only the hiring team.
+
+## P3a review leftovers — 2026-09-13
+
+Minor findings from the P3a review round, deferred rather than fixed there.
+
+- **`GET /orgs/current` is fetched twice on three of the six sections.** The
+  Settings shell reads it for the role (`web/src/pages/SettingsPage.tsx:32`) and
+  `BillingPanel.tsx:172`, `NotificationsPanel.tsx:39` and `PrivacyPanel.tsx:39`
+  each read it again for their own data. Harmless but wasteful, and the two
+  copies can disagree. Fix: pass the `Organization` down from the shell, which
+  also closes the next item.
+- **A section heading can sit above an empty panel.** The shell renders
+  `<h2>{label}</h2>` (`web/src/pages/SettingsPage.tsx:100`) whichever way the
+  panel goes; if a panel's own `getOrg` rejects it returns `null`, so the
+  section title stands over nothing. Only reachable when the shell's fetch
+  succeeded and the panel's failed.
+- **Two error helpers in TeamPage.** The local `message()`
+  (`web/src/pages/TeamPage.tsx:8`) and the shared `apiMessage()` differ only in
+  the 402 branch, and six of the seven call sites still use the local one — so
+  the Billing link appears on the invite form and nowhere else on that page.
+- **`apiMessage` returns JSX, not data.** `web/src/errors.tsx:19` is why six
+  error states widened from `string` to `ErrorMessage`, which costs them
+  logging, comparison and snapshotting; `describeDraftFailure` — a pure
+  classifier — now needs a Router to test. A `{ text, action? }` shape rendered
+  through one error component would keep the states as strings.
+- **The 402 link can appear inside an open `<dialog>`.** On
+  `web/src/pages/QuestionDetailPage.tsx` the invite refusal renders inside the
+  modal opened with `showModal()`; following the link unmounts the page without
+  calling `close()`. Browsers pop a removed element from the top layer, so this
+  is a broken invariant rather than a visible bug.
 
 ## P2b review leftovers — 2026-09-13
 

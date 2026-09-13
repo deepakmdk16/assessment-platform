@@ -3728,3 +3728,74 @@ button.tab:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* =========================================================================
+   Settings rail (P3a) — Settings is one route per section, with a column of
+   links beside the panel. Deliberately not a reuse of `.nav`: that one is
+   painted for the dark rail (rail-text on rail) and this sits on the light
+   content surface. What is reused is the pattern — a column of links, the
+   current one carrying `.on` and aria-current="page".
+   ========================================================================= */
+/* No `.wizard` cap here on purpose: the rail takes 13.5rem plus the gap out of
+   --content-max, which leaves the panel column at roughly the 1040px the old
+   single-column Settings had. */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 13.5rem minmax(0, 1fr);
+  gap: 1.6rem;
+  align-items: start;
+}
+.subnav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  /* Clears the sticky topbar, so the rail never slides under it. */
+  top: 4.6rem;
+}
+.subnav a {
+  padding: 0.45rem 0.65rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.89rem;
+  font-weight: 550;
+  color: var(--color-muted);
+}
+.subnav a:hover {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  text-decoration: none;
+}
+.subnav a.on {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-ink);
+  font-weight: 650;
+}
+/* Below the breakpoint the rail would eat the panel, so the same sections
+   become one native select — which is also the better control on a phone. */
+.subnav-select {
+  display: none;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 1.2rem;
+}
+@media (max-width: 900px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .subnav {
+    display: none;
+  }
+  .subnav-select {
+    display: flex;
+  }
+}
+/* The one refusal with a door: a spent allowance points at the plan (P3a).
+   Inherits the error's colour so it reads as part of the message, not as an
+   unrelated link that happens to sit inside it. */
+.quota-link {
+  display: block;
+  margin-top: 0.4rem;
+  font-weight: 650;
+  color: inherit;
+  text-decoration: underline;
+}

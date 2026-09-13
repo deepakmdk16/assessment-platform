@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { difficultyClass } from '../badges'
+import { apiMessage, type ErrorMessage } from '../errors'
 import { LANGUAGES } from '../types'
 import type { Language, TestCaseCategory, TestCaseIn } from '../types'
 
@@ -10,7 +11,7 @@ function emptyTestCase(): TestCaseIn {
 }
 
 interface DraftFailure {
-  message: string
+  message: ErrorMessage
   /** Whether trying the same brief again could plausibly work. */
   canRetry: boolean
   /** The agent's own reason, when it's worth showing under the summary. */
@@ -44,6 +45,10 @@ function describeDraftFailure(err: unknown): DraftFailure {
       }
     case 429:
       return { message: 'Too many drafting requests right now. Wait a moment and try again.', canRetry: true }
+    case 402:
+      // The month's drafts are spent. Retrying is the one thing that cannot
+      // help; changing the plan is.
+      return { message: apiMessage(err, err.message), canRetry: false }
     case 502:
       return {
         message: 'Couldn’t reach the AI drafting service. It may be restarting — try again in a moment.',

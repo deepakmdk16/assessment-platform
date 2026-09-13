@@ -8,9 +8,12 @@ test('changing the password signs the old one out and the new one in', async ({ 
   // A fresh account is unconfirmed: the banner nags on every interviewer page.
   await expect(page.getByRole('status').filter({ hasText: 'Confirm your email.' })).toBeVisible()
 
-  await page.goto('/settings')
+  // Settings is one route per section now (P3a): the address lives on Account,
+  // the password on Security.
+  await page.goto('/settings/account')
   await expect(page.getByText('Not confirmed')).toBeVisible()
 
+  await page.goto('/settings/security')
   await page.getByLabel('Current password').fill(password)
   await page.getByLabel('New password', { exact: true }).fill(newPassword)
   await page.getByLabel('Confirm new password').fill(newPassword)

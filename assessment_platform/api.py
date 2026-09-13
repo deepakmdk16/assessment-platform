@@ -1929,8 +1929,11 @@ def start_checkout(
             customer_id=_stripe_customer(organization, current, session),
             plan=body.plan,
             org_id=org.org_id,
-            success_url=f"{config.FRONTEND_BASE_URL}/settings?billing=success",
-            cancel_url=f"{config.FRONTEND_BASE_URL}/settings?billing=cancelled",
+            # The section, not bare /settings: since P3a that redirects to
+            # Workspace, and an admin returning from checkout would land on
+            # the branding form instead of the plan they just bought.
+            success_url=f"{config.FRONTEND_BASE_URL}/settings/billing?billing=success",
+            cancel_url=f"{config.FRONTEND_BASE_URL}/settings/billing?billing=cancelled",
         )
     except stripe_client.PaymentError as exc:
         # Stripe's own words, to an admin: a deployment whose Stripe Tax is not
@@ -1958,7 +1961,7 @@ def open_billing_portal(
     try:
         url = stripe_client.create_portal_session(
             customer_id=organization.stripe_customer_id,
-            return_url=f"{config.FRONTEND_BASE_URL}/settings",
+            return_url=f"{config.FRONTEND_BASE_URL}/settings/billing",
         )
     except stripe_client.PaymentError as exc:
         raise HTTPException(status_code=502, detail=f"Stripe refused the request: {exc}") from exc
