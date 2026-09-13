@@ -67,7 +67,7 @@ advertising cookies, and no third-party scripts on candidate pages.
 |---|---|---|---|
 | `refresh_token` | Interviewers | An httpOnly cookie that keeps you signed in | 30 days, or until you sign out |
 | `assessment-theme` | Anyone who picks a theme | Your light or dark choice, in your browser's local storage | Until you clear your browser data |
-| `assessment-draft:…` | Candidates | An autosave of your unsent code for one sitting, in your browser's local storage. The key is derived from your address, not your address itself | Until you submit; cleared then |
+| `assessment-draft:…` | Candidates | An autosave of your unsent code for one sitting, in your browser's local storage. The key is derived from your address, not your address itself | Until you submit, when it is cleared — or until you clear your browser data |
 
 Because nothing here is optional or used for tracking, there is no cookie
 banner. That changes the day any analytics or marketing script is added — and
