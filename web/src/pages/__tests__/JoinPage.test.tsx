@@ -37,8 +37,6 @@ const signedInAs = (email: string): User => ({
   id: '2',
   email,
   name: 'Sam Okafor',
-  default_org_name: null,
-  default_logo_url: null,
   email_verified: true,
 })
 

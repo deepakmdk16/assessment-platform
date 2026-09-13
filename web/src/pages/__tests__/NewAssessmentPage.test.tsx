@@ -27,7 +27,13 @@ vi.mock('../../api', () => {
     }
   }
   return {
-    api: { listQuestions: vi.fn(), listVariantSets: vi.fn(), createAssessment: vi.fn() },
+    api: {
+      listQuestions: vi.fn(),
+      listVariantSets: vi.fn(),
+      createAssessment: vi.fn(),
+      // Only for the branding preview's default (P3b).
+      getOrg: vi.fn(() => Promise.resolve({ name: 'Acme Corp' })),
+    },
     ApiError,
   }
 })
@@ -84,7 +90,6 @@ describe('NewAssessmentPage', () => {
       duration_minutes: 60,
       slots: [{ question_id: 'two-sum' }, { question_id: 'islands' }],
       org_name: null,
-      logo_url: null,
     })
     await waitFor(() =>
       expect(navigateMock).toHaveBeenCalledWith('/assessments/week-1', {
@@ -117,32 +122,25 @@ describe('NewAssessmentPage', () => {
     ])
   })
 
-  it('prefills branding from the workspace default and sends it on create (A12)', async () => {
+  it('leaves the organisation name blank so the server brands with it (P3b)', async () => {
     const user = userEvent.setup()
-    authState.user = {
-      id: '1',
-      email: 'o@test.io',
-      name: 'Owner',
-      default_org_name: 'Acme Corp',
-      default_logo_url: 'https://acme/logo.png',
-      email_verified: true,
-    }
     vi.mocked(api.createAssessment).mockResolvedValue({ id: 'week-1' } as AssessmentOut)
     await renderLoaded([q('two-sum', 'Two Sum')])
 
-    // The branding inputs start from the workspace default.
-    expect(screen.getByLabelText(/organization name/i)).toHaveValue('Acme Corp')
-    expect(screen.getByLabelText(/logo url/i)).toHaveValue('https://acme/logo.png')
+    // Branding is the organisation's now, so there is no per-person default to
+    // prefill from — and no logo field at all: an assessment snapshots the
+    // organisation's logo whatever this form does.
+    expect(screen.getByLabelText(/organization name/i)).toHaveValue('')
+    expect(screen.queryByLabelText(/logo/i)).not.toBeInTheDocument()
 
     await user.type(screen.getByLabelText(/^title$/i), 'Week 1 Screen')
     await user.click(addButtons()[0])
     await user.click(screen.getByRole('button', { name: /create assessment/i }))
 
     await waitFor(() => expect(api.createAssessment).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(api.createAssessment).mock.calls[0][0]).toMatchObject({
-      org_name: 'Acme Corp',
-      logo_url: 'https://acme/logo.png',
-    })
+    const payload = vi.mocked(api.createAssessment).mock.calls[0][0]
+    expect(payload.org_name).toBeNull()
+    expect(payload).not.toHaveProperty('logo_sha')
   })
 
   it('pre-populates the selection from router state (A8), dropping stale ids', async () => {
@@ -167,14 +165,13 @@ describe('NewAssessmentPage', () => {
     expect(screen.getByRole('button', { name: /^add$/i })).toBeInTheDocument() // Two Sum still pickable
   })
 
-  it('sends branding fields when set, and null when left blank (A12)', async () => {
+  it('sends the organisation name when the interviewer overrides it (A12)', async () => {
     const user = userEvent.setup()
     vi.mocked(api.createAssessment).mockResolvedValue({ id: 'week-1' } as AssessmentOut)
     await renderLoaded([q('two-sum', 'Two Sum')])
 
     await user.type(screen.getByLabelText(/^title$/i), 'Week 1 Screen')
     await user.type(screen.getByLabelText(/organization name/i), 'Acme Corp')
-    await user.type(screen.getByLabelText(/logo url/i), 'https://cdn.example.com/acme.png')
     expect(screen.getByText(/Acme Corp — Week 1 Screen/)).toBeInTheDocument()
 
     await user.click(addButtons()[0])
@@ -183,7 +180,6 @@ describe('NewAssessmentPage', () => {
     await waitFor(() => expect(api.createAssessment).toHaveBeenCalledTimes(1))
     expect(vi.mocked(api.createAssessment).mock.calls[0][0]).toMatchObject({
       org_name: 'Acme Corp',
-      logo_url: 'https://cdn.example.com/acme.png',
     })
   })
 

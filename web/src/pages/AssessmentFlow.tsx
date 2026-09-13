@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
-import { api, ApiError } from '../api'
+import { api, ApiError, logoSrc } from '../api'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { IntegrityOverlay } from '../components/IntegrityGate'
 import { useLeaveGuard } from '../leaveGuard'
@@ -44,7 +44,7 @@ interface Props {
    *  assessment — the header falls back to the generic "Coding assessment". */
   assessmentTitle?: string | null
   orgName?: string | null
-  logoUrl?: string | null
+  logoSha?: string | null
   /** Integrity monitoring (I1). The hook is owned by CandidatePage — one queue
    *  for the whole sitting — so this flow only reports which question is open and
    *  renders the enforcement overlay. */
@@ -80,7 +80,7 @@ export function AssessmentFlow({
   deadline,
   assessmentTitle,
   orgName,
-  logoUrl,
+  logoSha,
   integrity,
   initialDrafts,
   supportEmail,
@@ -413,13 +413,13 @@ export function AssessmentFlow({
   return (
     <div className="ide">
       <header className="ide-top">
-        {logoUrl ? (
-          <img src={logoUrl} alt="" className="ide-brand-logo" />
+        {logoSha ? (
+          <img src={logoSrc(logoSha)} alt="" className="ide-brand-logo" />
         ) : (
           <span className="ide-mark" aria-hidden="true" />
         )}
         <span className="ide-title">{brandedTitle ?? assessmentTitle ?? 'Coding assessment'}</span>
-        {(orgName || logoUrl) && (
+        {(orgName || logoSha) && (
           <span className="ide-powered-by">Powered by {PRODUCT_NAME}</span>
         )}
         <div className="ide-top-right">

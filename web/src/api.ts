@@ -44,6 +44,13 @@ import type {
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:9000'
 
+/** Where a logo lives (P3b). Content-addressed and public, so this is a plain
+ *  URL for an `<img src>` rather than something to fetch — the browser caches it
+ *  for a year, and there is no token to attach. */
+export function logoSrc(sha256: string): string {
+  return `${BASE_URL}/logos/${sha256}`
+}
+
 // The access token lives only in memory: it is short-lived by design and never
 // goes into localStorage, where any script on the page could read it. The
 // long-lived credential is the httpOnly refresh cookie the browser holds for
@@ -115,6 +122,8 @@ function isNoOrganization(status: number, detail: unknown): boolean {
 
 interface RequestOptions {
   method?: string
+  /** JSON-encoded, unless it is a FormData — the one upload this API has (a
+   *  logo, P3b) needs the browser to set its own multipart boundary. */
   body?: unknown
   auth?: boolean
 }
@@ -147,8 +156,9 @@ async function request<T>(
 ): Promise<T> {
   const { method = 'GET', body, auth = false } = options
 
+  const multipart = body instanceof FormData
   const headers: Record<string, string> = {}
-  if (body !== undefined) {
+  if (body !== undefined && !multipart) {
     headers['Content-Type'] = 'application/json'
   }
   if (auth) {
@@ -161,7 +171,7 @@ async function request<T>(
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : multipart ? body : JSON.stringify(body),
     credentials: 'include',
   })
 
@@ -228,9 +238,6 @@ export const api = {
 
   me: () => request<User>('/auth/me', { auth: true }),
 
-  updateMe: (data: { default_org_name: string | null; default_logo_url: string | null }) =>
-    request<User>('/auth/me', { method: 'PATCH', body: data, auth: true }),
-
   logout: () => request<void>('/auth/logout', { method: 'POST' }),
 
   forgotPassword: (email: string) =>
@@ -258,6 +265,21 @@ export const api = {
   // --- Organisations (X01) -------------------------------------------------
 
   getOrg: () => request<Organization>('/orgs/current', { auth: true }),
+
+  /** Replace the organisation's logo (P3b). Admin only. The server decodes and
+   *  re-encodes the file, so what comes back is a new content address. */
+  setOrgLogo: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<Organization>('/orgs/current/logo', {
+      method: 'PUT',
+      body: form,
+      auth: true,
+    })
+  },
+
+  clearOrgLogo: () =>
+    request<Organization>('/orgs/current/logo', { method: 'DELETE', auth: true }),
 
   createOrg: (name: string) =>
     request<Organization>('/orgs', { method: 'POST', body: { name }, auth: true }),

@@ -29,6 +29,7 @@ vi.mock('../../api', () => {
       publicConfig: vi.fn(() => Promise.resolve({ support_email: null })),
     },
     ApiError,
+    logoSrc: (sha: string) => `/logos/${sha}`,
   }
 })
 
@@ -274,7 +275,7 @@ describe('CandidatePage', () => {
       ...multiStartResponse,
       assessment_title: 'Backend Screen',
       org_name: 'Acme Corp',
-      logo_url: 'https://cdn.example.com/acme.png',
+      logo_sha: 'a1b2c3',
     })
 
     const { container } = renderCandidatePage()
@@ -288,10 +289,10 @@ describe('CandidatePage', () => {
     expect(screen.getByText(/powered by assess\.dev/i)).toBeInTheDocument()
     // The logo is decorative (empty alt) since the adjacent text already
     // carries the org name, so query it directly rather than by role="img".
-    expect(container.querySelector('img.ide-brand-logo')).toHaveAttribute(
-      'src',
-      'https://cdn.example.com/acme.png',
-    )
+    // Served from this deployment by content address (P3b), never from a host
+    // the customer chose — which is what stops the candidate's IP and visit
+    // time reaching a third party.
+    expect(container.querySelector('img.ide-brand-logo')).toHaveAttribute('src', '/logos/a1b2c3')
   })
 
   it('falls back to the generic header when an assessment has no branding', async () => {

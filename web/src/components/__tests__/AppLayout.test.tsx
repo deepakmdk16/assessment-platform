@@ -27,8 +27,6 @@ const owner = (over: Partial<User> = {}): User => ({
   id: '1',
   email: 'jane@acme.com',
   name: 'Jane Okafor',
-  default_org_name: null,
-  default_logo_url: null,
   email_verified: false,
   ...over,
 })

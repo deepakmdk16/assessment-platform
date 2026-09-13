@@ -13,7 +13,7 @@ auto-bumps on any UPDATE via SQLAlchemy `onupdate` (see `_updated_at`).
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, Column, UniqueConstraint
+from sqlalchemy import JSON, Column, LargeBinary, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -58,6 +58,11 @@ class Organization(SQLModel, table=True):
     # the plan got here and how the customer portal is reopened; both are null
     # for an organisation that has never paid, which is every organisation
     # until it upgrades.
+    # The organisation's logo (P3b): the content address of an `OrgAsset`, or
+    # None for the many organisations that never upload one. A reference rather
+    # than the bytes, so replacing it is one column write and the assessments
+    # holding the old address keep working.
+    logo_sha: str | None = Field(default=None, index=True)
     plan: str = Field(default="free")
     plan_status: str = Field(default="active")
     stripe_customer_id: str | None = Field(default=None, unique=True, index=True)
@@ -127,17 +132,51 @@ class OrgUsage(SQLModel, table=True):
     updated_at: datetime = _updated_at()
 
 
+class OrgAsset(SQLModel, table=True):
+    """A binary an organisation uploaded — today only its logo (P3b).
+
+    **Content-addressed.** `sha256` is the address, and the bytes stored are the
+    *re-encoded* ones, so the address names exactly what will be served. Two
+    organisations uploading the same file get two rows: deduplicating across
+    tenants would let one of them delete the other's logo, and would leak the
+    fact that they share one.
+
+    The bytes live in the row (`bytea` on Postgres, `BLOB` on SQLite) rather
+    than on a disk this process happens to have. That keeps a logo surviving a
+    redeploy and a second worker, at the cost of a column read per cache miss —
+    a fine trade for a handful of files capped at 256 KB. `blobstore.BlobStore`
+    is the seam an object store would slot into later; nothing outside it
+    touches `data`.
+
+    Rows are reachable by `org_id` so account deletion reaches them like every
+    other table, and by `sha256` so the public route can serve one without
+    knowing whose it is.
+    """
+
+    __table_args__ = (UniqueConstraint("org_id", "sha256", name="uq_orgasset_org_sha"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    org_id: int = Field(foreign_key="organization.id", index=True)
+    # What the asset is for. One value today; here so a second kind (a candidate
+    # upload, an emailed header) does not need a table of its own.
+    kind: str = Field(default="logo")
+    # The type actually served. Written by the image pipeline, never by the
+    # client: an uploader's Content-Type is a claim, not a fact.
+    content_type: str
+    sha256: str = Field(index=True)
+    data: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
+    width: int
+    height: int
+    # Written once and never touched, so there is no `updated_at`: replacing a
+    # logo is a new row at a new address, not an edit to this one.
+    created_at: datetime = _created_at()
+
+
 class Interviewer(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
     password_hash: str
     name: str
-    # Workspace-level default branding (A12): pre-fills a new assessment's
-    # org_name/logo_url so the interviewer sets it once instead of per assessment.
-    # Both optional; a prefill only, never applied retroactively — each Assessment
-    # still stores its own snapshot. logo_url is a URL reference, never base64.
-    default_org_name: str | None = None
-    default_logo_url: str | None = None
     # Revocation switch for stateless JWTs: every access/refresh token carries
     # the version it was minted under and is refused once this moves. Bumped by
     # a password change or reset, so "log out everywhere" needs no session table.
@@ -339,12 +378,16 @@ class Assessment(SQLModel, table=True):
     org_id: int = Field(foreign_key="organization.id", index=True)
     title: str
     duration_minutes: int | None = None  # None = untimed; per-assessment total
-    # Per-assessment branding (A12): shown on the candidate IDE header as
+    # Per-assessment branding (A12/P3b): shown on the candidate IDE header as
     # "{logo} {org_name} — {title}". Both optional; None = unbranded, falls back
-    # to the generic "Coding assessment" header. logo_url is an asset/URL
-    # reference (e.g. an externally-hosted image), never base64 in the row.
+    # to the generic "Coding assessment" header.
+    #
+    # `logo_sha` is the content address of an `OrgAsset`, snapshotted from the
+    # organisation at creation and never moved afterwards: replacing the
+    # organisation's logo must not restyle assessments that already went out,
+    # and a candidate halfway through one must not watch the header change.
     org_name: str | None = None
-    logo_url: str | None = None
+    logo_sha: str | None = Field(default=None, index=True)
     # Integrity monitoring (I1) for every sitting of this assessment: fullscreen
     # enforced, outside pastes blocked, focus/devtools signals recorded. Defaults
     # ON so the common case is protected without a decision; an interviewer can

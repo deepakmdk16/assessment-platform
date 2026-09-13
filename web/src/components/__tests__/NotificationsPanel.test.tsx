@@ -20,7 +20,7 @@ const URL = 'https://acme.example.com/hooks/assessments'
 
 function org(over: Partial<Organization> = {}): Organization {
   return {
-    id: 1, name: 'Acme', role: 'admin', member_count: 2, retention_days: null,
+    id: 1, name: 'Acme', role: 'admin', member_count: 2, logo_sha: null, retention_days: null,
     results_webhook_url: null, results_webhook_secret: null,
     ...over,
   }

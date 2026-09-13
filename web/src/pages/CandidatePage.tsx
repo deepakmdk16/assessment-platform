@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
-import { api, ApiError } from '../api'
+import { api, ApiError, logoSrc } from '../api'
 import { parseServerDate } from '../invites'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { IntegrityNotice, IntegrityOverlay } from '../components/IntegrityGate'
@@ -569,6 +569,9 @@ export function CandidatePage() {
     return (
       <div className="auth">
         <form className="auth-card" onSubmit={handleGateSubmit}>
+          {gateInfo?.logo_sha && (
+            <img src={logoSrc(gateInfo.logo_sha)} alt="" className="gate-logo" />
+          )}
           <span className="auth-eyebrow">{gateInfo?.org_name ?? 'Invitation'}</span>
           <h1>{gateInfo?.assessment_title ?? 'Coding assessment'}</h1>
           <p className="auth-lead">{gateLead(gateInfo)}</p>
@@ -665,7 +668,7 @@ export function CandidatePage() {
         deadline={deadline}
         assessmentTitle={invite.assessment_title}
         orgName={invite.org_name}
-        logoUrl={invite.logo_url}
+        logoSha={invite.logo_sha}
         integrity={integrity}
         initialDrafts={serverDrafts}
         supportEmail={supportEmail}
@@ -682,8 +685,14 @@ export function CandidatePage() {
   return (
     <div className="ide">
       <header className="ide-top">
-        <span className="ide-mark" aria-hidden="true" />
-        <span className="ide-title">{q?.title}</span>
+        {invite?.logo_sha ? (
+          <img src={logoSrc(invite.logo_sha)} alt="" className="ide-brand-logo" />
+        ) : (
+          <span className="ide-mark" aria-hidden="true" />
+        )}
+        <span className="ide-title">
+          {invite?.org_name ? `${invite.org_name} — ${q?.title}` : q?.title}
+        </span>
         <div className="ide-top-right">
           <span className="chip chip-neutral">Per-test limit {q?.time_limit_s}s</span>
           {deadline && !timeUp && remainingMs !== null && (

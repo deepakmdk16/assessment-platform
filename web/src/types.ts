@@ -150,9 +150,6 @@ export interface User {
   id: string
   email: string
   name: string
-  // Workspace default branding (A12) — prefills a new assessment's org/logo.
-  default_org_name: string | null
-  default_logo_url: string | null
   // Whether the emailed confirmation link was followed; nothing is gated on it.
   email_verified: boolean
 }
@@ -219,9 +216,11 @@ export interface AssessmentOut {
   id: string
   title: string
   duration_minutes: number | null
-  // Per-assessment branding (A12): shown on the candidate IDE header.
+  // Per-assessment branding (A12): shown on the candidate IDE header. The logo
+  // is a content address frozen at creation (P3b) — fetch it with
+  // `api.logoSrc(sha)`; there is no field to change it.
   org_name: string | null
-  logo_url: string | null
+  logo_sha: string | null
   /** Integrity monitoring (I1): fullscreen enforced + outside pastes blocked for
    *  every sitting of this assessment. Defaults on. */
   proctored: boolean
@@ -239,8 +238,9 @@ export interface AssessmentIn {
   // Ordered slots (VS2): each a fixed question or a variant set. The legacy flat
   // `question_ids` is still accepted server-side but the builder now sends slots.
   slots: AssessmentSlotIn[]
+  // Omit to brand with the organisation's own name. The logo is not settable
+  // here: it is snapshotted from the organisation (P3b).
   org_name?: string | null
-  logo_url?: string | null
   proctored?: boolean
 }
 
@@ -394,6 +394,9 @@ export interface InviteStatusResponse {
    *  and organisation for a quick-screen invite, which has no assessment. */
   assessment_title?: string | null
   org_name?: string | null
+  /** The organisation's logo by content address (P3b) — null for a quick-screen
+   *  invite, which names no organisation at this point either. */
+  logo_sha?: string | null
   question_count?: number
   /** Total minutes for the sitting; null = untimed. */
   duration_minutes?: number | null
@@ -432,7 +435,10 @@ export interface InviteStartResponse {
    *  unbranded assessment. */
   assessment_title?: string | null
   org_name?: string | null
-  logo_url?: string | null
+  /** The logo's content address, served from this deployment (P3b) — so opening
+   *  an assessment tells no third party the candidate's IP or the moment they
+   *  sat down. */
+  logo_sha?: string | null
   /** Whether this sitting is monitored (I1). The candidate UI enforces fullscreen
    *  and blocks outside pastes only when true; a legacy single-question invite is
    *  always monitored. */
@@ -782,6 +788,9 @@ export interface Organization {
   name: string
   role: OrgRole
   member_count: number
+  /** The organisation's logo as a content address, or null (P3b). Render it
+   *  with `api.logoSrc(sha)`; move it with `setOrgLogo` / `clearOrgLogo`. */
+  logo_sha: string | null
   /** How long candidate data is kept, in days. `null` — the default — means no
    *  policy is configured and nothing is erased on a schedule. Not the same as
    *  0, which the API refuses (X03). */

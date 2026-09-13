@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { api, ApiError } from '../api'
+import { api, ApiError, logoSrc } from '../api'
 import { apiMessage, type ErrorMessage } from '../errors'
 import { badgeClass, difficultyVerdictLabel, ratingClass } from '../badges'
 import { ExpiryField } from '../components/ExpiryField'
@@ -30,7 +30,6 @@ export function AssessmentDetailPage() {
   const [editDuration, setEditDuration] = useState(60)
   const [editIndefinite, setEditIndefinite] = useState(false)
   const [editOrgName, setEditOrgName] = useState('')
-  const [editLogoUrl, setEditLogoUrl] = useState('')
   const [editProctored, setEditProctored] = useState(true)
   const [editError, setEditError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -91,7 +90,6 @@ export function AssessmentDetailPage() {
     setEditIndefinite(assessment.duration_minutes == null)
     setEditDuration(assessment.duration_minutes ?? 60)
     setEditOrgName(assessment.org_name ?? '')
-    setEditLogoUrl(assessment.logo_url ?? '')
     setEditProctored(assessment.proctored)
     setEditError(null)
     setEditOpen(true)
@@ -116,7 +114,6 @@ export function AssessmentDetailPage() {
             : { question_id: q.question_id ?? undefined },
         ),
         org_name: editOrgName.trim() || null,
-        logo_url: editLogoUrl.trim() || null,
         proctored: editProctored,
       })
       setAssessment(updated)
@@ -148,8 +145,15 @@ export function AssessmentDetailPage() {
           </div>
         </div>
         <div className="head-actions">
-          {assessment.logo_url && (
-            <img src={assessment.logo_url} alt="" className="ide-brand-logo" />
+          {/* The logo this assessment froze at creation (P3b). Read-only here:
+              replacing the organisation's logo deliberately leaves it alone. */}
+          {assessment.logo_sha && (
+            <img
+              src={logoSrc(assessment.logo_sha)}
+              alt=""
+              className="ide-brand-logo"
+              title="The logo this assessment was created with"
+            />
           )}
           <button type="button" className="btn sec sm" onClick={openEdit}>
             Edit
@@ -442,17 +446,10 @@ export function AssessmentDetailPage() {
               onChange={(e) => setEditOrgName(e.target.value)}
             />
           </div>
-          <div className="field">
-            <label htmlFor="edit-logo">Logo URL</label>
-            <input
-              id="edit-logo"
-              placeholder="https://…"
-              value={editLogoUrl}
-              onChange={(e) => setEditLogoUrl(e.target.value)}
-            />
-          </div>
           <p className="cellsub">
-            To change the questions, create a new assessment — the question set is fixed once
+            The logo is the one this assessment was created with and can&rsquo;t be changed —
+            replacing your organisation&rsquo;s logo never restyles assessments already sent. To
+            change the questions, create a new assessment: the question set is fixed once
             candidates have been invited.
           </p>
           {editError && (

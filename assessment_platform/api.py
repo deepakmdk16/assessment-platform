@@ -33,12 +33,15 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     FastAPI,
+    File,
     Header,
     HTTPException,
     Query,
     Request,
     Response,
+    UploadFile,
 )
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import delete, func, or_, text, update
@@ -50,10 +53,12 @@ from . import (
     agent_client,
     analytics,
     billing,
+    blobstore,
     config,
     db,
     email_client,
     email_templates,
+    images,
     integrity,
     notify,
     observability,
@@ -94,6 +99,7 @@ from .models import (
     Invite,
     Membership,
     Organization,
+    OrgAsset,
     OrgInvite,
     OrgUsage,
     Question,
@@ -147,7 +153,6 @@ from .schemas import (
     IntegrityRiskReasonOut,
     IntegritySummaryOut,
     InterviewerOut,
-    InterviewerUpdate,
     InviteCreate,
     InviteDeliveryOut,
     InviteOut,
@@ -785,8 +790,6 @@ def _interviewer_out(interviewer: Interviewer) -> InterviewerOut:
         id=_require_id(interviewer.id),
         email=interviewer.email,
         name=interviewer.name,
-        default_org_name=interviewer.default_org_name,
-        default_logo_url=interviewer.default_logo_url,
         email_verified=interviewer.email_verified_at is not None,
     )
 
@@ -874,6 +877,8 @@ def _purge_org(org_id: int, session: Session) -> None:
         (VariantSet, col(VariantSet.org_id) == org_id),
         (OrgInvite, col(OrgInvite.org_id) == org_id),
         (OrgUsage, col(OrgUsage.org_id) == org_id),
+        # After the assessments that reference its shas (P3b).
+        (OrgAsset, col(OrgAsset.org_id) == org_id),
         (Membership, col(Membership.org_id) == org_id),
         (Organization, col(Organization.id) == org_id),
     ]
@@ -1175,28 +1180,6 @@ def me(current: Interviewer = Depends(get_current_interviewer)) -> InterviewerOu
     return _interviewer_out(current)
 
 
-@app.patch("/auth/me", response_model=InterviewerOut)
-def update_me(
-    body: InterviewerUpdate,
-    current: Interviewer = Depends(get_current_interviewer),
-    session: Session = Depends(get_session),
-) -> InterviewerOut:
-    """Update the caller's own workspace settings (A12 default branding). A partial
-    update: only fields present in the request are changed, so sending an explicit
-    null clears a default while omitting a field leaves it untouched. Blank strings
-    are normalised to null so an empty box means 'no default', not an empty brand."""
-    fields = body.model_dump(exclude_unset=True)
-    if "default_org_name" in fields:
-        current.default_org_name = (fields["default_org_name"] or "").strip() or None
-    if "default_logo_url" in fields:
-        current.default_logo_url = (fields["default_logo_url"] or "").strip() or None
-    current.updated_at = datetime.now(timezone.utc)
-    session.add(current)
-    session.commit()
-    session.refresh(current)
-    return _interviewer_out(current)
-
-
 # --------------------------------------------------------------------------- #
 # Organisations: the roster, and the invites that fill it (X01)                 #
 # --------------------------------------------------------------------------- #
@@ -1243,6 +1226,7 @@ def _organization_out(
         name=organization.name,
         role=org.role,
         member_count=_member_count(org.org_id, session),
+        logo_sha=organization.logo_sha,
         retention_days=organization.retention_days,
         results_webhook_url=organization.results_webhook_url,
         # Only the write that minted it ever sees the secret; a plain read of the
@@ -1490,6 +1474,144 @@ def _set_results_webhook(organization: Organization, url: str | None) -> str | N
     organization.results_webhook_url = url
     organization.results_webhook_secret = notify.new_webhook_secret()
     return organization.results_webhook_secret
+
+
+def _drop_unreferenced_logo(sha256: str | None, org_id: int, session: Session) -> None:
+    """Delete this organisation's copy of an asset nothing of theirs points at.
+
+    Called after the organisation's `logo_sha` has moved, with the address it
+    moved *off*. An assessment snapshots the logo it was created with, so the
+    old asset usually still has readers and must survive — which is the whole
+    reason replacing a logo does not break assessments already sent.
+
+    **Scoped to the organisation, on both sides.** Two tenants who upload the
+    same image hold two rows at one address; a global "is anyone still using
+    this sha?" answers yes for a row that is not ours and leaves our own behind
+    for good, still publicly served after we said it was gone.
+
+    Not a complete refcount: an assessment deleted later can drop the last
+    reference to a superseded logo without anything sweeping it. Recorded in
+    STATUS.md rather than solved with a second hand-rolled hook.
+    """
+    if sha256 is None:
+        return
+    session.flush()  # the organisation's new sha has to be visible to the check
+    ours = (
+        session.exec(
+            select(Organization.id)
+            .where(Organization.id == org_id, Organization.logo_sha == sha256)
+            .limit(1)
+        ).first()
+        is not None
+        or session.exec(
+            select(Assessment.id)
+            .where(Assessment.org_id == org_id, Assessment.logo_sha == sha256)
+            .limit(1)
+        ).first()
+        is not None
+    )
+    if not ours:
+        blobstore.store.delete(session, org_id=org_id, sha256=sha256)
+
+
+@app.put("/orgs/current/logo", response_model=OrganizationOut)
+async def set_org_logo(
+    file: UploadFile = File(...),
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> OrganizationOut:
+    """Replace the organisation's logo (P3b). Admin only.
+
+    What is stored is what `images.normalize_logo` produced, never what arrived:
+    the upload is decoded and re-encoded, which strips EXIF and kills a file
+    that is a valid image *and* a valid script. The client's `Content-Type` and
+    filename are ignored entirely.
+
+    Reading one byte past the cap is deliberate — it is how an oversized upload
+    is refused with a message instead of being silently truncated into a
+    "corrupt image".
+    """
+    _require_admin(org)
+    raw = await file.read(images.MAX_UPLOAD_BYTES + 1)
+    try:
+        # Decoding and re-encoding is CPU work measured in tens of milliseconds
+        # and tens of megabytes. On the event loop it would stall every other
+        # request this worker is serving, so it runs off it.
+        image = await run_in_threadpool(images.normalize_logo, raw)
+    except images.ImageRejectedError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    organization = _organization(org.org_id, session)
+    previous = organization.logo_sha
+    organization.logo_sha = blobstore.store.put(
+        session, org_id=org.org_id, kind="logo", image=image
+    )
+    organization.updated_at = datetime.now(timezone.utc)
+    session.add(organization)
+    if previous != organization.logo_sha:
+        _drop_unreferenced_logo(previous, org.org_id, session)
+    session.commit()
+    return _organization_out(org, session)
+
+
+@app.delete("/orgs/current/logo", response_model=OrganizationOut)
+def clear_org_logo(
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> OrganizationOut:
+    """Remove the organisation's logo. Admin only, and idempotent.
+
+    Assessments that snapshotted it keep it: this is "stop branding new work
+    with it", not "unbrand everything ever sent".
+    """
+    _require_admin(org)
+    organization = _organization(org.org_id, session)
+    previous = organization.logo_sha
+    organization.logo_sha = None
+    organization.updated_at = datetime.now(timezone.utc)
+    session.add(organization)
+    _drop_unreferenced_logo(previous, org.org_id, session)
+    session.commit()
+    return _organization_out(org, session)
+
+
+@app.get("/logos/{sha256}")
+def get_logo(
+    sha256: str,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Serve a logo by content address. Public, and deliberately so.
+
+    A candidate loads this before they have identified themselves, so there is
+    nobody to authorise; the address is a 256-bit name nobody can guess, and
+    the thing behind it is a company logo shown to every candidate anyway.
+
+    Content-addressed means immutable, which means the cache headers can be the
+    strong ones: a year, `immutable`, and an ETag that is the address itself.
+    """
+    if len(sha256) != 64 or not all(c in "0123456789abcdef" for c in sha256):
+        raise HTTPException(status_code=404, detail="no such logo.")
+    etag = f'"{sha256}"'
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "ETag": etag,
+        # The type is ours, not the uploader's — but a browser that sniffs past
+        # it would undo the re-encode's whole point.
+        "X-Content-Type-Options": "nosniff",
+    }
+    # A revalidation needs to know the asset exists and what type it is, not what
+    # is in it. Reading the blob to then discard it is the common case with a
+    # one-year immutable cache.
+    if request.headers.get("if-none-match") == etag:
+        content_type = blobstore.store.head(session, sha256)
+        if content_type is None:
+            raise HTTPException(status_code=404, detail="no such logo.")
+        return Response(status_code=304, headers=headers)
+    served = blobstore.store.read(session, sha256)
+    if served is None:
+        raise HTTPException(status_code=404, detail="no such logo.")
+    return Response(content=served.data, media_type=served.content_type, headers=headers)
 
 
 @app.get("/orgs/current/members", response_model=list[MemberOut])
@@ -2823,7 +2945,7 @@ def _assessment_out(a: Assessment, session: Session) -> AssessmentOut:
         title=a.title,
         duration_minutes=a.duration_minutes,
         org_name=a.org_name,
-        logo_url=a.logo_url,
+        logo_sha=a.logo_sha,
         proctored=a.proctored,
         status=a.status,
         created_at=a.created_at,
@@ -2875,6 +2997,10 @@ def create_assessment(
     org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> AssessmentOut:
+    # The branding this assessment freezes: the organisation's name as a default
+    # for `org_name`, and its logo by content address. Snapshotted here and never
+    # re-read, so replacing the logo leaves assessments already sent untouched.
+    organization = _organization(org.org_id, session)
     explicit_id = (body.id or "").strip()
     if explicit_id:
         if session.get(Assessment, explicit_id) is not None:
@@ -2890,8 +3016,8 @@ def create_assessment(
         org_id=org.org_id,
         title=body.title,
         duration_minutes=body.duration_minutes,
-        org_name=body.org_name,
-        logo_url=body.logo_url,
+        org_name=body.org_name or organization.name,
+        logo_sha=organization.logo_sha,
         proctored=body.proctored,
         questions=_membership_rows(body.ordered_slots(), org, session),
     )
@@ -2960,8 +3086,10 @@ def update_assessment(
         )
     a.title = body.title
     a.duration_minutes = body.duration_minutes
-    a.org_name = body.org_name
-    a.logo_url = body.logo_url
+    # The same fallback creation uses. Without it a PUT that omits the field —
+    # which the edit dialog sends whenever the box is cleared — would put the
+    # assessment in an unbranded state creation cannot produce.
+    a.org_name = body.org_name or _organization(org.org_id, session).name
     a.proctored = body.proctored
     a.updated_at = datetime.now(timezone.utc)
     # Full replace of the membership set (PUT) — but ONLY when it actually
@@ -4189,7 +4317,7 @@ def _candidate_question_view(
         # generic header in either case.
         assessment_title=invite.assessment.title if invite.assessment else None,
         org_name=invite.assessment.org_name if invite.assessment else None,
-        logo_url=invite.assessment.logo_url if invite.assessment else None,
+        logo_sha=invite.assessment.logo_sha if invite.assessment else None,
         # Integrity monitoring (I1), frozen on the invite when it was minted.
         proctored=invite.proctored,
         # Whether this sitting can take feedback at the end (P2b) — see
@@ -4231,6 +4359,7 @@ def get_invite(token: str, session: Session = Depends(get_session)) -> InviteSta
         proctored=invite.proctored,
         assessment_title=a.title if a else None,
         org_name=a.org_name if a else None,
+        logo_sha=a.logo_sha if a else None,
         question_count=len(a.questions) if a else 1,
         duration_minutes=a.duration_minutes if a else (q.duration_minutes if q else None),
         languages=config.SUPPORTED_LANGUAGES,

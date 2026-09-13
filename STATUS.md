@@ -224,17 +224,15 @@ retention.**
   `OrgInviteOut.accepted_at` can never be non-null on any response and
   `Membership.invited_by` is written by `_join_org` and read by nothing — the
   audit trail the OrgInvite docstring says the rows are kept for has no reader.
-  `Interviewer.default_org_name`/`default_logo_url` are still per-person
-  ("workspace"-level) in a product where the workspace is now a shared
-  `Organization` with its own name, so two admins keep separate branding
-  defaults. `GET /auth/me` carries no organisation, so its name appears in
+  `GET /auth/me` carries no organisation, so its name appears in
   exactly one place in the SPA. Question/assessment/variant-set ids remain one
   global slug namespace, so an explicit-id create is an existence oracle across
   organisations. Several open items above still cite `api.py:NNNN` line numbers
   that X01 moved by ~800-1000 lines. Why: none of these is user-visible today;
   together they are the tail of the org migration. Fix: a read surface for
-  accepted invitations, decide whether branding defaults move to the org, and
-  re-anchor the stale citations.
+  accepted invitations, and re-anchor the stale citations. (The branding half is
+  closed: P3b moved it to `Organization.name`/`logo_sha` and dropped the
+  per-person columns along with `PATCH /auth/me`.)
 
 - **P07 · P2 · XS — CSV export is vulnerable to formula injection.**
   Evidence: api.py:2872-2884 writes candidate-supplied candidate, candidate_email
@@ -384,14 +382,6 @@ ErrorBoundary only logs; 401 redirect loses returnTo.**
   one api.test.ts.
   _Verified: single-audit claim, not independently re-verified; source:
   frontend,quality._
-- **W13 · P2 · XS — The logo URL is rendered unvalidated in the candidate's
-browser.**
-  Evidence: NewAssessmentPage.tsx:207-208 live-previews whatever is typed;
-  AssessmentFlow.tsx:288 renders it for candidates; check whether schemas.py
-  validates logo_url (https only). Why: http:// logos trigger mixed content; the
-  candidate's IP is sent to an arbitrary host. Fix: require https:// client- and
-  server-side.
-  _Verified: single-audit claim, not independently re-verified; source: frontend._
 - **W14 · P2 · S — Accessibility: the remaining three.**
   Evidence: every picker row has an identical "Add" (NewAssessmentPage.tsx); the
   ARIA tablist has no arrow-key handling (AssessmentFlow.tsx); the Monaco Tab-trap
@@ -452,7 +442,11 @@ headers or HTTPS enforcement docs.**
   on the proxy, undocumented). Why: CVEs in bookworm toolchains/node/react go
   unnoticed; headers depend on an undocumented proxy. Fix: Dependabot (pip, npm,
   docker, actions) + pip-audit/npm audit --audit-level=high in CI;
-  HSTS/CSP/X-Frame-Options at the proxy, documented.
+  HSTS/CSP/X-Frame-Options at the proxy, documented. P3b narrowed the CSP half:
+  no candidate surface loads an image from a customer-supplied host any more
+  (logos are served from `/api/logos/{sha}`, same-origin behind nginx), so P9a's
+  planned `img-src 'self' data: blob:` needs no widening — P9a should confirm a
+  branded assessment still renders once the header lands.
   _Verified: cited lines read in this audit; source: saas._
 - **X12 · P2 · M — Candidate identity is a claim; recipient enumeration via
 /start.**
@@ -560,13 +554,6 @@ layout shift while analytics load.**
   strict; recommendedTypeChecked + jsx-a11y.
   _Verified: cited lines read in this audit; source: quality. The analytics layout
   shift was fixed with a reserved-height skeleton 2026-09-08._
-- **W21 · P3 · XS — The start gate cannot show the logo before identification.**
-  Evidence: `GET /invite/{token}` now carries the title, organisation, question
-  count, duration and languages, and the gate renders them (P2a, 2026-09-13);
-  `logo_url` still arrives only in the /start payload. Fix: add `logo_url` to
-  `InviteStatusOut` and render it on the gate — do it in P3b (logo upload),
-  which changes where the logo lives.
-  _Verified: cited lines read in this audit; source: frontend,saas._
 
 ---
 
@@ -608,6 +595,33 @@ Minor findings from the P2a review round, deferred rather than fixed there.
   notice could now render that field instead of restating a contact sentence —
   decide first whether a human-review request should reach the platform's
   support mailbox at all, or only the hiring team.
+
+## P3b review leftovers — 2026-09-13
+
+Minor findings from the P3b review round, deferred rather than fixed there.
+
+- **The orphan sweep runs on two of the four paths that can drop the last
+  reference to a logo.** `_drop_unreferenced_logo`
+  (`assessment_platform/api.py`) is called when the organisation's logo is
+  replaced or removed. Deleting the assessment that snapshotted a superseded
+  logo — by hand, or through `privacy.purge_expired` — leaves the `OrgAsset`
+  row behind, and `GET /logos/{sha}` keeps serving the old branding. Bytes, not
+  a leak: the address is unguessable and it is the organisation's own image.
+  Fix: sweep on assessment deletion too, or replace the hand-rolled refcount
+  with a periodic pass over unreferenced assets.
+- **A multipart body with no `Content-Length` is not bounded before it is
+  parsed.** `_limit_body_size` (`assessment_platform/api.py`) checks a declared
+  length, and the JSON routes have schema caps behind it; `PUT
+  /orgs/current/logo` is the first route where neither applies, because
+  Starlette spools the part before `await file.read(cap + 1)` runs. Admin-only
+  and authenticated, so the attacker is a customer's own admin or a stolen
+  token. Fix: a streamed read that aborts past the cap, or a parser-level limit.
+- **An assessment created concurrently with a logo replacement can reference a
+  just-deleted asset.** Under READ COMMITTED, `create_assessment` can read
+  `organization.logo_sha = A` before `set_org_logo` moves it to B, sweeps A
+  (seeing no reference yet) and commits — leaving the new assessment pointing at
+  a 404 permanently, since its logo is frozen at creation. Needs a row lock on
+  the organisation, or a foreign key from `assessment.logo_sha` to the asset.
 
 ## P3a review leftovers — 2026-09-13
 

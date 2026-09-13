@@ -23,16 +23,19 @@ vi.mock('../../api', () => {
   }
   return {
     api: {
-      updateMe: vi.fn(),
       resendVerification: vi.fn(),
       changePassword: vi.fn(),
       deleteAccount: vi.fn(),
       // BillingPanel, NotificationsPanel and PrivacyPanel each load on mount.
       getBilling: vi.fn(() => new Promise(() => {})),
       getOrg: vi.fn(() => new Promise(() => {})),
+      renameOrg: vi.fn(),
+      setOrgLogo: vi.fn(),
+      clearOrgLogo: vi.fn(),
     },
     ApiError,
     setToken: vi.fn(),
+    logoSrc: (sha: string) => `/logos/${sha}`,
   }
 })
 
@@ -40,8 +43,6 @@ const owner = (over: Partial<User> = {}): User => ({
   id: '1',
   email: 'o@test.io',
   name: 'Owner',
-  default_org_name: null,
-  default_logo_url: null,
   email_verified: true,
   ...over,
 })
@@ -51,6 +52,7 @@ const org = (role: Organization['role']): Organization => ({
   name: 'Acme Corp',
   role,
   member_count: 3,
+  logo_sha: null,
   retention_days: null,
   results_webhook_url: null,
   results_webhook_secret: null,
@@ -91,14 +93,14 @@ describe('Settings sections (P3a)', () => {
       'aria-current',
       'page',
     )
-    expect(screen.getByLabelText(/organization name/i)).toBeInTheDocument()
+    expect(screen.getByText(/what the candidate sees/i)).toBeInTheDocument()
   })
 
   it('renders only the section in the URL, not the whole page', async () => {
     renderAt('/settings/security')
     expect(await screen.findByLabelText(/current password/i)).toBeInTheDocument()
     // The other sections' controls are not merely scrolled away — they are absent.
-    expect(screen.queryByLabelText(/organization name/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/what the candidate sees/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/signed in on this browser/i)).not.toBeInTheDocument()
   })
 
@@ -111,7 +113,7 @@ describe('Settings sections (P3a)', () => {
 
   it('sends an unknown section back to the first one instead of a blank panel', async () => {
     renderAt('/settings/nonsense')
-    expect(await screen.findByLabelText(/organization name/i)).toBeInTheDocument()
+    expect(await screen.findByText(/what the candidate sees/i)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Workspace' })).toHaveAttribute('aria-current', 'page')
   })
 
@@ -122,7 +124,7 @@ describe('Settings sections (P3a)', () => {
     await user.click(await screen.findByRole('link', { name: 'Account' }))
 
     expect(await screen.findByText(/signed in on this browser/i)).toBeInTheDocument()
-    expect(screen.queryByLabelText(/organization name/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/what the candidate sees/i)).not.toBeInTheDocument()
   })
 
   it('navigates by the select the rail collapses into on a narrow screen', async () => {
@@ -155,7 +157,7 @@ describe('Settings sections — what a member may see (P3a)', () => {
   it('sends a member who types an admin route straight back', async () => {
     renderAt('/settings/privacy')
 
-    expect(await screen.findByLabelText(/organization name/i)).toBeInTheDocument()
+    expect(await screen.findByText(/what the candidate sees/i)).toBeInTheDocument()
     expect(screen.queryByText(/data retention/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/erase a candidate/i)).not.toBeInTheDocument()
   })
@@ -181,7 +183,7 @@ describe('Settings sections — what a member may see (P3a)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/couldn’t check what you’re allowed/i)
     expect(screen.queryByText(/erase a candidate/i)).not.toBeInTheDocument()
     // Still on the section they asked for: reloading is a fix, being moved is not.
-    expect(screen.queryByLabelText(/organization name/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/what the candidate sees/i)).not.toBeInTheDocument()
   })
 
   it('keeps the sections a member is entitled to', async () => {
@@ -203,32 +205,6 @@ describe('Settings — an admin sees every section', () => {
   it('opens an admin section at its own route', async () => {
     renderAt('/settings/privacy')
     expect(await screen.findByText(/data retention/i)).toBeInTheDocument()
-  })
-})
-
-describe('Settings → Workspace', () => {
-  it('loads the current default branding into the form', async () => {
-    authState.user = owner({ default_org_name: 'Acme Corp', default_logo_url: 'https://acme/l.png' })
-    renderAt('/settings/workspace')
-    expect(await screen.findByLabelText(/organization name/i)).toHaveValue('Acme Corp')
-    expect(screen.getByLabelText(/logo url/i)).toHaveValue('https://acme/l.png')
-  })
-
-  it('saves trimmed values, nulling blanks, and refreshes the session', async () => {
-    const user = userEvent.setup()
-    vi.mocked(api.updateMe).mockResolvedValue(owner({ default_org_name: 'Acme Corp' }))
-    renderAt('/settings/workspace')
-
-    await user.type(await screen.findByLabelText(/organization name/i), '  Acme Corp  ')
-    await user.click(screen.getByRole('button', { name: /save defaults/i }))
-
-    await waitFor(() => expect(api.updateMe).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(api.updateMe).mock.calls[0][0]).toEqual({
-      default_org_name: 'Acme Corp',
-      default_logo_url: null,
-    })
-    expect(refreshMock).toHaveBeenCalled()
-    expect(await screen.findByText(/saved/i)).toBeInTheDocument()
   })
 })
 
