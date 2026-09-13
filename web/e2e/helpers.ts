@@ -127,3 +127,37 @@ export async function confirmSubmit(page: Page): Promise<void> {
   await expect(confirm.getByText('You can’t change your code after this.')).toBeVisible()
   await confirm.getByRole('button', { name: 'Submit' }).click()
 }
+
+/**
+ * An invite backed by a real Assessment, returned as its candidate URL.
+ *
+ * Setup only, and deliberately over the API rather than the assessment wizard:
+ * what the specs using this are testing is the candidate's sitting and the
+ * interviewer's grid, not the six screens it takes to author an assessment (the
+ * wizard has its own coverage). `creds` come from `registerInterviewer`.
+ */
+export async function createAssessmentInvite(
+  page: Page,
+  creds: { email: string; password: string },
+  questionId: string,
+  recipients: string[],
+): Promise<string> {
+  const api = process.env.E2E_API_URL ?? 'http://127.0.0.1:9000'
+  const login = await page.request.post(`${api}/auth/login`, { data: creds })
+  expect(login.ok()).toBeTruthy()
+  const headers = { Authorization: `Bearer ${(await login.json()).access_token}` }
+
+  const created = await page.request.post(`${api}/assessments`, {
+    headers,
+    data: { title: `Screen ${uniqueSuffix()}`, question_ids: [questionId] },
+  })
+  expect(created.ok()).toBeTruthy()
+  const assessmentId = (await created.json()).id
+
+  const invited = await page.request.post(`${api}/assessments/${assessmentId}/invites`, {
+    headers,
+    data: { recipients },
+  })
+  expect(invited.ok()).toBeTruthy()
+  return (await invited.json()).url
+}

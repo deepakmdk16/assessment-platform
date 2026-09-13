@@ -47,6 +47,38 @@ def _columns(db_path: Path) -> dict[str, dict[str, tuple[str, int]]]:
         conn.close()
 
 
+def _unique_sets(db_path: Path) -> dict[str, set[tuple[str, ...]]]:
+    """{table: {(col, ...), ...}} for every UNIQUE index a database enforces.
+
+    Columns alone are not the whole schema: a unique constraint that exists on
+    the model and not in the migration is invisible to every test (they all build
+    from the models) and only shows up in production, as a route whose 409 never
+    fires. `CandidateFeedback.attempt_id` is exactly that shape.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        tables = sorted(
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' AND name != 'alembic_version'"
+            )
+        )
+        out: dict[str, set[tuple[str, ...]]] = {}
+        for table in tables:
+            uniques = set()
+            for row in conn.execute(f"PRAGMA index_list({table})"):  # noqa: S608
+                name, is_unique = row[1], row[2]
+                if not is_unique:
+                    continue
+                cols = tuple(r[2] for r in conn.execute(f"PRAGMA index_info({name})"))  # noqa: S608
+                uniques.add(cols)
+            out[table] = uniques
+        return out
+    finally:
+        conn.close()
+
+
 def test_migrations_and_models_agree(tmp_path: Path) -> None:
     migrated = tmp_path / "migrated.db"
     subprocess.run(
@@ -83,3 +115,15 @@ def test_migrations_and_models_agree(tmp_path: Path) -> None:
         )
     ]
     assert not drift, "schema drift between migrations and models:\n  " + "\n  ".join(drift)
+
+    migrated_uniques = _unique_sets(migrated)
+    declared_uniques = _unique_sets(declared)
+    unique_drift = [
+        f"{table}: migration={sorted(migrated_uniques.get(table, set()))} "
+        f"model={sorted(declared_uniques.get(table, set()))}"
+        for table in sorted(set(migrated_uniques) | set(declared_uniques))
+        if migrated_uniques.get(table, set()) != declared_uniques.get(table, set())
+    ]
+    assert not unique_drift, "unique-constraint drift between migrations and models:\n  " + "\n  ".join(
+        unique_drift
+    )

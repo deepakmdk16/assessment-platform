@@ -15,6 +15,7 @@ import type {
   RunResponse,
   RunTestsResponse,
 } from '../types'
+import { CandidateFeedbackForm } from '../components/CandidateFeedbackForm'
 import { CandidateNotice } from './CandidateNotice'
 import { ConsoleResult } from './ConsoleResult'
 import { formatRemaining, timerClass } from './candidateTimer'
@@ -52,6 +53,11 @@ interface Props {
    *  by CandidatePage at /start; seeds the per-question answers below. */
   initialDrafts?: CandidateDraft[]
   onQuestionChange: (questionId: string) => void
+  /** Where a candidate writes with a question (P2b) — the platform's own tagged
+   *  address, from /start. Undefined when the deploy configures none. */
+  supportEmail?: string | null
+  /** Whether this sitting can take feedback at the end (P2b), from /start. */
+  feedbackEnabled?: boolean
   /** Bubble a 410/404 (expired/revoked) up so the page shows the shared notice. */
   onExpired: () => void
   /** Fired once when the sitting ends, so the page can stop proctoring. This
@@ -77,6 +83,8 @@ export function AssessmentFlow({
   logoUrl,
   integrity,
   initialDrafts,
+  supportEmail,
+  feedbackEnabled,
   onQuestionChange,
   onExpired,
   onComplete,
@@ -377,7 +385,9 @@ export function AssessmentFlow({
     const body =
       `Thanks, ${candidateName}! ${submittedCount} of ${questions.length} question${questions.length === 1 ? '' : 's'} were submitted for grading. ` +
       `${open} ${open === 1 ? 'question is' : 'questions are'} still unanswered — this link stays open for ${open === 1 ? 'it' : 'them'}${deadline ? ' until time runs out' : ''}.`
-    return <CandidateNotice title="Answers submitted ✓" body={body} />
+    // No feedback form here: questions are still open and this link still admits
+    // them, so the sitting is not over — they meet the form when they finish.
+    return <CandidateNotice title="Answers submitted ✓" body={body} supportEmail={supportEmail} />
   }
   if (complete) {
     const n = questions.length
@@ -386,7 +396,16 @@ export function AssessmentFlow({
     if (autoSubmitFailedIds.length > 0) {
       body += ` ${autoSubmitFailedIds.length} couldn’t be recorded when time ran out — please tell your interviewer if you think this is a mistake.`
     }
-    return <CandidateNotice title="Assessment complete ✓" body={body} />
+    return (
+      <CandidateNotice title="Assessment complete ✓" body={body} supportEmail={supportEmail}>
+        {/* "Complete" also covers a sitting that ran out of time with nothing
+            written: the server has no submission to attach feedback to and would
+            refuse it, and there is nothing to have an opinion about anyway. */}
+        {feedbackEnabled && submittedCount > 0 && (
+          <CandidateFeedbackForm token={token} candidateEmail={candidateEmail} />
+        )}
+      </CandidateNotice>
+    )
   }
 
   const brandedTitle = orgName ? `${orgName} — ${assessmentTitle ?? 'Coding assessment'}` : null

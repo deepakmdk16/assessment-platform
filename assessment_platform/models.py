@@ -591,6 +591,40 @@ class CandidateDraft(SQLModel, table=True):
     updated_at: datetime = _created_at()
 
 
+class CandidateFeedback(SQLModel, table=True):
+    """What the candidate thought of the sitting (P2b) — optional, once each.
+
+    Keyed to the `CandidateAttempt`, not to a submission: a multi-question
+    sitting is one experience, and the candidate is asked about it once, after
+    they finish. `attempt_id` is unique so a re-send cannot stack second
+    opinions onto a sitting; the route answers 409 rather than overwriting,
+    because an answer already read by an interviewer is not the candidate's to
+    revise.
+
+    `org_id` is denormalised off the attempt's invite so account deletion can
+    reach these rows by organisation like every other table (`api._purge_org`),
+    and so an aggregate never has to join three tables to know whose it is.
+
+    No `updated_at`: the row is written once and never edited (same reasoning as
+    `RateLimitCounter`, opposite reason — that one is too hot to stamp, this one
+    is never touched again).
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    org_id: int = Field(foreign_key="organization.id", index=True)
+    attempt_id: int = Field(foreign_key="candidateattempt.id", unique=True)
+    # 1-5, where 1 is poor. Validated at the schema, kept as a plain int here so
+    # a future scale change is not a migration.
+    rating: int
+    # "too_easy" | "fair" | "too_hard" — what the candidate made of the level.
+    difficulty_fair: str
+    # The candidate's own words, "" when they gave none. Capped at the schema
+    # (MAX_FEEDBACK_CHARS); it is personal data and is DELETED, not tombstoned,
+    # by an erasure — exactly like a draft.
+    comment: str = ""
+    created_at: datetime = _created_at()
+
+
 class Submission(SQLModel, table=True):
     # One attempt per candidate per invite PER QUESTION, enforced by the DATABASE.
     # (T4: an assessment invite carries several questions, so the candidate gets one

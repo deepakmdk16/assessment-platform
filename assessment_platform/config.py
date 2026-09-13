@@ -371,7 +371,27 @@ RETENTION_INTERVAL_S = 0 if TESTING else int(os.getenv("RETENTION_INTERVAL_S", "
 # `CandidateAttempt.consent_version` at the moment they agree, so a later
 # rewrite of the policy cannot retroactively claim their agreement to words they
 # never saw. Bump it whenever docs/PRIVACY.md changes materially.
-PRIVACY_POLICY_VERSION = os.getenv("PRIVACY_POLICY_VERSION", "2026-09-13")
+PRIVACY_POLICY_VERSION = os.getenv("PRIVACY_POLICY_VERSION", "2026-09-14")
+
+
+# --------------------------------------------------------------------------- #
+# Candidate support contact (P2b)                                               #
+# --------------------------------------------------------------------------- #
+
+# The mailbox a candidate is told to write to. Empty (the default) hides the
+# contact line everywhere rather than showing an address nobody reads.
+#
+# Deliberately the PLATFORM's own address, never an interviewer's: the invitation
+# email already carries the interviewer as Reply-To, and a link that gets
+# forwarded must not double as a directory of who is hiring.
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "")
+
+# Plus-tag that address with the inviting organisation's slug for a candidate who
+# has identified themselves (support@x -> support+acme@x), so one real mailbox can
+# still be filtered or routed per customer with no extra DNS. Turn it off to show
+# SUPPORT_EMAIL verbatim — which is also how an operator points everything at a
+# catch-all address (acme@x) or at a customer's own inbox.
+SUPPORT_EMAIL_ORG_TAG = os.getenv("SUPPORT_EMAIL_ORG_TAG", "true").lower() in {"1", "true"}
 
 
 # Observability (X08). All three surfaces — error reporting, the metrics scrape

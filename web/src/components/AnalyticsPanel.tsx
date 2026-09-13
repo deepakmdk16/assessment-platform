@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
+import { DIFFICULTY_LABELS, difficultyVerdictLabel, ratingClass } from '../badges'
 import {
   bucketClass,
   formatDuration,
@@ -9,6 +10,7 @@ import {
 } from '../analytics/format'
 import type {
   AssessmentAnalytics,
+  AssessmentFeedback,
   AssessmentOut,
   OverviewAnalytics,
   ScoreBucket,
@@ -193,7 +195,115 @@ export function AnalyticsPanel({
           <p className="empty-state">No candidates have started this assessment yet.</p>
         )}
       </div>
+
+      {xc && (
+        <div className="card">
+          <div className="card-head">
+            <span className="card-title">Candidate feedback</span>
+            <span className="hint">
+              {xc.feedback && xc.feedback.responses > 0
+                ? `${xc.feedback.responses} of ${xc.feedback.finished} sittings answered`
+                : 'optional, asked once a sitting is over'}
+            </span>
+          </div>
+          <div className="card-body">
+            <FeedbackRollup feedback={xc.feedback} />
+          </div>
+        </div>
+      )}
     </section>
+  )
+}
+
+/** What candidates made of one assessment (P2b). An erasure deletes the feedback
+ *  with the rest of the sitting, so an erased candidate leaves no row here and
+ *  the aggregates move with them. */
+function FeedbackRollup({ feedback }: { feedback?: AssessmentFeedback }) {
+  const fb = feedback
+  if (!fb || fb.responses === 0) {
+    return (
+      <p className="empty-state">
+        No feedback yet — candidates are asked once they finish, and answering is optional.
+      </p>
+    )
+  }
+  const rated = fb.too_easy + fb.fair + fb.too_hard
+  // Percent of the 100-unit viewBox above.
+  const share = (n: number) => (rated ? (n / rated) * 100 : 0)
+  return (
+    <>
+      <div className="stat-grid stat-grid-3">
+        <Tile
+          label="Avg rating"
+          value={fb.avg_rating == null ? '—' : `${fb.avg_rating.toFixed(1)}/5`}
+          sub={`${fb.responses} response${fb.responses === 1 ? '' : 's'}`}
+          accent
+        />
+        <Tile
+          label="Response rate"
+          value={pct(fb.finished ? fb.responses / fb.finished : null)}
+          sub="of candidates who finished"
+        />
+        <Tile
+          label="Called it too hard"
+          value={pct(rated ? fb.too_hard / rated : null)}
+          sub={`${fb.too_hard} of ${rated}`}
+        />
+      </div>
+
+      {/* SVG rather than three sized <span>s: widths are data, and a width is a
+          style — the same reason the charts above are drawn, not laid out. */}
+      <svg
+        className="fb-split"
+        viewBox="0 0 100 6"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`Difficulty: ${fb.too_easy} too easy, ${fb.fair} about right, ${fb.too_hard} too hard`}
+      >
+        <rect className="too-easy" x={0} y={0} width={share(fb.too_easy)} height={6} />
+        <rect className="fair" x={share(fb.too_easy)} y={0} width={share(fb.fair)} height={6} />
+        <rect
+          className="too-hard"
+          x={share(fb.too_easy) + share(fb.fair)}
+          y={0}
+          width={share(fb.too_hard)}
+          height={6}
+        />
+      </svg>
+      {/* The chart legend this panel already uses, with three more dot colours. */}
+      <div className="legend">
+        <span>
+          <i className="dot dot-too-easy" />
+          {DIFFICULTY_LABELS.too_easy} · {fb.too_easy}
+        </span>
+        <span>
+          <i className="dot dot-fair" />
+          {DIFFICULTY_LABELS.fair} · {fb.fair}
+        </span>
+        <span>
+          <i className="dot dot-too-hard" />
+          {DIFFICULTY_LABELS.too_hard} · {fb.too_hard}
+        </span>
+      </div>
+
+      {fb.comments.length > 0 && (
+        <div className="fb-list">
+          {fb.comments.map((c, i) => (
+            <div className="fb-item" key={`${c.candidate_name}-${i}`}>
+              <div className="fb-item-head">
+                <span className="fb-item-who">{c.candidate_name}</span>
+                <span className={ratingClass(c.rating)}>{c.rating}/5</span>
+                <span className="chip chip-neutral">{difficultyVerdictLabel(c.difficulty_fair)}</span>
+                {c.created_at && (
+                  <span className="fb-item-when">{new Date(c.created_at).toLocaleDateString()}</span>
+                )}
+              </div>
+              <p>{c.comment}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   )
 }
 

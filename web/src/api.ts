@@ -5,6 +5,7 @@ import type {
   AssessmentOut,
   Billing,
   CandidateDraftsResponse,
+  CandidateFeedbackIn,
   IntegrityEventIn,
   IntegrityReport,
   Invite,
@@ -541,6 +542,11 @@ export const api = {
     token: string,
     data: { candidate_email: string; question_id?: string | null; code: string; language: string },
   ) => request<void>(`/invite/${token}/draft`, { method: 'PUT', body: data }),
+
+  /** What the candidate made of the sitting (P2b). Optional and once — the
+   *  server answers 409 on a repeat, which the UI shows as already sent. */
+  sendCandidateFeedback: (token: string, data: CandidateFeedbackIn) =>
+    request<void>(`/invite/${token}/feedback`, { method: 'POST', body: data }),
 
   getCandidateDrafts: (token: string, candidate_email: string) =>
     request<CandidateDraftsResponse>(

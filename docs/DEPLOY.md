@@ -93,6 +93,17 @@ Also required by the application itself, and equally non-optional:
   degrade; the agent reports quality as unavailable.
 - **Stripe keys** if you are charging (`.env.example` → billing).
 
+Worth setting, though nothing refuses to boot without it:
+
+- **`SUPPORT_EMAIL`** — the address candidates are told to write to, on the start
+  screen, the invitation email and every screen a sitting can end on. Unset, no
+  contact line is shown at all. It must be a mailbox **you** own: the product
+  never shows a candidate an interviewer's own address, so without this a
+  candidate whose link is broken has nowhere to go but the recruiter who sent it.
+  `SUPPORT_EMAIL_ORG_TAG` (default on) plus-tags it per organisation once the
+  candidate has identified themselves — `support@x` → `support+acme@x` — so one
+  mailbox can be routed per customer; turn it off to show the address verbatim.
+
 Nothing about observability is required, and everything is off until you set it
 (§4 is what to do with it). Set these in `.env`; the agent's are the same
 settings under its own `ASSESS_` names, because it reads only those:

@@ -284,6 +284,9 @@ export interface AssessmentAttempt {
   integrity_blocked?: number
   /** The sitting's risk level (none|low|elevated|high); null when unmonitored. */
   integrity_risk?: string | null
+  /** What the candidate said about the sitting afterwards (P2b). null when they
+   *  said nothing — and after an erasure, which deletes it. */
+  feedback?: AttemptFeedback | null
 }
 
 // --- Analytics (AR1) -------------------------------------------------------
@@ -359,6 +362,8 @@ export interface AssessmentAnalytics {
   pass_rate: number | null
   score_distribution: ScoreBucket[]
   candidates: AssessmentCandidateAnalytics[]
+  /** What candidates said about this assessment (P2b). */
+  feedback?: AssessmentFeedback
 }
 
 export interface InviteQuestionPublic {
@@ -393,6 +398,10 @@ export interface InviteStatusResponse {
   /** Total minutes for the sitting; null = untimed. */
   duration_minutes?: number | null
   languages?: string[]
+  /** Where to write with a question (P2b). The UNTAGGED platform address: this
+   *  response is readable by anyone holding the link, so it never says whose
+   *  assessment it is. null when the deploy configures no support address. */
+  support_email?: string | null
 }
 
 /** `POST /invite/{token}/start` — the question, released after the email check. */
@@ -428,6 +437,49 @@ export interface InviteStartResponse {
    *  and blocks outside pastes only when true; a legacy single-question invite is
    *  always monitored. */
   proctored?: boolean
+  /** Where to write with a question (P2b) — the platform address, tagged for the
+   *  organisation now the candidate has identified themselves. Never an
+   *  interviewer's own address. null when unconfigured. */
+  support_email?: string | null
+  /** Whether this sitting can take feedback at the end (P2b). False for a
+   *  quick-screen or variant-set invite: no interviewer surface could show it,
+   *  so the form is hidden rather than shown and then refused. */
+  feedback_enabled?: boolean
+}
+
+/** How the candidate rated the level of the sitting (P2b). */
+export type DifficultyVerdict = 'too_easy' | 'fair' | 'too_hard'
+
+/** `POST /invite/{token}/feedback` — optional, once per sitting. */
+export interface CandidateFeedbackIn {
+  candidate_email: string
+  rating: number
+  difficulty_fair: DifficultyVerdict
+  comment: string
+}
+
+/** One sitting's feedback as an interviewer sees it (P2b). */
+export interface AttemptFeedback {
+  rating: number
+  difficulty_fair: DifficultyVerdict
+  comment: string
+  created_at?: string | null
+}
+
+export interface FeedbackComment extends AttemptFeedback {
+  candidate_name: string
+}
+
+/** The feedback rollup for one assessment. `finished` is the denominator for a
+ *  response rate: sittings that submitted something and so could have answered. */
+export interface AssessmentFeedback {
+  responses: number
+  finished: number
+  avg_rating: number | null
+  too_easy: number
+  fair: number
+  too_hard: number
+  comments: FeedbackComment[]
 }
 
 export interface SubmitResponse {

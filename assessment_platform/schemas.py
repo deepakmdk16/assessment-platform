@@ -222,6 +222,40 @@ class AssessmentAttemptQuestionOut(BaseModel):
     score_pct: float | None = None
 
 
+DifficultyVerdict = Literal["too_easy", "fair", "too_hard"]
+
+
+class AttemptFeedbackOut(BaseModel):
+    """One sitting's feedback, as the interviewer sees it."""
+
+    rating: int
+    difficulty_fair: DifficultyVerdict
+    comment: str = ""
+    created_at: datetime | None = None
+
+
+class FeedbackCommentOut(AttemptFeedbackOut):
+    """…with who said it, for the analytics list. `candidate_name` is the
+    attempt's anchored name; an erased sitting has no feedback left to list, so
+    there is no tombstone case here."""
+
+    candidate_name: str
+
+
+class AssessmentFeedbackOut(BaseModel):
+    """The feedback rollup for one assessment (P2b). `responses` counts rows,
+    `finished` the sittings that could have left one, so the response rate is
+    honest about its denominator. avg_rating is None until there is a row."""
+
+    responses: int = 0
+    finished: int = 0
+    avg_rating: float | None = None
+    too_easy: int = 0
+    fair: int = 0
+    too_hard: int = 0
+    comments: list[FeedbackCommentOut] = Field(default_factory=list)
+
+
 class AssessmentAttemptOut(BaseModel):
     """One candidate's whole sitting of an assessment: every question's result
     plus a composite (A11) — pass count is the headline (always well-defined,
@@ -246,6 +280,9 @@ class AssessmentAttemptOut(BaseModel):
     # is not the same as zero.
     integrity_signals: int | None = None
     integrity_blocked: int = 0  # of those, pastes actually blocked (the severe kind)
+    # What the candidate said about the sitting afterwards (P2b), None when they
+    # said nothing — or when an erasure deleted what they said.
+    feedback: AttemptFeedbackOut | None = None
     # The sitting's risk level from integrity.py (none|low|elevated|high) — the
     # triage column. Null exactly when integrity_signals is (unmonitored).
     integrity_risk: str | None = None
@@ -360,6 +397,9 @@ class VariantSetSummaryOut(BaseModel):
 # multi-megabyte paste was accepted, stored in Submission.code, and only then
 # rejected by the agent.
 MAX_CODE_CHARS = 200_000
+# A comment box, not an essay box: long enough for a paragraph of real feedback,
+# short enough that the column is never a place to paste a CV.
+MAX_FEEDBACK_CHARS = 2_000
 MAX_STDIN_CHARS = 1_000_000
 
 
@@ -622,6 +662,11 @@ class InviteStatusOut(BaseModel):
     # Total time budget for the sitting in minutes; None = untimed.
     duration_minutes: int | None = None
     languages: list[str] = Field(default_factory=list)
+    # Where to write with a question (P2b). The UNTAGGED platform address: an
+    # assessment invite's probe already names the organisation (the gate is
+    # branded), but a quick-screen invite's does not, and this must not become the
+    # one place that does. None when no support address is configured.
+    support_email: str | None = None
 
 
 class CandidateStartIn(BaseModel):
@@ -660,6 +705,20 @@ class CandidateErasureOut(BaseModel):
     integrity_events: int
     drafts_deleted: int
     invites_amended: int
+    # Feedback rows removed (P2b). Deleted outright rather than tombstoned — like
+    # a draft, it is the candidate's own words with no reader left to preserve for.
+    feedback_deleted: int = 0
+
+
+class CandidateFeedbackIn(BaseModel):
+    """What the candidate thought of the sitting (P2b), sent once from the
+    post-submit screen. `candidate_email` identifies the sitting exactly as it
+    does on /submit and /draft — the token alone is not an identity."""
+
+    candidate_email: EmailStr
+    rating: int = Field(ge=1, le=5)
+    difficulty_fair: DifficultyVerdict
+    comment: str = Field(default="", max_length=MAX_FEEDBACK_CHARS)
 
 
 class InvitePublicOut(BaseModel):
@@ -684,6 +743,14 @@ class InvitePublicOut(BaseModel):
     # Assessment.proctored; a legacy single-question ("Quick screen") invite has no
     # Assessment and is always monitored.
     proctored: bool = True
+    # Where to write with a question (P2b) — the platform address, tagged for the
+    # organisation now that the caller has identified as an invited recipient.
+    # Never an interviewer's own address. None when unconfigured.
+    support_email: str | None = None
+    # Whether the post-submit screen may offer the feedback form (P2b). False for
+    # a sitting no interviewer surface could show feedback on — the form is hidden
+    # rather than shown and then refused.
+    feedback_enabled: bool = False
 
 
 class CandidateSubmitIn(BaseModel):
@@ -894,6 +961,7 @@ class AssessmentAnalyticsOut(BaseModel):
     pass_rate: float | None = None  # graded question-attempts that passed
     score_distribution: list[ScoreBucketOut]
     candidates: list[AssessmentCandidateAnalyticsOut]
+    feedback: AssessmentFeedbackOut = Field(default_factory=lambda: AssessmentFeedbackOut())
 
 
 # --- Integrity signals (I1 browser telemetry) -------------------------------

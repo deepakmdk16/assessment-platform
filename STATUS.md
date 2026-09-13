@@ -598,10 +598,43 @@ Minor findings from the P2a review round, deferred rather than fixed there.
 - **Four gate-fill helpers in `web/src/pages/__tests__/CandidatePage.test.tsx`**
   (`reachEditor`, `startSitting`, `start`, `passGate`) encode the same steps;
   the older three could call the module-level `passGate`.
-- **The AI notice is hand-mirrored** between `AssessmentNotice` in
-  `CandidatePage.tsx` and the "Automated assessment" section of
-  `docs/PRIVACY.md`. When P2b puts a support address on the probe, both should
-  render that one field instead of restating the contact sentence.
+- **The AI notice still names no address.** `AssessmentNotice` in
+  `CandidatePage.tsx` tells a candidate to "contact the interviewer who invited
+  you" for a human review, while `docs/PRIVACY.md` § Automated assessment offers
+  the privacy contact. P2b added `support_email` to both invite responses, so the
+  notice could now render that field instead of restating a contact sentence —
+  decide first whether a human-review request should reach the platform's
+  support mailbox at all, or only the hiring team.
+
+## P2b review leftovers — 2026-09-13
+
+Minor findings from the P2b review round, deferred rather than fixed there.
+
+- **One invite token, several recipients: feedback can be written under someone
+  else's name.** `_check_invited` (`assessment_platform/api.py`) is an identity
+  *claim*, and every recipient of a multi-address invite holds the same token, so
+  recipient A can POST feedback as recipient B once B has submitted — and the
+  unique constraint then stops B from ever correcting it. The same weakness
+  already lets A burn B's single submit attempt, so the root fix is per-recipient
+  tokens (or a signed one-time feedback link in the results email), not a patch
+  to this route. Until then the interviewer surfaces present feedback as
+  candidate-asserted, which is what it is.
+- **The pre-start dead ends show no support address.** `'invalid'` / `'expired'`
+  / `'error'` in `web/src/pages/CandidatePage.tsx` are reached from the probe's
+  *error* path, which carries no body, so `supportEmail` is provably null exactly
+  where a stuck candidate most needs it (they fall back to "contact whoever sent
+  it to you"). Fix: return the untagged address in the 404/410 detail, or serve
+  it from a tiny public config route the SPA can read once.
+- **A quick-screen sitting is never asked for feedback** (`_feedback_accepted`,
+  `api.py`): both surfaces that display it — the attempts grid and the assessment
+  rollup — are reached through an `Assessment`, so a question-only or
+  variant-set invite has nowhere to show it. Giving `SubmissionDetailPage` a
+  feedback line would let the form open up to those sittings too.
+- **`CandidateFeedback.org_id` is denormalised** (`models.py`) where its siblings
+  (`CandidateDraft`, `IntegrityEvent`) are reached through `invite_id`. It keeps
+  `_purge_org`'s "every table with an org_id is in this list" rule true, and it
+  costs the write path one org lookup; if the rule is relaxed, the column and its
+  index can go.
 
 ## Unscheduled ideas
 

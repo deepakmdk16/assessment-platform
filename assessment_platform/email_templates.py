@@ -106,8 +106,16 @@ def _fallback(url: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def invite(*, url: str, title: str, org_name: str | None = None) -> Email:
-    """The invitation a candidate receives. The one email a stranger reads."""
+def invite(
+    *, url: str, title: str, org_name: str | None = None, support_email: str | None = None
+) -> Email:
+    """The invitation a candidate receives. The one email a stranger reads.
+
+    `support_email` is the platform's own address, tagged for this organisation
+    (P2b) — the candidate has to be able to ask a question without replying to a
+    machine. Omitted entirely when the deploy configures none; the interviewer
+    stays reachable either way, as this message's Reply-To.
+    """
     sender = org_name or "A hiring team"
     subject = f"Coding assessment: {title}"
     if org_name:
@@ -118,7 +126,8 @@ def invite(*, url: str, title: str, org_name: str | None = None) -> Email:
         f"Open your assessment here:\n{url}\n\n"
         "This link is personal to you — you'll be asked to confirm this email\n"
         "address to begin, and it won't work for anyone else.\n\n"
-        "If you weren't expecting this, you can ignore this email."
+        + (f"Questions about this assessment? Email {support_email}.\n\n" if support_email else "")
+        + "If you weren't expecting this, you can ignore this email."
     )
     html = _layout(
         heading="You've been invited to a coding assessment",
@@ -128,7 +137,9 @@ def invite(*, url: str, title: str, org_name: str | None = None) -> Email:
             f'<p style="margin:24px 0 0">{_button("Start the assessment", url)}</p>',
             _fallback(url),
         ],
-        footer="If you weren't expecting this, you can ignore this email.",
+        # Plain text: _layout escapes the whole footer itself.
+        footer=(f"Questions about this assessment? Email {support_email}. " if support_email else "")
+        + "If you weren't expecting this, you can ignore this email.",
     )
     return Email(subject=subject, text=text, html=html)
 

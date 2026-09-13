@@ -157,6 +157,37 @@ describe('AssessmentDetailPage — attempts (A3/A11)', () => {
     expect(screen.getByText('92%')).toBeInTheDocument()
   })
 
+  it('carries the sitting’s feedback on the row, truncated with the rest on hover', async () => {
+    vi.mocked(api.listAssessmentAttempts).mockResolvedValue([
+      {
+        ...attempt,
+        feedback: {
+          rating: 2,
+          difficulty_fair: 'too_hard',
+          comment: 'Question 2 needed a data structure the brief never hinted at.',
+          created_at: '2026-09-12T10:00:00Z',
+        },
+      },
+    ])
+    renderPage()
+
+    await screen.findByText('Jane Doe')
+    expect(screen.getByText('2/5')).toBeInTheDocument()
+    expect(
+      screen.getByTitle('Question 2 needed a data structure the brief never hinted at.'),
+    ).toHaveTextContent(/too hard/i)
+  })
+
+  it('shows a dash for a sitting with no feedback — including an erased one', async () => {
+    vi.mocked(api.listAssessmentAttempts).mockResolvedValue([
+      { ...attempt, erased: true, feedback: null },
+    ])
+    renderPage()
+
+    await screen.findByText('Erased candidate')
+    expect(screen.getByText('—')).toBeInTheDocument()
+  })
+
   it('clicking a graded question chip opens its full submission', async () => {
     const user = userEvent.setup()
     vi.mocked(api.listAssessmentAttempts).mockResolvedValue([attempt])
