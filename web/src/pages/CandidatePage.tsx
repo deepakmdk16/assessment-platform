@@ -8,6 +8,7 @@ import { IntegrityNotice, IntegrityOverlay } from '../components/IntegrityGate'
 import { fullscreenSupported, useIntegrity } from '../integrity'
 import { useLeaveGuard } from '../leaveGuard'
 import { ThemeCycleButton } from '../components/ThemeToggle'
+import { SourceLink } from '../components/SourceLink'
 import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
 import type {
@@ -647,6 +648,10 @@ export function CandidatePage() {
                   <a href={`mailto:${supportEmail}`}>Contact</a>
                 </>
               )}
+              {/* AGPL §13: candidates are users of the running software too,
+                  and this row is the only chrome they are shown. */}
+              <span aria-hidden="true">·</span>
+              <SourceLink />
             </p>
           </div>
         </form>

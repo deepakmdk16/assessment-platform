@@ -116,6 +116,18 @@
   gap: 0.6rem;
 }
 
+/* AGPL §13 source link. Quietest thing in the rail — it is an obligation to
+   offer, not something to draw the eye. */
+.side-source {
+  margin: 0;
+  font-size: 0.68rem;
+  color: var(--rail-muted);
+}
+
+.side-source a {
+  color: inherit;
+}
+
 /* Segmented Light / Dark / Auto control, styled for the dark rail. */
 .theme-seg {
   display: flex;

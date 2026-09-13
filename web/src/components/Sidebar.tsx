@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { ThemeToggle } from './ThemeToggle'
+import { SourceLink } from './SourceLink'
 import { PRODUCT_NAME } from '../branding'
 import { DEFAULT_SECTION } from '../settings-sections'
 
@@ -123,6 +124,11 @@ export function Sidebar() {
             </span>
           </div>
         )}
+        {/* AGPL §13. Carries the sha here because this is also where someone
+            reporting a bug looks for the version they are on. */}
+        <p className="side-source">
+          <SourceLink showCommit />
+        </p>
       </div>
     </aside>
   )

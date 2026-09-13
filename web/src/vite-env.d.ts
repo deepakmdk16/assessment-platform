@@ -2,6 +2,10 @@
 
 interface ImportMetaEnv {
   readonly VITE_API_BASE_URL?: string
+  // AGPL §13, see components/SourceLink.tsx. The commit is empty in a local
+  // build, which is a value Vite passes through rather than a missing key.
+  readonly VITE_SOURCE_URL?: string
+  readonly VITE_SOURCE_COMMIT?: string
 }
 
 interface ImportMeta {

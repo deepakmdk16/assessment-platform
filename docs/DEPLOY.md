@@ -138,10 +138,21 @@ existing `.env` upgrades unchanged), so set those there.
 ## 2. Bring it up
 
 ```bash
-docker compose up -d --build
+SOURCE_COMMIT=$(git rev-parse HEAD) docker compose up -d --build
 docker compose ps          # db, platform and web report (healthy)
 docker compose logs -f platform
 ```
+
+`SOURCE_COMMIT` is the AGPL §13 obligation: the app shows its users a "Source"
+link, and the licence is about the version they are actually talking to, so the
+sha is baked into the bundle at build time. It belongs on the command line
+rather than in `.env` — a value that must change on every deploy goes stale
+silently in a file. Omit it and the link falls back to the repository root,
+which is a weaker offer, not a broken build.
+
+**Deploying a fork?** Set `SOURCE_URL` in `.env` to your own repository as well.
+It defaults to upstream, and upstream does not have your sha — so the link would
+name a commit that does not exist there, which is worse than no link at all.
 
 The first build takes a while: the agent compiles nsjail from source and
 installs eight language toolchains. The agent shows `running` rather than
@@ -157,6 +168,8 @@ Verify, against whatever `WEB_PORT` publishes (`:80` by default):
 ```bash
 curl -fsS http://127.0.0.1/api/health   # {"status":"ok"} — proxied to the API
 curl -fsS http://127.0.0.1/ | head -1   # the SPA
+curl -sI http://127.0.0.1/ | grep -i content-security-policy   # and on /assets/…
+curl -fsS http://127.0.0.1/.well-known/security.txt            # 404 until SECURITY_CONTACT is set
 ```
 
 ## 3. Put TLS in front
@@ -169,7 +182,7 @@ WEB_PORT=127.0.0.1:8080
 PUBLIC_BASE_URL=https://assess.example.com
 ```
 
-Two settings depend on this and are wrong by default without it:
+Three settings depend on this and are wrong by default without it:
 
 - **`COOKIE_SECURE`** defaults to `true` in `docker-compose.yml`. It is normally
   derived from `PLATFORM_BASE_URL`, which is internal `http` here, so the
@@ -189,6 +202,21 @@ Two settings depend on this and are wrong by default without it:
 
   With a CDN in front of the terminator, list the chain — `real_ip_recursive`
   is on, so nginx walks left past every address you have declared trusted.
+- **`HSTS_HEADER`** is empty by default, so nginx sends no
+  `Strict-Transport-Security` at all. That is the only safe default: the header
+  does nothing over plain http, and a browser that has seen it refuses http for
+  the whole `max-age` — including on a hostname you later want to serve without
+  TLS. Once the terminator holds a certificate for the domain, set the value:
+
+  ```
+  HSTS_HEADER=max-age=63072000; includeSubDomains
+  ```
+
+  Start with a short `max-age` (`300`) and raise it once redirects are proven;
+  add `preload` only if you mean to submit the domain and never go back. The
+  other security headers — CSP, `X-Content-Type-Options`, `Referrer-Policy` —
+  need no configuration and are on in every deployment
+  (`web/nginx-security-headers.conf`).
 
 ## 4. Monitoring
 

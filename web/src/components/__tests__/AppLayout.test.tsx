@@ -57,6 +57,12 @@ describe('AppLayout', () => {
     expect(screen.getByText('page content')).toBeInTheDocument()
   })
 
+  it('offers the running version’s source from the shell (AGPL §13)', () => {
+    renderLayout()
+    const href = screen.getByRole('link', { name: /^source/i }).getAttribute('href')
+    expect(href).toContain('github.com')
+  })
+
   it('renders no banner once the address is confirmed', () => {
     authState.user = owner({ email_verified: true })
     renderLayout()

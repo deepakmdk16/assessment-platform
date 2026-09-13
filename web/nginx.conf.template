@@ -20,6 +20,14 @@ server {
     gzip_types text/css application/javascript application/json image/svg+xml;
     gzip_min_length 1024;
 
+    # Strict-Transport-Security's value, empty unless the deployment sets
+    # HSTS_HEADER (docs/DEPLOY.md -> Put TLS in front). envsubst renders this at
+    # start-up like TRUSTED_PROXY_CIDR above, and the empty default is why the
+    # image has `ENV HSTS_HEADER=` — an unset variable is left as the literal
+    # ${HSTS_HEADER}, which nginx then rejects as an unknown variable at boot.
+    set $hsts_header "${HSTS_HEADER}";
+    include /etc/nginx/snippets/security-headers.conf;
+
     # The metrics scrape is an internal endpoint and must not be internet-facing:
     # it reports per-status submission counts and grade latencies, which are a
     # tenant's hiring volume. The `location /api/` block below proxies every path
@@ -106,12 +114,29 @@ server {
         # intermediary that reads only the first would miss `immutable` and
         # revalidate the 3.7 MB monaco chunk this block exists to pin.
         add_header Cache-Control "public, max-age=31536000, immutable" always;
+        # Re-included because the add_header above cancels inheritance.
+        include /etc/nginx/snippets/security-headers.conf;
     }
 
     # index.html itself must never be cached: it names the hashed bundles, so a
     # stale copy pins the browser to a deployment that no longer exists.
     location = /index.html {
         add_header Cache-Control "no-store";
+        # Every SPA route ends here, so this is the one block whose headers the
+        # app is actually served with.
+        include /etc/nginx/snippets/security-headers.conf;
+    }
+
+    # RFC 9116. The file is written at container start by
+    # docker-entrypoint.d/30-security-txt.sh and is absent when no contact
+    # address is configured — hence the explicit =404: `location /` below would
+    # otherwise answer with index.html and a 200, i.e. an HTML page claiming to
+    # be a security policy.
+    location = /.well-known/security.txt {
+        try_files $uri =404;
+        # RFC 9116 §3 requires the charset on the media type, and nginx's
+        # mime.types maps .txt to a bare text/plain.
+        charset utf-8;
     }
 
     # Client-side routing: every unknown path is a react-router route.
