@@ -101,6 +101,63 @@ describe('AnalyticsPanel (AR1)', () => {
     expect(screen.getByText('2 / 3 submitted')).toBeInTheDocument() // Sam partial
   })
 
+  it('rolls up candidate feedback, and lists only the answers that carry words', async () => {
+    vi.mocked(api.analyticsAssessment).mockResolvedValue({
+      ...xc,
+      feedback: {
+        responses: 3,
+        finished: 4,
+        avg_rating: 4.3,
+        too_easy: 0,
+        fair: 2,
+        too_hard: 1,
+        comments: [
+          {
+            candidate_name: 'Priya N.',
+            rating: 5,
+            difficulty_fair: 'fair',
+            comment: 'Clear prompts.',
+            created_at: '2026-09-12T10:00:00Z',
+          },
+        ],
+      },
+    })
+    render(<AnalyticsPanel days={30} onDaysChange={() => {}} />)
+
+    expect(await screen.findByText('4.3/5')).toBeInTheDocument()
+    expect(screen.getByText('3 responses')).toBeInTheDocument()
+    expect(screen.getByText('3 of 4 sittings answered')).toBeInTheDocument()
+    expect(screen.getByText('75%')).toBeInTheDocument() // response rate, 3 of 4
+    expect(screen.getByText('Clear prompts.')).toBeInTheDocument()
+    expect(screen.getByText(/about right · 2/i)).toBeInTheDocument()
+    // The panel lists what the server sends: the server is what filters out the
+    // wordless answers (tests/test_feedback.py), so three responses and one
+    // comment is one card, not three.
+    expect(screen.getAllByRole('img', { name: /difficulty:/i })).toHaveLength(1)
+    expect(screen.getByText('Clear prompts.')).toBeInTheDocument()
+  })
+
+  it('says so plainly when nobody has answered yet', async () => {
+    // The shape the API actually sends: a zeroed rollup, never a missing key.
+    vi.mocked(api.analyticsAssessment).mockResolvedValue({
+      ...xc,
+      feedback: {
+        responses: 0,
+        finished: 3,
+        avg_rating: null,
+        too_easy: 0,
+        fair: 0,
+        too_hard: 0,
+        comments: [],
+      },
+    })
+    render(<AnalyticsPanel days={30} onDaysChange={() => {}} />)
+    expect(await screen.findByText(/no feedback yet/i)).toBeInTheDocument()
+    expect(screen.getByText(/optional, asked once a sitting is over/i)).toBeInTheDocument()
+    // Not an empty split bar and a row of zeroes.
+    expect(screen.queryByText(/too easy · 0/i)).not.toBeInTheDocument()
+  })
+
   it('changing the range calls onDaysChange', async () => {
     const onDaysChange = vi.fn()
     const user = userEvent.setup()

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
-import { badgeClass } from '../badges'
+import { badgeClass, difficultyVerdictLabel, ratingClass } from '../badges'
 import { ExpiryField } from '../components/ExpiryField'
 import { IntegrityCell } from '../components/IntegrityPanel'
 import { InviteTable } from '../components/InviteTable'
@@ -210,6 +210,7 @@ export function AssessmentDetailPage() {
                       <th>Progress</th>
                       <th>Passed</th>
                       <th>Avg score</th>
+                      <th>Feedback</th>
                       <th>Integrity</th>
                     </tr>
                   </thead>
@@ -265,6 +266,25 @@ export function AssessmentDetailPage() {
                         </td>
                         <td className="score">
                           {att.avg_score_pct != null ? `${att.avg_score_pct.toFixed(0)}%` : '—'}
+                        </td>
+                        {/* P2b: per sitting, not per submission — one cell for the
+                            row, truncated to a line with the rest on the title.
+                            "—" covers both "said nothing" and "erased", which
+                            after an erasure is all there is to say. */}
+                        <td>
+                          {att.feedback ? (
+                            <>
+                              <span className={ratingClass(att.feedback.rating)}>
+                                {att.feedback.rating}/5
+                              </span>
+                              <div className="fb-cell" title={att.feedback.comment || undefined}>
+                                {difficultyVerdictLabel(att.feedback.difficulty_fair)}
+                                {att.feedback.comment ? ` · “${att.feedback.comment}”` : ''}
+                              </div>
+                            </>
+                          ) : (
+                            <span className="cellsub">—</span>
+                          )}
                         </td>
                         {/* I1: signals belong to the sitting, so this shows even
                             for a candidate who started and never submitted —

@@ -1,5 +1,5 @@
 ---
-version: 2026-09-08
+version: 2026-09-14
 status: DRAFT TEMPLATE — NOT LEGAL ADVICE, NOT YET REVIEWED
 ---
 
@@ -35,8 +35,9 @@ retention window the Controller configures.
 
 **Candidate personal data:** name; email address; submitted code and autosaved
 drafts; assessment results including verdict, score, written summary and
-per-test-case output; timing of the sitting; and, for a monitored sitting,
-integrity signals (tab switches, fullscreen exits, developer-tools use, size of
+per-test-case output; timing of the sitting; optional feedback the candidate
+chooses to leave about the assessment (rating, difficulty, free-text comment);
+and, for a monitored sitting, integrity signals (tab switches, fullscreen exits, developer-tools use, size of
 externally-pasted text). **No special-category data is requested.** No camera,
 microphone, screen or keystroke content is captured. The Controller must not put
 special-category data into question text or invitation fields.

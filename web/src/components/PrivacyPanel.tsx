@@ -259,6 +259,7 @@ function ErasureReceipt({ result }: { result: CandidateErasure }) {
     [result.results, result.results === 1 ? 'result' : 'results'],
     [result.attempts, result.attempts === 1 ? 'sitting' : 'sittings'],
     [result.drafts_deleted, 'drafts deleted'],
+    [result.feedback_deleted, 'feedback deleted'],
     [result.integrity_events, 'integrity signals'],
     [result.invites_amended, result.invites_amended === 1 ? 'invitation amended' : 'invitations amended'],
   ]

@@ -251,6 +251,9 @@ def test_invite_probe_reveals_no_question(anon_client: TestClient) -> None:
         "question_count",
         "duration_minutes",
         "languages",
+        # P2b: the UNTAGGED support address — a contact, never whose assessment
+        # this is.
+        "support_email",
     }
 
 

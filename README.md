@@ -194,11 +194,13 @@ forwarded link, not deliberate impersonation.
 | GET    | `/questions/{id}/invites`         | bearer      | List invites for a question.                                 |
 | POST   | `/questions/{id}/invites/{token}/revoke` | bearer | Deactivate an invite; its link then 410s.                 |
 | GET    | `/questions/{id}/submissions`     | bearer      | Dashboard: submissions for that question (the organisation's own). |
-| GET    | `/invite/{token}`                 | public      | **Pre-start probe** — liveness plus the shape of the sitting (monitored, title, organisation, question count, duration, languages). Carries no question data. 404 invalid / 410 revoked-or-expired. |
+| GET    | `/public-config`                  | public      | The untagged support address, for the candidate screens reached when the invite probe fails (invalid/expired). Reads no database. |
+| GET    | `/invite/{token}`                 | public      | **Pre-start probe** — liveness plus the shape of the sitting (monitored, title, organisation, question count, duration, languages) and the untagged support address. Carries no question data. 404 invalid / 410 revoked-or-expired. |
 | POST   | `/invite/{token}/start`           | public      | Candidate identifies as an invited recipient → the question + languages. 403 if not invited, 409 if they already submitted. **This is the only route that hands out the question.** |
 | POST   | `/invite/{token}/run`             | public      | Run their code against their own stdin → stdout/stderr/timing. Not a submission. |
 | POST   | `/invite/{token}/run-tests`       | public      | Run the question's suite → **pass/fail per case only** (no inputs/expected). Not a submission. |
 | POST   | `/invite/{token}/submit`          | public      | Candidate submits code → creates a submission + triggers the agent. |
+| POST   | `/invite/{token}/feedback`        | public      | Optional feedback on a finished sitting (rating 1-5, difficulty, comment). **404** until they have submitted something, **409** on a second send. |
 | POST   | `/submissions`                    | none*       | Direct submission + trigger (internal path).                 |
 | GET    | `/submissions` / `/submissions/{id}` | none*    | List / get a submission + its result.                        |
 | POST   | `/submissions/{id}/retry`         | none*       | Re-trigger a submission stuck in `error` (409 otherwise).    |

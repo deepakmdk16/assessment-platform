@@ -25,6 +25,8 @@ vi.mock('../../api', () => {
       runCandidateTests: vi.fn(),
       getCandidateDrafts: vi.fn(() => Promise.resolve({ drafts: [] })),
       saveCandidateDraft: vi.fn(() => Promise.resolve()),
+      sendCandidateFeedback: vi.fn(() => Promise.resolve()),
+      publicConfig: vi.fn(() => Promise.resolve({ support_email: null })),
     },
     ApiError,
   }
@@ -1125,5 +1127,205 @@ describe('P2a — start screen, confirmation and leaving', () => {
     const draftKeys = keys.filter((k) => k.startsWith('assessment-draft:tok123:'))
     expect(draftKeys).toHaveLength(1)
     expect(draftKeys[0]).not.toMatch(/jane|example/)
+  })
+
+  describe('P2b — support contact and feedback', () => {
+    it('offers the untagged address at the gate and the sitting’s own afterwards', async () => {
+      const user = userEvent.setup()
+      vi.mocked(api.getInvite).mockResolvedValue({
+        status: 'active',
+        support_email: 'support@assess.dev',
+      })
+      vi.mocked(api.startInvite).mockResolvedValue({
+        ...startResponse,
+        support_email: 'support+acme-7@assess.dev',
+        feedback_enabled: true,
+      })
+      vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+
+      renderCandidatePage()
+      // The gate has the platform address only — it is read by anyone holding
+      // the link, so it must not say whose assessment this is.
+      expect(await screen.findByRole('link', { name: /contact/i })).toHaveAttribute(
+        'href',
+        'mailto:support@assess.dev',
+      )
+
+      await passGate(user)
+      await user.type(await screen.findByLabelText(/code editor/i), 'print(1)')
+      await user.click(screen.getByRole('button', { name: /^submit$/i }))
+      await confirmSubmit(user)
+
+      expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
+      expect(
+        screen.getByRole('link', { name: 'support+acme-7@assess.dev' }),
+      ).toHaveAttribute('href', 'mailto:support+acme-7@assess.dev')
+    })
+
+    it('shows no contact line at all when the deploy configures no address', async () => {
+      const user = userEvent.setup()
+      vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+      vi.mocked(api.startInvite).mockResolvedValue({ ...startResponse, feedback_enabled: true })
+      vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+
+      renderCandidatePage()
+      await passGate(user)
+      await user.type(await screen.findByLabelText(/code editor/i), 'print(1)')
+      await user.click(screen.getByRole('button', { name: /^submit$/i }))
+      await confirmSubmit(user)
+
+      expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
+      expect(screen.queryByText(/questions about this assessment/i)).not.toBeInTheDocument()
+      // The form does not depend on a support address being configured.
+      expect(screen.getByRole('button', { name: /send feedback/i })).toBeInTheDocument()
+    })
+
+    it('asks for feedback only once the sitting is over', async () => {
+      const user = userEvent.setup()
+      vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+      vi.mocked(api.startInvite).mockResolvedValue({ ...startResponse, feedback_enabled: true })
+      vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+
+      renderCandidatePage()
+      // Not at the gate.
+      expect(await screen.findByLabelText(/^name$/i)).toBeInTheDocument()
+      expect(screen.queryByText(/how did that go/i)).not.toBeInTheDocument()
+
+      await passGate(user)
+      // Not in the editor either.
+      await screen.findByLabelText(/code editor/i)
+      expect(screen.queryByText(/how did that go/i)).not.toBeInTheDocument()
+
+      await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
+      await user.click(screen.getByRole('button', { name: /^submit$/i }))
+      await confirmSubmit(user)
+
+      expect(await screen.findByText(/how did that go/i)).toBeInTheDocument()
+      await user.click(screen.getByRole('radio', { name: '5' }))
+      await user.click(screen.getByRole('button', { name: /send feedback/i }))
+      await waitFor(() =>
+        expect(api.sendCandidateFeedback).toHaveBeenCalledWith('tok123', {
+          candidate_email: 'jane@example.com',
+          rating: 5,
+          difficulty_fair: 'fair',
+          comment: '',
+        }),
+      )
+    })
+
+    it('asks after a finished multi-question sitting, but not while questions stay open', async () => {
+      const user = userEvent.setup()
+      vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+      vi.mocked(api.startInvite).mockResolvedValue({
+        ...multiStartResponse,
+        feedback_enabled: true,
+      })
+      vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+
+      renderCandidatePage()
+      await passGate(user)
+
+      await screen.findByRole('tab', { name: /Two Sum/i })
+      await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
+      await user.click(screen.getByRole('button', { name: /submit this question/i }))
+      await confirmSubmit(user)
+      await waitFor(() => expect(api.submitCandidate).toHaveBeenCalledTimes(1))
+
+      await user.click(screen.getByRole('tab', { name: /Merge Intervals/i }))
+      await user.type(screen.getByLabelText(/code editor/i), 'print(2)')
+      await user.click(screen.getByRole('button', { name: /submit this question/i }))
+      await confirmSubmit(user)
+
+      expect(await screen.findByRole('heading', { name: /assessment complete/i })).toBeInTheDocument()
+      expect(screen.getByText(/how did that go/i)).toBeInTheDocument()
+    })
+
+    it('never asks a quick-screen sitting, where no interviewer surface could show it', async () => {
+      const user = userEvent.setup()
+      vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+      // A question-only invite: /start says feedback_enabled is false.
+      vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+      vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+
+      renderCandidatePage()
+      await passGate(user)
+      await user.type(await screen.findByLabelText(/code editor/i), 'print(1)')
+      await user.click(screen.getByRole('button', { name: /^submit$/i }))
+      await confirmSubmit(user)
+
+      expect(await screen.findByRole('heading', { name: /submitted/i })).toBeInTheDocument()
+      expect(screen.queryByText(/how did that go/i)).not.toBeInTheDocument()
+    })
+
+    it('does not ask when time ran out with nothing submitted', async () => {
+      // "Assessment complete" also covers an empty sitting; the server has no
+      // submission to attach feedback to and would refuse it.
+      const user = userEvent.setup()
+      vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+      vi.mocked(api.startInvite).mockResolvedValue({
+        ...multiStartResponse,
+        deadline: new Date(Date.now() + 1000).toISOString(),
+        feedback_enabled: true,
+      })
+      renderCandidatePage()
+      await passGate(user)
+      await screen.findByRole('tab', { name: /Two Sum/i })
+
+      expect(
+        await screen.findByRole('heading', { name: /assessment complete/i }, { timeout: 4000 }),
+      ).toBeInTheDocument()
+      expect(screen.getByText(/0 of 2 questions were submitted/i)).toBeInTheDocument()
+      expect(screen.queryByText(/how did that go/i)).not.toBeInTheDocument()
+      expect(api.submitCandidate).not.toHaveBeenCalled()
+    })
+
+    it('does not ask on a dead end that is not a finished sitting', async () => {
+      vi.mocked(api.getInvite).mockRejectedValue(new ApiError(410, 'gone'))
+      renderCandidatePage()
+      expect(await screen.findByRole('heading', { name: /no longer active/i })).toBeInTheDocument()
+      expect(screen.getByText(/contact whoever sent it to you/i)).toBeInTheDocument()
+      expect(screen.queryByText(/how did that go/i)).not.toBeInTheDocument()
+    })
+
+    it('still names an address on a dead link, where the probe returns no body', async () => {
+      // The candidate with nowhere to go is the one the address exists for.
+      vi.mocked(api.getInvite).mockRejectedValue(new ApiError(404, 'unknown'))
+      vi.mocked(api.publicConfig).mockResolvedValue({ support_email: 'support@assess.dev' })
+      renderCandidatePage()
+
+      expect(await screen.findByRole('heading', { name: /invalid link/i })).toBeInTheDocument()
+      expect(await screen.findByRole('link', { name: 'support@assess.dev' })).toHaveAttribute(
+        'href',
+        'mailto:support@assess.dev',
+      )
+    })
+
+    it('does not ask on the "you can come back" screen, where the sitting is not over', async () => {
+      const user = userEvent.setup()
+      vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+      vi.mocked(api.startInvite).mockResolvedValue({
+        ...multiStartResponse,
+        feedback_enabled: true,
+      })
+      vi.mocked(api.submitCandidate).mockResolvedValue({ submission_id: 's', status: 'received' })
+
+      renderCandidatePage()
+      await passGate(user)
+      await screen.findByRole('tab', { name: /Two Sum/i })
+      await user.type(screen.getByLabelText(/code editor/i), 'print(1)')
+
+      // Leave with the second question still blank (P2a): the link stays open
+      // for it, so this is not the end of the sitting.
+      integrityState.mustReturnToFullscreen = true
+      await user.click(screen.getByRole('tab', { name: /Merge Intervals/i }))
+      await user.click(await screen.findByRole('button', { name: /leave assessment/i }))
+      await user.click(screen.getByRole('button', { name: /submit and leave/i }))
+      const dialog = await screen.findByRole('dialog', { name: /submit and leave\?/i })
+      await user.click(within(dialog).getByRole('button', { name: /submit and leave/i }))
+      integrityState.mustReturnToFullscreen = false
+
+      expect(await screen.findByRole('heading', { name: /answers submitted/i })).toBeInTheDocument()
+      expect(screen.queryByText(/how did that go/i)).not.toBeInTheDocument()
+    })
   })
 })

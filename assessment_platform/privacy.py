@@ -64,6 +64,7 @@ from .models import (
     AssessmentResult,
     CandidateAttempt,
     CandidateDraft,
+    CandidateFeedback,
     CandidateSlotVariant,
     IntegrityEvent,
     Invite,
@@ -141,6 +142,9 @@ class ErasureCounts:
     integrity_events: int = 0
     drafts_deleted: int = 0
     invites_amended: int = 0
+    # Feedback rows deleted (P2b). Deleted, not tombstoned: like a draft it is
+    # the candidate's own words, and no anonymous record depends on it.
+    feedback_deleted: int = 0
 
     @property
     def touched_anything(self) -> bool:
@@ -153,6 +157,7 @@ class ErasureCounts:
                 self.integrity_events,
                 self.drafts_deleted,
                 self.invites_amended,
+                self.feedback_deleted,
             )
         )
 
@@ -230,8 +235,21 @@ def _erase(
             .values(candidate=ERASED_NAME, candidate_email=tombstone, code="", updated_at=now),
         )
 
-    attempts = slot_variants = integrity_events = drafts = 0
+    attempts = slot_variants = integrity_events = drafts = feedback = 0
     if ids:
+        # Feedback FIRST: it is reached through the attempt rows, and the update
+        # below replaces the very address this subquery matches on.
+        feedback = _rowcount(
+            session,
+            delete(CandidateFeedback).where(
+                col(CandidateFeedback.attempt_id).in_(
+                    select(CandidateAttempt.id).where(
+                        col(CandidateAttempt.invite_id).in_(ids),
+                        col(CandidateAttempt.candidate_email) == email,
+                    )
+                )
+            ),
+        )
         attempts = _rowcount(
             session,
             update(CandidateAttempt)
@@ -288,6 +306,7 @@ def _erase(
         integrity_events=integrity_events,
         drafts_deleted=drafts,
         invites_amended=amended,
+        feedback_deleted=feedback,
     )
 
 

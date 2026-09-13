@@ -19,6 +19,7 @@ import type {
   RunTestsResponse,
 } from '../types'
 import { AssessmentFlow } from './AssessmentFlow'
+import { CandidateFeedbackForm } from '../components/CandidateFeedbackForm'
 import { CandidateNotice } from './CandidateNotice'
 import { ConsoleResult } from './ConsoleResult'
 import { CRIT_MS, formatRemaining, WARN_MS } from './candidateTimer'
@@ -195,6 +196,13 @@ export function CandidatePage() {
   // before the candidate identifies themselves.
   const [gateInfo, setGateInfo] = useState<InviteStatusResponse | null>(null)
   const gateProctored = gateInfo?.proctored !== false
+  // Who to write to (P2b). The sitting's answer is tagged for the organisation
+  // and the probe's is not, so prefer the sitting's once it exists. `fallback`
+  // covers the screens reached from a FAILED probe — an invalid or expired link
+  // answers with no body, and that is exactly the candidate with nowhere to go.
+  // Null when the deploy configures no address, and the line disappears.
+  const [fallbackSupport, setFallbackSupport] = useState<string | null>(null)
+  const supportEmail = invite?.support_email ?? gateInfo?.support_email ?? fallbackSupport
   // Agreement to the privacy notice and terms (X04). The server refuses a
   // sitting that begins without it; this only stops the candidate discovering
   // that through an error message.
@@ -273,6 +281,11 @@ export function CandidatePage() {
         if (err instanceof ApiError && err.status === 404) setStage('invalid')
         else if (err instanceof ApiError && err.status === 410) setStage('expired')
         else setStage('error')
+        // The link is a dead end, so ask separately where they can write.
+        void api
+          .publicConfig()
+          .then((cfg) => setFallbackSupport(cfg.support_email ?? null))
+          .catch(() => {})
       })
   }, [token])
 
@@ -497,22 +510,34 @@ export function CandidatePage() {
   if (stage === 'loading') return <p className="page-loading">Loading…</p>
   if (stage === 'invalid')
     return (
-      <CandidateNotice title="Invalid link" body="This invite link doesn’t exist or has been removed." />
+      <CandidateNotice
+        title="Invalid link"
+        body="This invite link doesn’t exist or has been removed. Please contact whoever sent it to you."
+        supportEmail={supportEmail}
+      />
     )
   if (stage === 'expired')
     return (
       <CandidateNotice
         title="No longer active"
-        body="This invite link is no longer active — it may have been revoked or expired."
+        body="This invite link is no longer active — it may have been revoked or expired. Contact whoever sent it to you if you still need to take the assessment."
+        supportEmail={supportEmail}
       />
     )
   if (stage === 'error')
-    return <CandidateNotice title="Something went wrong" body="Please try again later." />
+    return (
+      <CandidateNotice
+        title="Something went wrong"
+        body="Please try again later."
+        supportEmail={supportEmail}
+      />
+    )
   if (stage === 'already_submitted')
     return (
       <CandidateNotice
         title="Assessment already recorded"
-        body="Your assessment has already been recorded for this email address. You can’t take it a second time — please contact your interviewer if you think this is a mistake."
+        body="Your assessment has already been recorded for this email address. You can’t take it a second time — contact the interviewer who invited you if you think that’s a mistake."
+        supportEmail={supportEmail}
       />
     )
   if (stage === 'submitted')
@@ -520,13 +545,23 @@ export function CandidatePage() {
       <CandidateNotice
         title="Submitted ✓"
         body={`Thanks, ${candidateName}! Your solution has been submitted and is being graded.`}
-      />
+        supportEmail={supportEmail}
+      >
+        {/* The sitting is over and something was recorded, so this is the one
+            moment the candidate can be asked what they made of it (P2b) — but
+            only when an interviewer surface could show the answer, which is what
+            `feedback_enabled` says. A quick-screen invite is not asked. */}
+        {token && invite?.feedback_enabled && (
+          <CandidateFeedbackForm token={token} candidateEmail={candidateEmail} />
+        )}
+      </CandidateNotice>
     )
   if (stage === 'timed_out')
     return (
       <CandidateNotice
         title="Time’s up"
-        body="The time limit passed before any code was entered, so nothing was submitted. Contact your interviewer if you think this is a mistake."
+        body="The time limit passed before any code was entered, so nothing was submitted. Contact the interviewer who invited you if you think that’s a mistake."
+        supportEmail={supportEmail}
       />
     )
 
@@ -601,6 +636,14 @@ export function CandidatePage() {
               <a href="/terms" target="_blank" rel="noreferrer">
                 Terms
               </a>
+              {/* P2b: pre-identification this is the untagged platform address,
+                  so it is a link beside the others rather than a sentence. */}
+              {supportEmail && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <a href={`mailto:${supportEmail}`}>Contact</a>
+                </>
+              )}
             </p>
           </div>
         </form>
@@ -625,6 +668,8 @@ export function CandidatePage() {
         logoUrl={invite.logo_url}
         integrity={integrity}
         initialDrafts={serverDrafts}
+        supportEmail={supportEmail}
+        feedbackEnabled={invite.feedback_enabled}
         onQuestionChange={setActiveQuestionId}
         onExpired={() => setStage('expired')}
         onComplete={() => setSittingComplete(true)}

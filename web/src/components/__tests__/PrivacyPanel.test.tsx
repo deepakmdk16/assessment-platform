@@ -37,6 +37,7 @@ function erasure(over: Partial<CandidateErasure> = {}): CandidateErasure {
     slot_variants: 0,
     integrity_events: 7,
     drafts_deleted: 2,
+    feedback_deleted: 1,
     invites_amended: 1,
     ...over,
   }
@@ -138,6 +139,9 @@ describe('erasure', () => {
     expect(receipt).toHaveTextContent(/erased jane@example.com/i)
     expect(receipt).toHaveTextContent(/3\s*submissions/i)
     expect(receipt).toHaveTextContent(/7\s*integrity signals/i)
+    // P2b: the receipt answers a data-subject request, so it must name every
+    // kind of thing the erasure destroyed — feedback included.
+    expect(receipt).toHaveTextContent(/1\s*feedback deleted/i)
   })
 
   it('says plainly when an address held nothing', async () => {
@@ -151,6 +155,7 @@ describe('erasure', () => {
         attempts: 0,
         integrity_events: 0,
         drafts_deleted: 0,
+        feedback_deleted: 0,
         invites_amended: 0,
       }),
     )

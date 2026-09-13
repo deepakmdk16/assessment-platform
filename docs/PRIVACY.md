@@ -1,5 +1,5 @@
 ---
-version: 2026-09-13
+version: 2026-09-14
 status: DRAFT TEMPLATE — NOT LEGAL ADVICE, NOT YET REVIEWED
 ---
 
@@ -44,6 +44,7 @@ because only they can decide whether to keep it.
 | Submitted code, and autosaved drafts | Your work in the editor | To assess it; drafts exist so a cleared cache or a device switch does not lose your work |
 | Assessment results — verdict, score, per-test-case output | Produced by grading your code | The purpose of the assessment |
 | Timing — when you started, when you submitted, whether it was late | Recorded by the server | To operate a timed assessment fairly |
+| Feedback you choose to leave — a 1-5 rating, whether the assessment felt too easy or too hard, and anything you write in the comment box | The optional form shown after you finish | So the customer can tell whether their assessment is a fair one. It is **optional**, it is **not anonymous** — it is shown to the interviewer next to your name — and it never affects your result |
 | **Proctoring signals**, when the sitting is monitored: tab switches, leaving fullscreen, developer-tools use, and the size of text pasted from outside the page | Your browser, while the assessment is open | To let the interviewer see the circumstances of the sitting |
 
 **Proctoring does not use your camera, microphone, or screen.** No video, audio,
@@ -106,9 +107,9 @@ their own purposes. See [the DPA](DPA.md) for the current list and locations.
 
 Each customer sets their own retention window (their **Privacy** settings). When
 one is set, sittings older than it are anonymised automatically: name, email,
-submitted code, drafts, and the grading detail are destroyed, while the verdict,
-score and timings survive as an anonymous record so the customer's aggregate
-hiring statistics do not silently change.
+submitted code, drafts, any feedback you left, and the grading detail are
+destroyed, while the verdict, score and timings survive as an anonymous record so
+the customer's aggregate hiring statistics do not silently change.
 
 **Where a customer has set no window, data is kept until they delete it or you
 ask them to.** [COMPANY] does not impose a window, because doing so would delete

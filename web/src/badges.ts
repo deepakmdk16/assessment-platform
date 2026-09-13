@@ -1,3 +1,5 @@
+import type { DifficultyVerdict } from './types'
+
 /** Map a status/verdict string to a colour variant for the .chip component. */
 export function badgeClass(value: string | null | undefined): string {
   const v = (value ?? '').toLowerCase()
@@ -18,4 +20,26 @@ export function difficultyClass(value: string | null | undefined): string {
   if (v === 'medium') return 'chip chip-medium'
   if (v === 'hard') return 'chip chip-hard'
   return 'chip chip-neutral'
+}
+
+/** A candidate's 1-5 rating of a sitting (P2b) as a .chip variant: the top of the
+ *  scale reads good, the bottom reads warn — never bad, because a low rating is
+ *  the candidate's opinion, not a failure of theirs. */
+export function ratingClass(rating: number): string {
+  if (rating >= 4) return 'chip chip-good'
+  if (rating <= 2) return 'chip chip-warn'
+  return 'chip chip-neutral'
+}
+
+/** The difficulty verdict in the words everyone reads — the candidate's own
+ *  choices on the feedback form and the interviewer's label for what they chose,
+ *  which must stay the same words. */
+export const DIFFICULTY_LABELS: Record<DifficultyVerdict, string> = {
+  too_easy: 'Too easy',
+  fair: 'About right',
+  too_hard: 'Too hard',
+}
+
+export function difficultyVerdictLabel(value: DifficultyVerdict): string {
+  return DIFFICULTY_LABELS[value]
 }

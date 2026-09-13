@@ -41,5 +41,10 @@ test('candidate runs code against their own input, then against the test cases',
   await candidate.getByRole('button', { name: 'Submit' }).click()
   await confirmSubmit(candidate)
   await expect(candidate.getByRole('heading', { name: 'Submitted' })).toBeVisible()
+
+  // P2b: a quick-screen sitting is never asked for feedback — no interviewer
+  // surface could show it, so the form is absent rather than offered and refused.
+  await expect(candidate.getByText('How did that go?')).toHaveCount(0)
+
   await context.close()
 })

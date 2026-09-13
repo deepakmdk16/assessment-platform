@@ -21,6 +21,7 @@ import logging.config
 import re
 import secrets
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
@@ -59,6 +60,7 @@ from . import (
     privacy,
     signing,
     stripe_client,
+    support,
 )
 from .auth import (
     REFRESH_COOKIE,
@@ -85,6 +87,7 @@ from .models import (
     AssessmentResult,
     CandidateAttempt,
     CandidateDraft,
+    CandidateFeedback,
     CandidateSlotVariant,
     IntegrityEvent,
     Interviewer,
@@ -107,15 +110,18 @@ from .schemas import (
     AssessmentAttemptQuestionOut,
     AssessmentCandidateAnalyticsOut,
     AssessmentCreate,
+    AssessmentFeedbackOut,
     AssessmentOut,
     AssessmentQuestionOut,
     AssessmentSlotIn,
     AssessmentUpdate,
+    AttemptFeedbackOut,
     BillingOut,
     CandidateDraftIn,
     CandidateDraftOut,
     CandidateDraftsOut,
     CandidateErasureOut,
+    CandidateFeedbackIn,
     CandidateQuestionPublic,
     CandidateQuestionView,
     CandidateRunIn,
@@ -131,6 +137,8 @@ from .schemas import (
     CheckoutOut,
     DashboardSubmissionOut,
     DeleteAccountIn,
+    DifficultyVerdict,
+    FeedbackCommentOut,
     ForgotPasswordIn,
     IntegrityEventOut,
     IntegrityEventsIn,
@@ -158,6 +166,7 @@ from .schemas import (
     OverviewAnalyticsOut,
     Page,
     PlanOut,
+    PublicConfigOut,
     QuestionAnalyticsOut,
     QuestionCreate,
     QuestionDraftIn,
@@ -589,6 +598,17 @@ def health(session: Session = Depends(get_session)) -> dict:
     return {"status": "ok"}
 
 
+@app.get("/public-config", response_model=PublicConfigOut)
+def public_config() -> PublicConfigOut:
+    """What the candidate app needs before (or without) a live invite (P2b).
+
+    Unauthenticated and unlimited, like /health: it reads no database, returns
+    one constant from the environment, and every value in it is already printed
+    in emails sent to strangers.
+    """
+    return PublicConfigOut(support_email=support.generic_contact_email())
+
+
 def _require_metrics_token(x_assess_token: str | None = Header(default=None)) -> None:
     """Guard the scrape with a shared secret. Fail-closed.
 
@@ -839,6 +859,9 @@ def _purge_org(org_id: int, session: Session) -> None:
     steps: list[tuple[type[SQLModel], Any]] = [
         (AssessmentResult, col(AssessmentResult.submission_id).in_(submission_ids)),
         (Submission, col(Submission.id).in_(submission_ids)),
+        # Before the attempts it points at (no DB cascades, and Postgres enforces
+        # the FK even though SQLite only does when asked).
+        (CandidateFeedback, col(CandidateFeedback.org_id) == org_id),
         (CandidateAttempt, col(CandidateAttempt.invite_id).in_(invite_ids)),
         (CandidateSlotVariant, col(CandidateSlotVariant.invite_id).in_(invite_ids)),
         (IntegrityEvent, col(IntegrityEvent.invite_id).in_(invite_ids)),
@@ -1701,6 +1724,7 @@ def erase_candidate_data(
         integrity_events=counts.integrity_events,
         drafts_deleted=counts.drafts_deleted,
         invites_amended=counts.invites_amended,
+        feedback_deleted=counts.feedback_deleted,
     )
 
 
@@ -3053,7 +3077,12 @@ def _invite_email(title: str, url: str, org: Membership, session: Session) -> em
     """
     organization = session.get(Organization, org.org_id)
     return email_templates.invite(
-        url=url, title=title, org_name=organization.name if organization else None
+        url=url,
+        title=title,
+        org_name=organization.name if organization else None,
+        # The tagged platform address (P2b): this message already names the
+        # organisation, so there is nothing left for the tag to disclose.
+        support_email=support.contact_email(organization),
     )
 
 
@@ -3332,6 +3361,16 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
         candidate_events.setdefault(ev.candidate_email, []).append(ev)
         if ev.kind == "paste_external" and ev.blocked:
             blocked[ev.candidate_email] = blocked.get(ev.candidate_email, 0) + 1
+    # What each candidate said about the sitting afterwards (P2b), by attempt id —
+    # per sitting, not per question, which is why it hangs off the attempt row.
+    feedback_by_attempt: dict[int, CandidateFeedback] = {}
+    attempt_ids = [a.id for a in attempts if a.id is not None]
+    if attempt_ids:
+        for fb in session.exec(
+            select(CandidateFeedback).where(col(CandidateFeedback.attempt_id).in_(attempt_ids))
+        ).all():
+            feedback_by_attempt[fb.attempt_id] = fb
+
     # (candidate_email, question_id) -> the submission's result / id / late flag.
     graded: dict[tuple[str, str], AssessmentResult] = {}
     submission_id_by_pair: dict[tuple[str, str], str] = {}
@@ -3415,9 +3454,62 @@ def _assessment_attempt_rows(a: Assessment, session: Session) -> list[Assessment
                     if attempt.invite_id in monitored_invites
                     else None
                 ),
+                feedback=_attempt_feedback(
+                    feedback_by_attempt.get(attempt.id) if attempt.id is not None else None
+                ),
             )
         )
     return out
+
+
+def _attempt_feedback(fb: CandidateFeedback | None) -> AttemptFeedbackOut | None:
+    """One sitting's feedback for an interviewer surface. None covers both "they
+    said nothing" and "an erasure deleted what they said" — after an erasure there
+    is nothing left to tell those apart with, which is the point."""
+    if fb is None:
+        return None
+    return AttemptFeedbackOut(
+        rating=fb.rating,
+        # The column is only ever written through CandidateFeedbackIn, whose
+        # Literal is the validation; the model keeps a plain str so a future
+        # fourth answer is not a migration.
+        difficulty_fair=cast(DifficultyVerdict, fb.difficulty_fair),
+        comment=fb.comment,
+        created_at=as_utc(fb.created_at),
+    )
+
+
+def _feedback_rollup(rows: list[AssessmentAttemptOut]) -> AssessmentFeedbackOut:
+    """The feedback aggregate for one assessment, read off the attempt rows the
+    caller already assembled — so the rollup and the grid can never disagree.
+
+    `finished` counts the sittings that could have answered (at least one
+    submission), which is the only honest denominator for a response rate: the
+    roster includes people who never started.
+    """
+    answers: list[tuple[str, AttemptFeedbackOut]] = [
+        (r.candidate_name, r.feedback) for r in rows if r.feedback is not None
+    ]
+    levels = Counter(fb.difficulty_fair for _, fb in answers)
+    # Only the answers that carry words: a rating on its own counts in the
+    # aggregate above, but it is not an empty pair of quotation marks in the list.
+    comments = [
+        FeedbackCommentOut(candidate_name=name, **fb.model_dump())
+        for name, fb in answers
+        if fb.comment
+    ]
+    comments.sort(
+        key=lambda c: c.created_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True
+    )
+    return AssessmentFeedbackOut(
+        responses=len(answers),
+        finished=sum(1 for r in rows if any(q.submitted for q in r.questions)),
+        avg_rating=analytics.mean([fb.rating for _, fb in answers]),
+        too_easy=levels["too_easy"],
+        fair=levels["fair"],
+        too_hard=levels["too_hard"],
+        comments=comments,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -3677,6 +3769,7 @@ def analytics_assessment(
             )
         )
     return AssessmentAnalyticsOut(
+        feedback=_feedback_rollup(rows),
         assessment_id=a.id,
         title=a.title,
         slot_count=slot_count,
@@ -3900,14 +3993,9 @@ def _invite_org_id(invite: Invite, session: Session) -> int:
     An invite points at exactly one of a question or an assessment, and both
     carry `org_id` — the candidate routes have no membership to read it from.
     """
-    if invite.assessment_id is not None:
-        assessment = session.get(Assessment, invite.assessment_id)
-        if assessment is not None:
-            return assessment.org_id
-    if invite.question_id is not None:
-        question = session.get(Question, invite.question_id)
-        if question is not None:
-            return question.org_id
+    org = support.invite_org(invite, session)
+    if org is not None and org.id is not None:
+        return org.id
     # Both FK-enforced and one of them always set, so this is a corrupt row.
     raise HTTPException(status_code=500, detail="invite belongs to no organisation.")
 
@@ -4101,6 +4189,13 @@ def _candidate_question_view(
         logo_url=invite.assessment.logo_url if invite.assessment else None,
         # Integrity monitoring (I1), frozen on the invite when it was minted.
         proctored=invite.proctored,
+        # Whether this sitting can take feedback at the end (P2b) — see
+        # `_feedback_accepted`. The form is hidden rather than shown and refused.
+        feedback_enabled=_feedback_accepted(invite),
+        # Who to write to (P2b). Tagged with the organisation now that the caller
+        # has identified as an invited recipient — never an interviewer's own
+        # address, which stays where it was: the invitation's Reply-To.
+        support_email=support.invite_contact_email(invite, session),
     )
 
 
@@ -4136,6 +4231,9 @@ def get_invite(token: str, session: Session = Depends(get_session)) -> InviteSta
         question_count=len(a.questions) if a else 1,
         duration_minutes=a.duration_minutes if a else (q.duration_minutes if q else None),
         languages=config.SUPPORTED_LANGUAGES,
+        # Untagged on purpose (P2b): whoever holds the token reads this, and the
+        # organisation's own tag would say whose assessment the link is for.
+        support_email=support.generic_contact_email(),
     )
 
 
@@ -4391,6 +4489,93 @@ def candidate_integrity_events(
             )
         )
     session.commit()
+    return Response(status_code=204)
+
+
+def _feedback_accepted(invite: Invite) -> bool:
+    """Whether this sitting can take feedback (P2b).
+
+    Only assessment-backed sittings can: the surfaces that show feedback — the
+    attempts grid and the assessment rollup — are both reached through an
+    `Assessment`, so a quick-screen or variant-set invite has nowhere to display
+    it. Collecting it there would ask a candidate for personal data under a
+    promise ("your interviewer sees this") the product does not keep, so both the
+    route and the form refuse rather than store it unread. Widening this means
+    giving those sittings a surface first — see STATUS.
+    """
+    return invite.assessment_id is not None
+
+
+@app.post("/invite/{token}/feedback", status_code=204)
+def candidate_feedback(
+    token: str,
+    body: CandidateFeedbackIn,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Record what the candidate made of the sitting (P2b) — optional, and once.
+
+    Gated on having actually sat it: the link must be live, the caller must be an
+    invited recipient, and there must be at least one submission for that
+    (invite, candidate). Without the last gate the route would be an anonymous
+    comment box attached to a token, and it would collect opinions from people
+    who never saw the questions.
+
+    A repeat is 409, not an overwrite: an answer an interviewer may already have
+    read is not the candidate's to revise, and the unique constraint on
+    `attempt_id` is what actually enforces that under a double-click.
+
+    Rate-limited on the submit bucket for the same reason /start is: the status
+    ladder (403 not invited / 404 nothing submitted / 409 already answered) is an
+    oracle about an address, and /start already answers most of it. 409-vs-204 is
+    the one fact that is new here, so it must not be free to ask.
+
+    204 rather than the created row: the candidate UI shows its own thank-you and
+    has nothing to read back, and the response is the wrong place to echo
+    someone's own words.
+    """
+    # The submit bucket, not one of its own: /start already spends 20/min per IP
+    # against this same invite, and a second bucket of equal size would hand an
+    # enumerator twice the budget for the ladder below.
+    limiter.check(
+        "submit", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+    )
+    invite = _load_invite_or_error(token, session)
+    email = _normalize_email(body.candidate_email)
+    _check_invited(invite, email)
+    attempt = session.exec(
+        select(CandidateAttempt).where(
+            CandidateAttempt.invite_id == invite.id,
+            CandidateAttempt.candidate_email == email,
+        )
+    ).first()
+    submitted = session.exec(
+        select(Submission.id).where(
+            Submission.invite_id == invite.id,
+            Submission.candidate_email == email,
+        )
+    ).first()
+    if attempt is None or attempt.id is None or submitted is None or not _feedback_accepted(invite):
+        # One answer for every "nothing to comment on": never started, started and
+        # submitted nothing, or a sitting no interviewer surface could show it on.
+        raise HTTPException(status_code=404, detail="No completed assessment to give feedback on")
+
+    session.add(
+        CandidateFeedback(
+            org_id=_invite_org_id(invite, session),
+            attempt_id=attempt.id,
+            rating=body.rating,
+            difficulty_fair=body.difficulty_fair,
+            comment=body.comment.strip(),
+        )
+    )
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=409, detail="Feedback for this assessment has already been recorded"
+        ) from exc
     return Response(status_code=204)
 
 

@@ -598,10 +598,51 @@ Minor findings from the P2a review round, deferred rather than fixed there.
 - **Four gate-fill helpers in `web/src/pages/__tests__/CandidatePage.test.tsx`**
   (`reachEditor`, `startSitting`, `start`, `passGate`) encode the same steps;
   the older three could call the module-level `passGate`.
-- **The AI notice is hand-mirrored** between `AssessmentNotice` in
-  `CandidatePage.tsx` and the "Automated assessment" section of
-  `docs/PRIVACY.md`. When P2b puts a support address on the probe, both should
-  render that one field instead of restating the contact sentence.
+- **The AI notice still names no address.** `AssessmentNotice` in
+  `CandidatePage.tsx` tells a candidate to "contact the interviewer who invited
+  you" for a human review, while `docs/PRIVACY.md` § Automated assessment offers
+  the privacy contact. P2b added `support_email` to both invite responses, so the
+  notice could now render that field instead of restating a contact sentence —
+  decide first whether a human-review request should reach the platform's
+  support mailbox at all, or only the hiring team.
+
+## P2b review leftovers — 2026-09-13
+
+Minor findings from the P2b review round, deferred rather than fixed there.
+
+- **One invite token, several recipients: feedback can be written under someone
+  else's name.** `_check_invited` (`assessment_platform/api.py`) is an identity
+  *claim*, and every recipient of a multi-address invite holds the same token, so
+  recipient A can POST feedback as recipient B once B has submitted — and the
+  unique constraint then stops B from ever correcting it. The same weakness
+  already lets A burn B's single submit attempt, so the root fix is per-recipient
+  tokens (or a signed one-time feedback link in the results email), not a patch
+  to this route. Until then the interviewer surfaces present feedback as
+  candidate-asserted, which is what it is.
+- **A quick-screen sitting is never asked for feedback** (`_feedback_accepted`,
+  `api.py`): both surfaces that display it — the attempts grid and the assessment
+  rollup — are reached through an `Assessment`, so a question-only or
+  variant-set invite has nowhere to show it. Giving `SubmissionDetailPage` a
+  feedback line would let the form open up to those sittings too.
+- **The submissions CSV export has no feedback column**
+  (`assessment_platform/api.py`, the export header + row loop). The export
+  already denormalises sitting-level integrity facts onto per-submission rows, so
+  feedback is the same shape; the one surface a customer takes offline into an
+  ATS is currently the one that cannot see it.
+- **`SubmissionDetailPage` shows no feedback.** Integrity signals get both a grid
+  cell and a per-submission panel; feedback got the grid cell and the analytics
+  rollup only, so an interviewer who reaches a candidate through Submissions →
+  detail never sees the rating. Same page as the quick-screen item above.
+- **Feedback is offered on one paint only.** The form mounts on the live
+  `submitted` / `complete` render, so closing the tab and coming back (which
+  lands on `already_submitted`) loses the chance — the server would still accept
+  it. A second chance would need the 409 path to carry `feedback_enabled`, or a
+  one-time link in the results email.
+- **`CandidateFeedback.org_id` is denormalised** (`models.py`) where its siblings
+  (`CandidateDraft`, `IntegrityEvent`) are reached through `invite_id`. It keeps
+  `_purge_org`'s "every table with an org_id is in this list" rule true, and it
+  costs the write path one org lookup; if the rule is relaxed, the column and its
+  index can go.
 
 ## Unscheduled ideas
 
