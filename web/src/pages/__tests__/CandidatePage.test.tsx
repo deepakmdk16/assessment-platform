@@ -26,6 +26,7 @@ vi.mock('../../api', () => {
       getCandidateDrafts: vi.fn(() => Promise.resolve({ drafts: [] })),
       saveCandidateDraft: vi.fn(() => Promise.resolve()),
       sendCandidateFeedback: vi.fn(() => Promise.resolve()),
+      publicConfig: vi.fn(() => Promise.resolve({ support_email: null })),
     },
     ApiError,
   }
@@ -1284,6 +1285,19 @@ describe('P2a — start screen, confirmation and leaving', () => {
       expect(await screen.findByRole('heading', { name: /no longer active/i })).toBeInTheDocument()
       expect(screen.getByText(/contact whoever sent it to you/i)).toBeInTheDocument()
       expect(screen.queryByText(/how did that go/i)).not.toBeInTheDocument()
+    })
+
+    it('still names an address on a dead link, where the probe returns no body', async () => {
+      // The candidate with nowhere to go is the one the address exists for.
+      vi.mocked(api.getInvite).mockRejectedValue(new ApiError(404, 'unknown'))
+      vi.mocked(api.publicConfig).mockResolvedValue({ support_email: 'support@assess.dev' })
+      renderCandidatePage()
+
+      expect(await screen.findByRole('heading', { name: /invalid link/i })).toBeInTheDocument()
+      expect(await screen.findByRole('link', { name: 'support@assess.dev' })).toHaveAttribute(
+        'href',
+        'mailto:support@assess.dev',
+      )
     })
 
     it('does not ask on the "you can come back" screen, where the sitting is not over', async () => {

@@ -197,9 +197,12 @@ export function CandidatePage() {
   const [gateInfo, setGateInfo] = useState<InviteStatusResponse | null>(null)
   const gateProctored = gateInfo?.proctored !== false
   // Who to write to (P2b). The sitting's answer is tagged for the organisation
-  // and the probe's is not, so prefer the sitting's once it exists; null when
-  // the deploy configures no address, and the line disappears.
-  const supportEmail = invite?.support_email ?? gateInfo?.support_email ?? null
+  // and the probe's is not, so prefer the sitting's once it exists. `fallback`
+  // covers the screens reached from a FAILED probe — an invalid or expired link
+  // answers with no body, and that is exactly the candidate with nowhere to go.
+  // Null when the deploy configures no address, and the line disappears.
+  const [fallbackSupport, setFallbackSupport] = useState<string | null>(null)
+  const supportEmail = invite?.support_email ?? gateInfo?.support_email ?? fallbackSupport
   // Agreement to the privacy notice and terms (X04). The server refuses a
   // sitting that begins without it; this only stops the candidate discovering
   // that through an error message.
@@ -278,6 +281,11 @@ export function CandidatePage() {
         if (err instanceof ApiError && err.status === 404) setStage('invalid')
         else if (err instanceof ApiError && err.status === 410) setStage('expired')
         else setStage('error')
+        // The link is a dead end, so ask separately where they can write.
+        void api
+          .publicConfig()
+          .then((cfg) => setFallbackSupport(cfg.support_email ?? null))
+          .catch(() => {})
       })
   }, [token])
 

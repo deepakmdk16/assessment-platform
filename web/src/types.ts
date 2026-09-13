@@ -447,6 +447,13 @@ export interface InviteStartResponse {
   feedback_enabled?: boolean
 }
 
+/** `GET /public-config` — what the candidate app needs before it has an invite.
+ *  The untagged support address, so the screens reached from a failed probe
+ *  (invalid / expired / error) can still say where to write. */
+export interface PublicConfig {
+  support_email?: string | null
+}
+
 /** How the candidate rated the level of the sitting (P2b). */
 export type DifficultyVerdict = 'too_easy' | 'fair' | 'too_hard'
 
@@ -800,6 +807,8 @@ export interface CandidateErasure {
   integrity_events: number
   drafts_deleted: number
   invites_amended: number
+  /** Feedback rows deleted (P2b) — deleted outright, like drafts. */
+  feedback_deleted: number
 }
 
 export interface Member {

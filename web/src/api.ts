@@ -6,6 +6,7 @@ import type {
   Billing,
   CandidateDraftsResponse,
   CandidateFeedbackIn,
+  PublicConfig,
   IntegrityEventIn,
   IntegrityReport,
   Invite,
@@ -542,6 +543,10 @@ export const api = {
     token: string,
     data: { candidate_email: string; question_id?: string | null; code: string; language: string },
   ) => request<void>(`/invite/${token}/draft`, { method: 'PUT', body: data }),
+
+  /** The little the candidate app needs when there is no live invite to read it
+   *  from (P2b) — the untagged support address for a dead or expired link. */
+  publicConfig: () => request<PublicConfig>('/public-config'),
 
   /** What the candidate made of the sitting (P2b). Optional and once — the
    *  server answers 409 on a repeat, which the UI shows as already sent. */

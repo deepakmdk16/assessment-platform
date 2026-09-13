@@ -166,6 +166,7 @@ from .schemas import (
     OverviewAnalyticsOut,
     Page,
     PlanOut,
+    PublicConfigOut,
     QuestionAnalyticsOut,
     QuestionCreate,
     QuestionDraftIn,
@@ -595,6 +596,17 @@ def health(session: Session = Depends(get_session)) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=503, detail="database unavailable") from exc
     return {"status": "ok"}
+
+
+@app.get("/public-config", response_model=PublicConfigOut)
+def public_config() -> PublicConfigOut:
+    """What the candidate app needs before (or without) a live invite (P2b).
+
+    Unauthenticated and unlimited, like /health: it reads no database, returns
+    one constant from the environment, and every value in it is already printed
+    in emails sent to strangers.
+    """
+    return PublicConfigOut(support_email=support.generic_contact_email())
 
 
 def _require_metrics_token(x_assess_token: str | None = Header(default=None)) -> None:

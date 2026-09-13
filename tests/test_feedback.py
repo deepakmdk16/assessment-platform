@@ -182,6 +182,19 @@ def test_no_address_configured_leaves_the_invitation_email_alone(client, monkeyp
     assert sent and "Questions about this assessment" not in sent[0].text
 
 
+def test_a_dead_link_can_still_say_where_to_write(anon_client, monkeypatch) -> None:
+    """The probe answers 404/410 with no body, so the invalid/expired screens have
+    no invite to read an address off. /public-config is where they get one — and
+    it is the untagged address, which names no organisation."""
+    monkeypatch.setattr(config, "SUPPORT_EMAIL", "support@assess.dev")
+    monkeypatch.setattr(config, "SUPPORT_EMAIL_ORG_TAG", True)
+    assert anon_client.get("/invite/nope").status_code == 404
+    assert anon_client.get("/public-config").json() == {"support_email": "support@assess.dev"}
+
+    monkeypatch.setattr(config, "SUPPORT_EMAIL", "")
+    assert anon_client.get("/public-config").json() == {"support_email": None}
+
+
 # --------------------------------------------------------------------------- #
 # Leaving feedback                                                              #
 # --------------------------------------------------------------------------- #

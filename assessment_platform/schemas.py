@@ -710,6 +710,19 @@ class CandidateErasureOut(BaseModel):
     feedback_deleted: int = 0
 
 
+class PublicConfigOut(BaseModel):
+    """The settings a candidate's browser needs before it can identify itself.
+
+    Today that is one address, for the screens the invite probe never gets past —
+    an invalid or expired link answers 404/410 with no body, so without this the
+    one candidate who most needs somewhere to write is the one who cannot be told.
+    Public by design: the same address is printed in every invitation email, and
+    it is the untagged one, which names no organisation.
+    """
+
+    support_email: str | None = None
+
+
 class CandidateFeedbackIn(BaseModel):
     """What the candidate thought of the sitting (P2b), sent once from the
     post-submit screen. `candidate_email` identifies the sitting exactly as it
