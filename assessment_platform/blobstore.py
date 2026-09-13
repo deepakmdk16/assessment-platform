@@ -104,7 +104,12 @@ class SqlBlobStore:
         if row is None:
             return None
         data, content_type = row
-        return Served(data=data, content_type=content_type, sha256=sha256)
+        # `bytes(...)` rather than the value as-is: a driver is entitled to hand
+        # back a memoryview for a bytea, and the response layer only understands
+        # bytes. Free when it already is one, and the CI Postgres job runs
+        # migrations and a boot but not this suite, so the engine that would
+        # tell us is not the engine the tests run on.
+        return Served(data=bytes(data), content_type=content_type, sha256=sha256)
 
     def head(self, session: Session, sha256: str) -> str | None:
         return session.exec(
