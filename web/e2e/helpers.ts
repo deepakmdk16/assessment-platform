@@ -117,5 +117,13 @@ export async function submitAsCandidate(
   await page.keyboard.type('print("solution")')
 
   await page.getByRole('button', { name: 'Submit' }).click()
+  await confirmSubmit(page)
   return { context, page }
+}
+
+/** The one-shot submit asks first (P2a): confirm through the dialog it opens. */
+export async function confirmSubmit(page: Page): Promise<void> {
+  const confirm = page.getByRole('dialog')
+  await expect(confirm.getByText('You can’t change your code after this.')).toBeVisible()
+  await confirm.getByRole('button', { name: 'Submit' }).click()
 }

@@ -385,6 +385,14 @@ export interface InviteStatusResponse {
   /** Whether this sitting is monitored (I1) — known before /start so the gate
    *  screen can disclose it before the candidate identifies themselves. */
   proctored?: boolean
+  /** The shape of the sitting (P2a), disclosed for the same reason. Null title
+   *  and organisation for a quick-screen invite, which has no assessment. */
+  assessment_title?: string | null
+  org_name?: string | null
+  question_count?: number
+  /** Total minutes for the sitting; null = untimed. */
+  duration_minutes?: number | null
+  languages?: string[]
 }
 
 /** `POST /invite/{token}/start` — the question, released after the email check. */

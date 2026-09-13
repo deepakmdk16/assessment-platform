@@ -607,10 +607,21 @@ class InviteStatusOut(BaseModel):
     identify as an invited recipient via `POST /invite/{token}/start` first, so
     holding the link alone never reveals the problem. `proctored` is the one
     exception and is not question data: the start screen has to disclose that the
-    sitting is monitored BEFORE the candidate identifies themselves."""
+    sitting is monitored BEFORE the candidate identifies themselves. The shape of
+    the sitting (P2a) is disclosed the same way, for the same reason: what the
+    candidate is agreeing to must be readable before they agree. Titles and
+    prompts of the questions themselves are not part of it."""
 
     status: str
     proctored: bool = True
+    # Whose assessment, and what it is called. None for a quick-screen invite,
+    # which has no Assessment — the question's own title must never stand in.
+    assessment_title: str | None = None
+    org_name: str | None = None
+    question_count: int = 1
+    # Total time budget for the sitting in minutes; None = untimed.
+    duration_minutes: int | None = None
+    languages: list[str] = Field(default_factory=list)
 
 
 class CandidateStartIn(BaseModel):

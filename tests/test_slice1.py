@@ -237,9 +237,21 @@ def test_invite_probe_reveals_no_question(anon_client: TestClient) -> None:
 
     resp = anon_client.get(f"/invite/{inv['token']}")
     assert resp.status_code == 200
-    # `proctored` (I1) is the one non-liveness field here, and deliberately so:
-    # the gate must disclose monitoring before the candidate identifies themselves.
-    assert resp.json() == {"status": "active", "proctored": True}
+    # `proctored` (I1) is here deliberately: the gate must disclose monitoring
+    # before the candidate identifies themselves.
+    body = resp.json()
+    assert body["status"] == "active" and body["proctored"] is True
+    # The probe also describes the sitting (P2a) but never the problem. The key
+    # set is closed: a new field has to be added here, on purpose.
+    assert set(body) == {
+        "status",
+        "proctored",
+        "assessment_title",
+        "org_name",
+        "question_count",
+        "duration_minutes",
+        "languages",
+    }
 
 
 def test_candidate_view_hides_test_cases(anon_client: TestClient) -> None:

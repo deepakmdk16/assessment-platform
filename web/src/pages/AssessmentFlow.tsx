@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { IntegrityOverlay } from '../components/IntegrityGate'
+import { useLeaveGuard } from '../leaveGuard'
 import { ThemeCycleButton } from '../components/ThemeToggle'
 import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
@@ -21,6 +23,13 @@ import { PRODUCT_NAME } from '../branding'
 interface Answer {
   code: string
   language: Language
+}
+
+/** One answer the submit-all pass could not record, with the HTTP status when
+ *  the server answered at all. */
+interface SubmitFailure {
+  qid: string
+  status?: number
 }
 
 interface Props {
@@ -117,6 +126,14 @@ export function AssessmentFlow({
   // waiting on a submittedCount that can never reach questions.length.
   const [autoSubmitSettled, setAutoSubmitSettled] = useState(false)
   const [autoSubmitFailedIds, setAutoSubmitFailedIds] = useState<string[]>([])
+  // "Submit and leave" (P2a): every written answer was sent and the candidate
+  // chose to stop here on this device, with the rest blank. Only the client
+  // ends: the server keeps the sitting open until its own deadline, so the
+  // terminal screen says the link stays open rather than claiming finality.
+  const [leftEarly, setLeftEarly] = useState(false)
+  const [submittingAll, setSubmittingAll] = useState(false)
+  // A manual submit asks first (P2a): the open question, or everything written.
+  const [confirm, setConfirm] = useState<'one' | 'all' | null>(null)
 
   const cq = questions[current]
   const answer = answers[cq.id]
@@ -126,7 +143,7 @@ export function AssessmentFlow({
   // that said they were blocked. `locked` already drives readOnly and every
   // action, so folding it in here locks all of them at once.
   // Editing is blocked: drives readOnly and every action.
-  const locked = isDone || timeUp || integrity.mustReturnToFullscreen
+  const locked = isDone || timeUp || integrity.mustReturnToFullscreen || submittingAll
   // Persistence is a SEPARATE condition. Gating the autosave on `locked` meant
   // that leaving fullscreen mid-debounce cancelled the pending save and
   // scheduled nothing — a candidate who never came back to that tab lost
@@ -138,7 +155,17 @@ export function AssessmentFlow({
   // submitted manually before time's up, or the timeout auto-submit pass has
   // settled (regardless of individual success, so a blank-left question can't
   // hold the candidate on the IDE forever).
-  const complete = submittedCount === questions.length || (timeUp && autoSubmitSettled)
+  const complete =
+    submittedCount === questions.length || (timeUp && autoSubmitSettled) || leftEarly
+  // Warn before the tab closes while the sitting is still open (P2a).
+  useLeaveGuard(!complete)
+  // What "Submit and leave" would send, what it would leave blank, and what a
+  // per-question submit leaves open — the one predicate the loop below uses.
+  const isWritten = (q: CandidateQuestionPublic) =>
+    !submitted[q.id] && /\S/.test(answers[q.id]?.code ?? '')
+  const writtenCount = questions.filter(isWritten).length
+  const blankCount = questions.length - submittedCount - writtenCount
+  const othersOpen = questions.filter((q) => q.id !== cq.id && !submitted[q.id]).length
 
   // Server-side autosave of the open question (CX2). Debounced, fire-and-forget
   // — a lost save costs at most a few seconds of typing; skipped once this
@@ -198,6 +225,49 @@ export function AssessmentFlow({
     onComplete?.()
   }, [complete, onComplete])
 
+  // One pass at a time. The deadline effect and "Submit and leave" can both
+  // reach here; a second pass built from a stale `submitted` would re-post
+  // answers the first already recorded, and report the 409 as a failure.
+  const submitAllInFlight = useRef<Promise<SubmitFailure[]> | null>(null)
+
+  /** Submit every question that has code and isn't submitted yet, in order.
+   *  Shared by the deadline pass above and by "Submit and leave" (P2a). Returns
+   *  the failures, with the HTTP status where there was one, for the caller to
+   *  report — recorded, not swallowed (A5). A 409 means the answer was already
+   *  recorded and counts as done. */
+  function submitAllWritten(): Promise<SubmitFailure[]> {
+    if (!submitAllInFlight.current) {
+      submitAllInFlight.current = runSubmitAll().finally(() => {
+        submitAllInFlight.current = null
+      })
+    }
+    return submitAllInFlight.current
+  }
+
+  async function runSubmitAll(): Promise<SubmitFailure[]> {
+    const failures: SubmitFailure[] = []
+    for (const q of questions) {
+      if (!isWritten(q)) continue
+      try {
+        await api.submitCandidate(token, {
+          candidate_name: candidateName,
+          candidate_email: candidateEmail,
+          language: answers[q.id].language,
+          code: answers[q.id].code,
+          question_id: q.id,
+        })
+        setSubmitted((s) => ({ ...s, [q.id]: true }))
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          setSubmitted((s) => ({ ...s, [q.id]: true }))
+        } else {
+          failures.push({ qid: q.id, status: err instanceof ApiError ? err.status : undefined })
+        }
+      }
+    }
+    return failures
+  }
+
   // At zero, auto-submit every unanswered-but-written question once, so time
   // running out records work instead of losing it. A failure is recorded (not
   // swallowed, A5) so the terminal screen can tell the candidate which of their
@@ -205,28 +275,30 @@ export function AssessmentFlow({
   useEffect(() => {
     if (!timeUp || autoSubmitFired.current) return
     autoSubmitFired.current = true
-    void (async () => {
-      for (const q of questions) {
-        if (!submitted[q.id] && answers[q.id]?.code.trim()) {
-          try {
-            await api.submitCandidate(token, {
-              candidate_name: candidateName,
-              candidate_email: candidateEmail,
-              language: answers[q.id].language,
-              code: answers[q.id].code,
-              question_id: q.id,
-            })
-            setSubmitted((s) => ({ ...s, [q.id]: true }))
-          } catch {
-            // best-effort at the deadline — recorded, not silently dropped
-            setAutoSubmitFailedIds((ids) => [...ids, q.id])
-          }
-        }
-      }
+    void submitAllWritten().then((failures) => {
+      if (failures.length > 0) setAutoSubmitFailedIds((ids) => [...ids, ...failures.map((f) => f.qid)])
       setAutoSubmitSettled(true)
-    })()
+    })
+    // submitAllWritten reads the latest answers via closure at fire time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeUp])
+
+  /** "Submit and leave" (P2a): send every written answer, then stop here — or,
+   *  if anything failed, stay so it can be retried. A 410/404 means the server
+   *  has closed the sitting, which the parent shows. */
+  async function submitAndLeave() {
+    setSubmitError(null)
+    setSubmittingAll(true)
+    try {
+      const failures = await submitAllWritten()
+      if (failures.some((f) => f.status === 410 || f.status === 404)) onExpired()
+      else if (failures.length > 0)
+        setSubmitError('Some answers couldn’t be sent. Check your connection and try again.')
+      else setLeftEarly(true)
+    } finally {
+      setSubmittingAll(false)
+    }
+  }
 
   function patchAnswer(patch: Partial<Answer>) {
     setAnswers((a) => ({ ...a, [cq.id]: { ...a[cq.id], ...patch } }))
@@ -298,6 +370,15 @@ export function AssessmentFlow({
 
   const hasExample = Boolean(cq.example_input || cq.example_output)
 
+  if (complete && leftEarly && submittedCount < questions.length) {
+    // Stopped on this device with questions still blank. The server keeps the
+    // sitting open until its deadline, and /start re-admits them, so say so.
+    const open = questions.length - submittedCount
+    const body =
+      `Thanks, ${candidateName}! ${submittedCount} of ${questions.length} question${questions.length === 1 ? '' : 's'} were submitted for grading. ` +
+      `${open} ${open === 1 ? 'question is' : 'questions are'} still unanswered — this link stays open for ${open === 1 ? 'it' : 'them'}${deadline ? ' until time runs out' : ''}.`
+    return <CandidateNotice title="Answers submitted ✓" body={body} />
+  }
   if (complete) {
     const n = questions.length
     const plural = n === 1 ? '' : 's'
@@ -423,7 +504,44 @@ export function AssessmentFlow({
             remainingLabel={
               remainingMs !== null && remainingMs > 0 ? `${formatRemaining(remainingMs)} left` : null
             }
+            onSubmitAndLeave={() => setConfirm('all')}
           />
+          <ConfirmDialog
+            open={confirm !== null}
+            title={confirm === 'all' ? 'Submit and leave?' : 'Submit this question?'}
+            confirmLabel={confirm === 'all' ? 'Submit and leave' : 'Submit'}
+            onCancel={() => setConfirm(null)}
+            onConfirm={() => {
+              const choice = confirm
+              setConfirm(null)
+              // Re-check what the buttons checked: the dialog outlives a
+              // fullscreen exit or the deadline, and neither may submit.
+              if (choice === 'one' && !locked && submittingId === null && running === null) {
+                void submitOne(cq.id)
+              } else if (choice === 'all' && !timeUp && !submittingAll) {
+                void submitAndLeave()
+              }
+            }}
+          >
+            {confirm === 'all' ? (
+              <p>
+                {writtenCount === 0
+                  ? 'Nothing new to submit.'
+                  : `${writtenCount} ${writtenCount === 1 ? 'answer' : 'answers'} with code will be submitted.`}
+                {blankCount > 0
+                  ? ` ${blankCount} ${blankCount === 1 ? 'question has' : 'questions have'} no code yet and ${blankCount === 1 ? 'stays' : 'stay'} open — you can come back to ${blankCount === 1 ? 'it' : 'them'} through this link${deadline ? ' until time runs out' : ''}.`
+                  : ''}{' '}
+                You can’t change a submitted answer.
+              </p>
+            ) : (
+              <p>
+                You can’t change this answer after this.{' '}
+                {othersOpen === 0
+                  ? 'This is your last question.'
+                  : `${othersOpen} other ${othersOpen === 1 ? 'question hasn’t' : 'questions haven’t'} been submitted yet.`}
+              </p>
+            )}
+          </ConfirmDialog>
 
           <div className="editor-wrapper">
             <Editor
@@ -517,7 +635,7 @@ export function AssessmentFlow({
             <button
               type="button"
               className="btn submit"
-              onClick={() => submitOne(cq.id)}
+              onClick={() => setConfirm('one')}
               disabled={locked || submittingId !== null || running !== null || !answer.code}
             >
               {submittingId === cq.id ? 'Submitting…' : isDone ? 'Submitted' : 'Submit this question'}

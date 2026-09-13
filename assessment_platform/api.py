@@ -4117,7 +4117,26 @@ def get_invite(token: str, session: Session = Depends(get_session)) -> InviteSta
     # Whether this sitting is monitored (I1) — needed before /start so the gate
     # screen can disclose it up front. Read from the invite's own frozen
     # snapshot, so it says what this sitting will actually do.
-    return InviteStatusOut(status="active", proctored=invite.proctored)
+    #
+    # The shape of the sitting (P2a) — how many questions, how long, which
+    # languages, whose assessment — is disclosed the same way, so the start
+    # screen can say what the candidate is agreeing to. None of it is the
+    # problem: titles and prompts stay behind /start. Read straight off the
+    # invite's own rows (a slot is one question, whatever it resolves to), not
+    # through `_invite_questions`: that resolves variants — one query per set
+    # slot, on an unauthenticated route — and 404s an assessment with no
+    # resolvable questions, which /start owns with its own message.
+    a = invite.assessment
+    q = invite.question
+    return InviteStatusOut(
+        status="active",
+        proctored=invite.proctored,
+        assessment_title=a.title if a else None,
+        org_name=a.org_name if a else None,
+        question_count=len(a.questions) if a else 1,
+        duration_minutes=a.duration_minutes if a else (q.duration_minutes if q else None),
+        languages=config.SUPPORTED_LANGUAGES,
+    )
 
 
 @app.post("/invite/{token}/start", response_model=InvitePublicOut)

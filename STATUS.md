@@ -557,13 +557,13 @@ layout shift while analytics load.**
   strict; recommendedTypeChecked + jsx-a11y.
   _Verified: cited lines read in this audit; source: quality. The analytics layout
   shift was fixed with a reserved-height skeleton 2026-09-08._
-- **W21 · P3 · XS — The start gate cannot show branding before identification.**
-  Evidence: live: GET /invite/{token} pre-start returns only status + proctored;
-  branding arrives in the /start payload. Why: candidates see a generic gate for a
-  branded assessment. Fix: return org_name/logo_url on the pre-start probe (needs
-  the backend half): carry title/org/logo in the pre-start public view.
-  _Verified: cited lines read in this audit; source: frontend,saas. The hardcoded
-  product name was lifted into `branding.ts` (VITE_PRODUCT_NAME) on 2026-09-08._
+- **W21 · P3 · XS — The start gate cannot show the logo before identification.**
+  Evidence: `GET /invite/{token}` now carries the title, organisation, question
+  count, duration and languages, and the gate renders them (P2a, 2026-09-13);
+  `logo_url` still arrives only in the /start payload. Fix: add `logo_url` to
+  `InviteStatusOut` and render it on the gate — do it in P3b (logo upload),
+  which changes where the logo lives.
+  _Verified: cited lines read in this audit; source: frontend,saas._
 
 ---
 
@@ -572,6 +572,36 @@ layout shift while analytics load.**
 Moved to `docs/DEPLOY.md`, which now carries the full list: what compose sets
 for you, what only the operator can supply (`REGISTRATION_CODE`, SMTP, Stripe),
 and the two settings TLS changes (`COOKIE_SECURE`, `TRUST_PROXY_HEADERS`).
+
+## P2a review leftovers — 2026-09-13
+
+Minor findings from the P2a review round, deferred rather than fixed there.
+
+- **Esc may also exit fullscreen while cancelling a confirmation.**
+  `web/src/components/ConfirmDialog.tsx:19` is a native `<dialog>`; in element
+  fullscreen some browsers treat Esc as "exit fullscreen" too, which would
+  record an integrity exit for declining to submit. Browser-dependent — verify
+  in Chrome and Firefox; if it happens, render the candidate confirmations with
+  the scrim-div pattern the fullscreen prompt uses.
+- **Leaving a sitting is client-only.** `web/src/pages/AssessmentFlow.tsx`
+  (`leftEarly`) ends nothing on the server: `/start` re-admits the candidate and
+  the interviewer cannot see that they stopped. A `CandidateAttempt.finished_at`
+  set by `POST /invite/{token}/finish` would let `/start` lock the sitting and
+  the dashboard show it.
+- **Language ids are shown raw on the start screen** (`cpp`, `javascript`) by
+  `GateFacts` in `web/src/pages/CandidatePage.tsx`, as the editor's language
+  select already does. One label map would fix both.
+- **"Submit and leave" posts answers one at a time** (`runSubmitAll` in
+  `AssessmentFlow.tsx`): N answers cost N round-trips with the editor locked.
+  Parallel posts would trip the per-IP submit limiter; a batch submit endpoint is
+  the real fix.
+- **Four gate-fill helpers in `web/src/pages/__tests__/CandidatePage.test.tsx`**
+  (`reachEditor`, `startSitting`, `start`, `passGate`) encode the same steps;
+  the older three could call the module-level `passGate`.
+- **The AI notice is hand-mirrored** between `AssessmentNotice` in
+  `CandidatePage.tsx` and the "Automated assessment" section of
+  `docs/PRIVACY.md`. When P2b puts a support address on the probe, both should
+  render that one field instead of restating the contact sentence.
 
 ## Unscheduled ideas
 

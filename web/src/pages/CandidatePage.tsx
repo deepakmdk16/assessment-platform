@@ -3,14 +3,17 @@ import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError } from '../api'
 import { parseServerDate } from '../invites'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { IntegrityNotice, IntegrityOverlay } from '../components/IntegrityGate'
 import { fullscreenSupported, useIntegrity } from '../integrity'
+import { useLeaveGuard } from '../leaveGuard'
 import { ThemeCycleButton } from '../components/ThemeToggle'
 import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
 import type {
   CandidateDraft as ServerDraft,
   InviteStartResponse,
+  InviteStatusResponse,
   Language,
   RunResponse,
   RunTestsResponse,
@@ -43,11 +46,43 @@ interface Draft {
 
 const DRAFT_PREFIX = 'assessment-draft:'
 
+/** A short, stable digest of the address (32-bit FNV-1a, 8 hex chars). Not
+ *  cryptographic and not meant to be: the key is already scoped by invite
+ *  token, so it only has to tell candidates apart without spelling their
+ *  address out in localStorage, where anyone at a shared machine can read it
+ *  (P2a). Synchronous on purpose — the restore runs inside the start click,
+ *  and `crypto.subtle` is async. */
+function digest(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
 /** Keyed by invite AND candidate. Keying on the token alone meant that on a
  *  shared machine the next candidate to open the same link was seeded with the
  *  previous one's unsubmitted code. */
 function draftKey(token: string, candidateEmail: string): string {
-  return `${DRAFT_PREFIX}${token}:${candidateEmail.trim().toLowerCase()}`
+  return `${DRAFT_PREFIX}${token}:${digest(candidateEmail.trim().toLowerCase())}`
+}
+
+/** The key before P2a spelled the address out. Move a draft saved under it to
+ *  the hashed key, once, at the start of the sitting — so nobody mid-sitting
+ *  across that deploy loses work. One place to delete when it is retired. */
+function migrateLegacyDraft(token: string, candidateEmail: string): void {
+  try {
+    const legacyKey = `${DRAFT_PREFIX}${token}:${candidateEmail.trim().toLowerCase()}`
+    const old = localStorage.getItem(legacyKey)
+    if (old === null) return
+    if (localStorage.getItem(draftKey(token, candidateEmail)) === null) {
+      localStorage.setItem(draftKey(token, candidateEmail), old)
+    }
+    localStorage.removeItem(legacyKey)
+  } catch {
+    // ignore
+  }
 }
 
 function loadDraft(token: string, candidateEmail: string): Draft | null {
@@ -89,6 +124,55 @@ function clearDraft(token: string, candidateEmail: string): void {
   }
 }
 
+/** What the candidate is walking into, in one sentence, before they identify
+ *  themselves. "Timed" only when it is (P2a). */
+function gateLead(info: InviteStatusResponse | null): string {
+  const problems = (info?.question_count ?? 1) > 1 ? 'problems' : 'problem'
+  const clock =
+    info?.duration_minutes != null
+      ? `This sitting is timed. A ${info.duration_minutes}-minute clock starts when you begin, and you’ll`
+      : 'There’s no time limit. You’ll'
+  return `${clock} see the ${problems} and a code editor on the next screen. Use the email address your invite was sent to.`
+}
+
+/** Questions / time / languages, from the pre-start probe (P2a). */
+function GateFacts({ info }: { info: InviteStatusResponse }) {
+  return (
+    <dl className="gate-facts">
+      <div>
+        <dt>Questions</dt>
+        <dd>{info.question_count ?? 1}</dd>
+      </div>
+      <div>
+        <dt>Time</dt>
+        <dd>{info.duration_minutes != null ? `${info.duration_minutes} min` : 'No limit'}</dd>
+      </div>
+      <div>
+        <dt>Languages</dt>
+        <dd>{(info.languages ?? []).join(', ')}</dd>
+      </div>
+    </dl>
+  )
+}
+
+/** The AI-in-hiring notice (P2a): what the AI does, who decides, and how to ask
+ *  for a human review. On every start screen, monitored or not. Mirrors the
+ *  "Automated assessment" section of docs/PRIVACY.md — change both together. */
+function AssessmentNotice({ orgName }: { orgName?: string | null }) {
+  const who = orgName ? `A person at ${orgName}` : 'A person'
+  return (
+    <div className="gate-note" role="note">
+      <span className="gate-note-title">How your work is assessed</span>
+      <p>
+        Your code is run against test cases and scored automatically, and an AI model writes a
+        short summary of it for the interviewer. {who} makes any decision about your application,
+        not the AI. To ask for a human review of your result, contact the interviewer who
+        invited you.
+      </p>
+    </div>
+  )
+}
+
 export function CandidatePage() {
   const { token } = useParams<{ token: string }>()
   const { resolved } = useTheme()
@@ -106,9 +190,11 @@ export function CandidatePage() {
   const [candidateEmail, setCandidateEmail] = useState('')
   const [gateError, setGateError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
-  // From the liveness probe, so the gate screen knows whether to disclose
-  // monitoring before the candidate identifies themselves.
-  const [gateProctored, setGateProctored] = useState(true)
+  // The liveness probe: monitored or not (I1) and, since P2a, the title,
+  // organisation, question count, duration and languages — what the gate says
+  // before the candidate identifies themselves.
+  const [gateInfo, setGateInfo] = useState<InviteStatusResponse | null>(null)
+  const gateProctored = gateInfo?.proctored !== false
   // Agreement to the privacy notice and terms (X04). The server refuses a
   // sitting that begins without it; this only stops the candidate discovering
   // that through an error message.
@@ -129,6 +215,9 @@ export function CandidatePage() {
   const [serverDrafts, setServerDrafts] = useState<ServerDraft[]>([])
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // The one-shot submit asks first (P2a). Only the candidate's own click opens
+  // this; the deadline auto-submit calls doSubmit directly and never asks.
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   // Server-authoritative deadline (ISO) from /start; null = untimed. The
   // countdown ticks to it, and `timeUp` flips once when it passes, triggering the
@@ -165,6 +254,10 @@ export function CandidatePage() {
   // The sitting is suspended: the gate is up and the candidate must return to
   // fullscreen. Everything that could change or submit an answer is off.
   const blocked = integrity.mustReturnToFullscreen
+  // Warn before the tab closes while an unsubmitted single-question editor is
+  // open (P2a). The multi-question flow guards itself, since it knows when the
+  // sitting is complete.
+  useLeaveGuard(stage === 'editor' && !isMultiQuestion)
 
   // Probe the link only — the question isn't served until the gate below proves
   // the visitor is one of the invited recipients.
@@ -173,7 +266,7 @@ export function CandidatePage() {
     api
       .getInvite(token)
       .then((status) => {
-        setGateProctored(status.proctored !== false)
+        setGateInfo(status)
         setStage('gate')
       })
       .catch((err) => {
@@ -261,6 +354,7 @@ export function CandidatePage() {
       // server copy carries `updated_at` and the local one now carries
       // `saved_at`, so both sides of that choice can be dated.
       const server = drafts.find((d) => d.question_id === data.questions?.[0]?.id) ?? drafts[0]
+      migrateLegacyDraft(token, candidateEmail)
       const local = loadDraft(token, candidateEmail)
       const serverDraft = server?.code ? server : null
       if (local?.code && serverDraft?.code && local.code !== serverDraft.code) {
@@ -372,7 +466,7 @@ export function CandidatePage() {
 
   function handleSubmitCode(e: FormEvent) {
     e.preventDefault()
-    void doSubmit()
+    setConfirmOpen(true)
   }
 
   // Tick the countdown once a second while the editor is open and the assessment
@@ -440,14 +534,12 @@ export function CandidatePage() {
     return (
       <div className="auth">
         <form className="auth-card" onSubmit={handleGateSubmit}>
-          <span className="auth-eyebrow">Invitation</span>
-          <h1>Coding assessment</h1>
-          <p className="auth-lead">
-            You’ve been invited to a timed coding assessment. Enter your details to begin — you’ll
-            see the problem and a code editor on the next screen. Use the email address your invite
-            was sent to.
-          </p>
+          <span className="auth-eyebrow">{gateInfo?.org_name ?? 'Invitation'}</span>
+          <h1>{gateInfo?.assessment_title ?? 'Coding assessment'}</h1>
+          <p className="auth-lead">{gateLead(gateInfo)}</p>
+          {gateInfo?.languages?.length ? <GateFacts info={gateInfo} /> : null}
           {gateProctored && <IntegrityNotice />}
+          <AssessmentNotice orgName={gateInfo?.org_name} />
           <div className="stack">
             {gateError && (
               <p role="alert" className="form-error">
@@ -668,7 +760,23 @@ export function CandidatePage() {
             remainingLabel={
               remainingMs !== null && remainingMs > 0 ? `${formatRemaining(remainingMs)} left` : null
             }
+            onSubmitAndLeave={code.trim() ? () => setConfirmOpen(true) : null}
           />
+          <ConfirmDialog
+            open={confirmOpen}
+            title="Submit?"
+            confirmLabel="Submit"
+            onCancel={() => setConfirmOpen(false)}
+            onConfirm={() => {
+              setConfirmOpen(false)
+              // Re-check what the button checked: the dialog outlives a
+              // fullscreen exit or the deadline, and neither may submit twice.
+              if (submitting || timeUp || blocked) return
+              void doSubmit()
+            }}
+          >
+            <p>You can’t change your code after this.</p>
+          </ConfirmDialog>
 
           <div className="editor-wrapper">
             <Editor
@@ -772,7 +880,7 @@ export function CandidatePage() {
             <button
               type="submit"
               className="btn submit"
-              disabled={submitting || running !== null || timeUp || blocked}
+              disabled={submitting || running !== null || timeUp || blocked || !code.trim()}
             >
               {submitting ? 'Submitting…' : 'Submit'}
             </button>
