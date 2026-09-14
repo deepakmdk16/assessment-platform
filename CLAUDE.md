@@ -205,9 +205,14 @@ aborts the push; E2E stays opt-in via `RUN_E2E=1` (CI already gates it). Gates
 ## Status & next
 
 Pending / next work lives in [STATUS.md](STATUS.md) — a short, **open-items-only**
-list. Feature *history* is `git log` (commits are per-slice and detailed), not a
-changelog file. **Pre-push checkpoint #5 applies to STATUS.md:** update it in the
-same commit that opens or closes an item.
+list, whose first section points at the untracked plan files that own the *order*
+of work. Feature *history* is `git log` (commits are per-slice and detailed), not
+a changelog file. **Pre-push checkpoint #5 applies to STATUS.md:** update it in
+the same commit that opens or closes an item.
+
+Working rule for any item: **make the feature work end to end, then the UI, then
+scale** — open for extension, closed for modification. Don't put UI on a path
+whose end-to-end test is missing.
 
 ## Companion repo
 
