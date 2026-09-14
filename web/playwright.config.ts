@@ -11,12 +11,17 @@ const repoRoot = path.resolve(dir, '..')
 // server here deliberately refuses to reuse an existing listener. Overriding lets
 // the suite run beside a live dev stack on a spare set:
 //   E2E_PLATFORM_PORT=9100 E2E_FRONTEND_PORT=5273 E2E_AGENT_PORT=8200 RUN_E2E=1 …
-const PLATFORM_PORT = process.env.E2E_PLATFORM_PORT ?? '9000'
-const FRONTEND_PORT = process.env.E2E_FRONTEND_PORT ?? '5173'
+// `||`, not `??`: an unset shell variable expands to the EMPTY STRING, which `??`
+// keeps — `http://127.0.0.1:` — while every truthiness test below takes the
+// default branch, so the suite would start servers on the default ports and then
+// poll an invalid URL until the timeout.
+const OVERRIDDEN = Boolean(process.env.E2E_PLATFORM_PORT || process.env.E2E_FRONTEND_PORT)
+const PLATFORM_PORT = process.env.E2E_PLATFORM_PORT || '9000'
+const FRONTEND_PORT = process.env.E2E_FRONTEND_PORT || '5173'
 // NOT :8000 — that's the real assess-agent's port. With reuseExistingServer on
 // (local runs), a running agent container answering /health there would be
 // silently reused as if it were the mock, and specs then hit a real grader.
-const AGENT_PORT = process.env.E2E_AGENT_PORT ?? '8100'
+const AGENT_PORT = process.env.E2E_AGENT_PORT || '8100'
 
 const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`
 const PLATFORM_URL = `http://127.0.0.1:${PLATFORM_PORT}`
@@ -112,18 +117,21 @@ export default defineConfig({
       // overriding them unconditionally would hide a regression in that file from
       // this suite. Only an explicit E2E_FRONTEND_PORT passes one through, which
       // is opt-in and never what CI runs.
-      command: process.env.E2E_FRONTEND_PORT
+      command: OVERRIDDEN
         ? `npm run dev -- --port ${FRONTEND_PORT} --strictPort`
         : 'npm run dev',
       url: FRONTEND_URL,
       // Reuse only on the default port. On an overridden set the whole point is a
       // private stack, and adopting a stray listener would point the app back at
       // :9000 — the dev server, with the dev database and the wrong CORS origin.
-      reuseExistingServer: !process.env.CI && !process.env.E2E_FRONTEND_PORT,
+      reuseExistingServer: !process.env.CI && !OVERRIDDEN,
       stdout: 'pipe',
-      // src/api.ts defaults to :9000; on an overridden set it must follow the
-      // platform this suite actually started.
-      env: { VITE_API_BASE_URL: PLATFORM_URL },
+      // Only on an overridden set. src/api.ts defaults to :9000, and pinning this
+      // unconditionally would hide a regression in that default from this suite —
+      // the same reasoning that refuses an unconditional --port above. It would
+      // also be asymmetric: the default path reuses an existing vite, which never
+      // sees this env at all.
+      ...(OVERRIDDEN ? { env: { VITE_API_BASE_URL: PLATFORM_URL } } : {}),
     },
   ],
 })

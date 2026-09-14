@@ -201,12 +201,12 @@ aborts the push; E2E stays opt-in via `RUN_E2E=1` (CI already gates it). Gates
 2. If `web/` changed: `npm run build`, `typecheck`, `lint`, `test` all clean.
    `lint` includes the copy and claims gates — see [docs/GLOSSARY.md](docs/GLOSSARY.md)
    and [docs/CLAIMS.md](docs/CLAIMS.md).
-2b. **If a `.tsx` changed, run the visual gate**: `RUN_E2E=1 bash scripts/checkpoints.sh`,
-   or just `cd web && npx playwright test visual-gate`. It renders every route at
-   1280x800 and 390x844 in both themes and asserts no horizontal overflow and no
-   serious/critical axe violation. CI runs it on every PR, but finding it there
-   costs a round trip. Running beside a live dev stack:
-   `E2E_PLATFORM_PORT=9100 E2E_FRONTEND_PORT=5273 E2E_AGENT_PORT=8200 npx playwright test visual-gate`.
+   - **If a `.tsx` changed, run the visual gate**: `RUN_E2E=1 bash scripts/checkpoints.sh`,
+     or `cd web && npx playwright test visual-gate`. It renders the routes it
+     lists (see the spec) at 1280x800 and 390x844 in both themes and asserts no
+     horizontal overflow and no serious/critical axe violation. CI runs it on
+     every PR, but finding it there costs a round trip. Beside a live dev stack:
+     `E2E_PLATFORM_PORT=9100 E2E_FRONTEND_PORT=5273 E2E_AGENT_PORT=8200 npx playwright test visual-gate`.
 3. `/code-review` (or a self-review of the diff) has been run.
 4. New endpoints have tests that run **offline** (mock the agent call; no network,
    no real LLM).

@@ -124,6 +124,23 @@ stack instead of demanding :9000 be free. The platform server is handed a
 matching `FRONTEND_BASE_URL` — without it, invite links point at whatever holds
 the default port and every candidate spec walks into the wrong stack.
 
+### S00b review leftovers — 2026-09-14
+
+- **P2 · S — The visual gate does not cover `/submissions/:id` or
+  `/variant-sets/:id`.** Both need a fixture the spec does not build (a graded
+  submission; a drafted set), and both are table-heavy interviewer surfaces —
+  the shape most likely to overflow at 390 px, which is what R2-154 and R2-159
+  are about. Add them with their fixtures; the spec's header names them.
+- **P3 · XS — `web/e2e/visual-gate.spec.ts` and `web/e2e/helpers.ts` each carry
+  their own copy of the API base-URL expression.** Export it from `helpers.ts`
+  once; the copy that gets missed only fails under an overridden port set, which
+  CI never exercises.
+- **P3 · S — Visual-gate screenshots are written to a hand-built relative path
+  rather than attached via `testInfo.attach()`.** Run from the repo root instead
+  of `web/`, the PNGs land outside both the CI artifact path and `.gitignore`.
+  Attaching them would fold them into the existing `playwright-report` artifact
+  and remove the second upload step in `e2e.yml`.
+
 ### S00 review leftovers — 2026-09-14
 
 - **P2 · S — Platform CI now depends on the agent repo's live default branch.**
