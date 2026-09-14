@@ -3008,6 +3008,26 @@ button.tab:hover {
   color: var(--color-bad);
 }
 
+/* Coming back from another tab (U05). Same shape as .blocked, in the warn
+   colour rather than the bad one: a tab switch is permitted and recorded, not
+   refused — the paste block stops something, this only acknowledges it. */
+.editor-hint.away {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0 0 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-warn);
+  border-radius: var(--radius-sm);
+  background: var(--color-warn-soft);
+  color: var(--color-text);
+  font-size: 0.8rem;
+}
+
+.editor-hint.away strong {
+  color: var(--color-warn);
+}
+
 .integrity {
   padding: 1rem 1.1rem;
   overflow-y: auto;

@@ -31,6 +31,7 @@ function Harness({ enabled = true, questionId = 'q1' }: { enabled?: boolean; que
       <span data-testid="must-return">{String(integrity.mustReturnToFullscreen)}</span>
       <span data-testid="exits">{integrity.fullscreenExits}</span>
       <span data-testid="blocked">{integrity.pasteBlocked?.size ?? ''}</span>
+      <span data-testid="away">{integrity.awayNotice?.durationMs ?? ''}</span>
       <button type="button" onClick={integrity.flush}>
         flush
       </button>
@@ -149,6 +150,55 @@ describe('focus and fullscreen', () => {
     await waitFor(() => expect(posted().length).toBeGreaterThan(0))
     const focus = posted().find((e) => e.kind === 'focus_loss')
     expect(focus?.duration_ms).toBeGreaterThanOrEqual(4000)
+    // ...and tells the candidate it was seen (U05). A tab switch cannot be
+    // blocked by any browser API, so acknowledging it is the whole response.
+    expect(screen.getByTestId('away').textContent).not.toBe('')
+    expect(Number(screen.getByTestId('away').textContent)).toBeGreaterThanOrEqual(4000)
+    visibility.mockRestore()
+  })
+
+  it('records a momentary flicker but does not announce it', async () => {
+    // A notification stealing focus or a screenshot is not a visit elsewhere;
+    // nagging about those would train the candidate to ignore the notice.
+    render(<Harness />)
+    const visibility = vi.spyOn(document, 'visibilityState', 'get')
+
+    visibility.mockReturnValue('hidden')
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+    visibility.mockReturnValue('visible')
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+
+    expect(screen.getByTestId('away')).toHaveTextContent('')
+    act(() => screen.getByText('flush').click())
+    await waitFor(() => expect(posted().length).toBeGreaterThan(0))
+    expect(posted().find((e) => e.kind === 'focus_loss')).toBeDefined()
+    visibility.mockRestore()
+  })
+
+  it('says nothing about a tab switch in an unmonitored sitting', async () => {
+    // Nothing is recorded without the monitoring consent, so there is nothing
+    // to acknowledge either.
+    render(<Harness enabled={false} />)
+    const visibility = vi.spyOn(document, 'visibilityState', 'get')
+    visibility.mockReturnValue('hidden')
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(9000)
+    })
+    visibility.mockReturnValue('visible')
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(screen.getByTestId('away')).toHaveTextContent('')
     visibility.mockRestore()
   })
 

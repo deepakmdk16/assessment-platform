@@ -35,8 +35,20 @@ export function IntegrityNotice() {
   )
 }
 
-/** The blocking fullscreen prompt + the blocked-paste message, rendered over the
- *  editor. Renders nothing when the sitting is unmonitored or nothing is wrong. */
+/** How long they were gone, in the words a person would use. */
+function awayLabel(ms: number): string {
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? '' : 's'}`
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return rest === 0
+    ? `${minutes} minute${minutes === 1 ? '' : 's'}`
+    : `${minutes}m ${rest}s`
+}
+
+/** The blocking fullscreen prompt, the blocked-paste message, and the
+ *  acknowledgement that a tab switch was seen, rendered over the editor. Renders
+ *  nothing when the sitting is unmonitored or nothing is wrong. */
 export function IntegrityOverlay({
   integrity,
   remainingLabel,
@@ -52,11 +64,29 @@ export function IntegrityOverlay({
    *  disables the button rather than hiding the choice. */
   onSubmitAndLeave?: (() => void) | null
 }) {
-  const { mustReturnToFullscreen, pasteBlocked, dismissPasteBlock } = integrity
-  if (!mustReturnToFullscreen && !pasteBlocked) return null
+  const { mustReturnToFullscreen, pasteBlocked, dismissPasteBlock, awayNotice, dismissAwayNotice } =
+    integrity
+  if (!mustReturnToFullscreen && !pasteBlocked && !awayNotice) return null
 
   return (
     <>
+      {/* Welcome back, and yes — that was recorded (U05). A tab switch is the
+          one thing a browser gives a page no way to block, so saying it was
+          seen is the whole of what can be done about it; staying silent left
+          the candidate believing nothing happened. Dismissible, not blocking:
+          they consented to being monitored, not to being locked out. */}
+      {awayNotice && (
+        <div className="editor-hint away" role="status">
+          <span>
+            <strong>You left this tab for {awayLabel(awayNotice.durationMs)}.</strong> That was
+            recorded and is shared with the interviewer, as the start screen said. The clock kept
+            running.
+          </span>
+          <button type="button" className="btn-link" onClick={dismissAwayNotice}>
+            Dismiss
+          </button>
+        </div>
+      )}
       {pasteBlocked && (
         <div className="editor-hint blocked" role="alert">
           <span>

@@ -29,6 +29,10 @@ const FLUSH_INTERVAL_MS = 10_000
 /** Max events per request — matches the server's batch ceiling. */
 const MAX_BATCH = 50
 
+/** Below this, a hidden tab is a notification stealing focus or a screenshot,
+ *  not a visit somewhere else. Recorded either way; only announced above it. */
+const AWAY_NOTICE_MS = 1500
+
 /** Clipboard text is remembered per sitting to tell an in-page copy from an
  *  outside one. Bounded so a candidate who copies constantly can't grow it
  *  without limit; the oldest entries fall off first. */
@@ -71,6 +75,10 @@ export interface IntegrityState {
   /** Set when a paste was just rejected; cleared by `dismissPasteBlock`. */
   pasteBlocked: { size: number } | null
   dismissPasteBlock: () => void
+  /** Set when the candidate comes back from another tab, so the return can be
+   *  acknowledged instead of only logged (U05); cleared by `dismissAwayNotice`. */
+  awayNotice: { durationMs: number } | null
+  dismissAwayNotice: () => void
   /** Ask the browser for fullscreen. Called from the start button and from the
    *  "return to fullscreen" prompt — both are user gestures, which is the only
    *  context where a browser will grant it. */
@@ -102,6 +110,7 @@ export function useIntegrity({
   const [mustReturnToFullscreen, setMustReturn] = useState(false)
   const [fullscreenExits, setFullscreenExits] = useState(0)
   const [pasteBlocked, setPasteBlocked] = useState<{ size: number } | null>(null)
+  const [awayNotice, setAwayNotice] = useState<{ durationMs: number } | null>(null)
 
   const record = useCallback(
     (kind: IntegrityEventKind, extra: Partial<IntegrityEventIn> = {}) => {
@@ -159,6 +168,14 @@ export function useIntegrity({
         const away = Date.now() - awaySince.current
         awaySince.current = null
         record('focus_loss', { duration_ms: away })
+        // A tab switch is the one thing a browser gives a page NO way to block
+        // — there is no API for it, and `beforeunload` only fires on a real
+        // unload. So the honest response is to say it was seen (U05): the
+        // candidate agreed to exactly this on the start screen, and a signal
+        // sent only to the interviewer deters nobody. Brief flickers (a
+        // screenshot, a notification stealing focus) are recorded but not
+        // announced — nagging about those would train them to ignore it.
+        if (away >= AWAY_NOTICE_MS) setAwayNotice({ durationMs: away })
       }
     }
     document.addEventListener('visibilitychange', onVisibility)
@@ -254,12 +271,15 @@ export function useIntegrity({
   }, [enabled, flush])
 
   const dismissPasteBlock = useCallback(() => setPasteBlocked(null), [])
+  const dismissAwayNotice = useCallback(() => setAwayNotice(null), [])
 
   return {
     mustReturnToFullscreen: enabled && mustReturnToFullscreen,
     fullscreenExits,
     pasteBlocked,
     dismissPasteBlock,
+    awayNotice: enabled ? awayNotice : null,
+    dismissAwayNotice,
     enterFullscreen,
     flush,
   }

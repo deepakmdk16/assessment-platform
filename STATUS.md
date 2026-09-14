@@ -30,59 +30,33 @@ so nothing here is waiting on it.
 ## Product walkthrough — 2026-09-14 (fix before any new feature)
 
 Ten gaps the user hit driving the running stack, plus one spotted in the same
-screenshots. Where the code contradicted the report, the entry says so rather
-than repeating the symptom.
+screenshots. All ten are closed. Where the code contradicted the report, the
+entry below says so rather than repeating the symptom.
 
-Closed: U01 (radio layout), U03 (confirm password), U04 (start screen — 1050px
-to 720px, Start now 163px above a 909px fold), U06 + U07 (analytics behind the
-numbers, one rail entry for the library), U08's code half, U09 (delivery failure
-out of the cell, link truncated), U10's cause. Design direction A, signed off
-against https://claude.ai/code/artifact/6d348599-0df6-4e19-9acc-47375dceeffe
+Closed: U01 (radio layout), U02 (mail preflight + the app password now set —
+verified by a real reset leaving the server), U03 (confirm password), U04 (start
+screen 1050px → 720px, Start 163px above a 909px fold), U05 (a tab switch is
+acknowledged on return), U06 + U07 (analytics behind the numbers, one rail entry
+for the library), U08 (`PATCH /auth/me` + the Account form), U09 (delivery
+failure out of the cell, link truncated), U10 (the agent no longer writes the
+example into the prompt body). Layout direction A, signed off against
+https://claude.ai/code/artifact/6d348599-0df6-4e19-9acc-47375dceeffe
 
-- **U02 · P1 · S — Password resets are not delivered. Remaining half is a
-credential.**
-  The code half shipped: `email_client.check_login()` now proves the mailer can
-  connect and authenticate at boot, refuses to start on credentials the provider
-  rejects, and logs a named ERROR when SMTP_USER/SMTP_PASSWORD are not both set
-  against a non-local host — the exact shape that produced `530 5.7.0
-  Authentication Required` on every send while `/auth/forgot-password` kept
-  answering 202. Why this is still open: **the deployment's own SMTP_PASSWORD is
-  still wrong or unset**, so nothing is delivered until a Gmail *app password*
-  (16 characters, not the account password) is set in `.env`. Fix: set it and
-  restart — the boot now says which of the two failures it is.
-- **U05 · P2 · S — Leaving a sitting: reported unguarded, but NOT REPRODUCIBLE.**
-  Evidence *against* the report: driven in a real browser against the running
-  stack, `page.close({runBeforeUnload:true})` after typing raises the
-  `beforeunload` dialog in **both** flows — the 3-question `AssessmentFlow`
-  (`useLeaveGuard(!complete)`, `AssessmentFlow.tsx:169`) and the 1-question
-  `CandidatePage` (`:269`). The editor screen also exposes no in-app link to
-  leave by (`a` count = 0; the header logo is a bare `<img>`). So the guard P2a
-  shipped is working. What the probe DID confirm is latent, not what was
-  reported: `beforeunload` is structurally blind to same-document History
-  transitions, so the day anything adds a router `navigate()` or a `<Link>` to
-  the editor screen, the guard silently stops covering it. Fix: **ask for the
-  exact exit action** (tab close? browser Back? a click — on what?) before
-  writing code; a `useBlocker`-style in-app guard needs a data router
-  (`createBrowserRouter`), which `main.tsx` does not use.
+What remains is the leftovers below, plus:
+
 - **U08b · P3 · S — A member cannot reach billing at all.**
-  The reported gap (Settings cannot edit the person) is closed: `PATCH /auth/me`
-  is back for name + address, with the address confirmed from its own inbox
-  before it applies, and `AccountPanel` has the form. **Billing was never
-  missing** — `BillingPanel.tsx` already shows `Renews <date>`, the plan cards
-  with prices and this month's usage against the allowance. What remains is that
-  P3a hides admin-only sections outright, so a *member* who wants to upgrade
+  The reported gap (Settings cannot edit the person) is closed. **Billing was
+  never missing** — `BillingPanel.tsx` already shows `Renews <date>`, the plan
+  cards with prices and this month's usage against the allowance. What remains is
+  that P3a hides admin-only sections outright, so a *member* who wants to upgrade
   sees no panel and no route to ask. Fix: decide whether a member sees billing
   read-only with an "ask an admin" line, or nothing at all — a product call, not
   a bug.
 - **U10b · P3 · XS — Questions drafted before today still carry the duplicate.**
-  The cause is fixed agent-side (`authoring.py:_to_loader_dict` no longer
-  appends the worked example to the prompt body, so the prompt is the statement
-  and the example lives only in `example_input`/`example_output` — which also
-  ends the same duplication in `report.py` and `adversarial.py`). Rows already
-  in the database still have it baked into `prompt`. Why it is P3: it is data,
-  not code, and re-drafting fixes it. Fix: leave it, or strip a trailing
-  `Example:` block once as a one-off script. A platform-side strip on render is
-  explicitly NOT the fix.
+  The cause is fixed agent-side (`authoring.py:_to_loader_dict`). Rows already in
+  the database still have the example baked into `prompt`. It is data, not code,
+  and re-drafting clears it. Fix: leave it, or strip a trailing `Example:` block
+  once as a one-off script. A platform-side strip on render is NOT the fix.
 - **U11 · P2 · S — Drafted constraints hand the candidate the solution.** *(not
 reported — visible in the same screenshot)*
   Evidence: a question's Constraints reads "1 <= N, M <= 1000, so an O(N^2 * K)
@@ -97,9 +71,15 @@ reported — visible in the same screenshot)*
 
 ### Walkthrough leftovers — 2026-09-14
 
+- **P2 · S — An unmonitored sitting sees nothing of a tab switch.** U05's
+  acknowledgement rides on `useIntegrity`, which is `enabled` only when the invite
+  is `proctored`. That is deliberate — nothing is recorded without the monitoring
+  consent, so there is nothing to acknowledge — but it means an interviewer who
+  turns proctoring off gets no tab-switch signal at all and may not realise it.
+  Fix: say so where proctoring is turned off, not by tracking regardless.
 - **P3 · XS — "Show archived" stayed a checkbox, not a third tab.** The signed-off
   mockup drew three tabs (All / Variant sets / Archived). Archived is an orthogonal
-  filter — archived *variant sets* exist too — so a third tab would have made it
+  filter — archived *variant sets* exist too — so a third tab would have made them
   unreachable from the sets view. `DashboardPage.tsx` list-toolbar. Revisit if the
   checkbox reads as clutter beside the tab strip.
 - **P3 · XS — The analytics drawer still fetches on page load.** `AnalyticsPanel`
