@@ -26,6 +26,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The cross-repo gates — signing.py / callback_contract.py byte parity in
+      # checkpoints.sh, and the question-validator + body-size parity test — all
+      # skip silently when the companion repo isn't beside this one, which in CI
+      # would mean the drift they exist to catch ships green. Actions cannot check
+      # out above the workspace, so the agent goes INSIDE it; pytest's `testpaths`
+      # and ruff's `extend-exclude` keep its own suite out of this repo's gate.
+      - name: Check out the companion agent repo (for the cross-repo parity gates)
+        uses: actions/checkout@v4
+        with:
+          repository: deepakmdk16/AssesmentAgent
+          path: AssesmentAgent
+
       - name: Set up uv (installs Python from pyproject)
         uses: astral-sh/setup-uv@v5
         with:

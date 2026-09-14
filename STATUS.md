@@ -56,6 +56,29 @@ then the UI, then scale** — open for extension, closed for modification.
 
 ---
 
+## Installed gates (S00) — what a session must do when it closes a finding
+
+The audit's nine failure classes get mechanical checks, installed **before** the
+fixes so no new drift lands while the fixes are outstanding. Each gate records the
+violations that exist today as a **strict** expected-failure or an explicit
+allowlist naming the finding and the session that closes it — strict meaning the
+gate fails if a listed violation starts *passing*, so the list cannot rot.
+
+**When your session fixes a listed finding, delete its entry in the same commit**
+— the gate will fail until you do.
+
+- **G1 · `tests/test_agent_contract_parity.py`** — the platform may not store a
+  question the agent refuses to grade, and may not build a result callback over
+  its own body cap. Imports the agent from the sibling checkout (`../AssesmentAgent`
+  locally, `./AssesmentAgent` in CI, which `checks.yml` now checks out) and skips
+  with a notice when absent. Also asserts `question_rules.MIN_CORRECTNESS_CASES`
+  equals the agent's, replacing the old "keep identical" comment.
+  Listed today: 10 × R2-002 (→ S02), 1 × R2-001 (→ S01).
+  The agent's `scripts/checkpoints.sh` runs this test too — the edit that breaks
+  it is usually made on that side.
+
+---
+
 ## Product walkthrough — 2026-09-14 (all ten closed; leftovers below)
 
 Ten gaps the user hit driving the running stack, plus one spotted in the same
