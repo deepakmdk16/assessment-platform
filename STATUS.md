@@ -12,7 +12,10 @@ Priority: **P0** blocks taking money or endangers customers · **P1** first payi
 customers hit it · **P2** fix before scale · **P3** polish.
 Effort: **XS** minutes · **S** self-contained · **M** multi-file · **L** data + API + UI.
 
-**Sequence:** (1) deploy + ops (X20, P26, X11) · (2) the rest by priority.
+**Order of work lives in one place: the plan file** (see the audit pointer
+below), not here — a "sequence" line in this file is dead text the `/next` skill
+never reads.
+
 The stack is deployable — `docker-compose.yml` + `docs/DEPLOY.md` (X05) — and
 now observable: `/metrics`, JSON logs carrying a request id that spans both
 services, and DSN-gated Sentry (X08). It is still unbacked-up (X20), so that
@@ -27,7 +30,33 @@ so nothing here is waiting on it.
 
 ---
 
-## Product walkthrough — 2026-09-14 (fix before any new feature)
+## Where the open work is listed (read this first)
+
+Two working documents live **outside git**, in the parent directory, and are
+deliberately untracked (`.git/info/exclude`). They are the current source of
+order; this file remains the tracked record of individual open items.
+
+- `../PRODUCT-AUDIT-2026-09-14.md` — a full re-audit at platform `f07f80b` /
+  agent `878d265`, after U01–U11 merged: **164 findings** (2 P0, 14 P1, 59 P2,
+  89 P3) in an `R2-nnn` namespace, none of them duplicating anything in this
+  file. Raw per-area reports, 190 walkthrough screenshots and the accessibility
+  dump are in `../audit-2026-09-14-reports/`.
+- `../AUDIT-SESSIONS-2026-09-14.md` — those 164 bucketed into sessions **S00–S30**
+  in the order to take them, plus the nine mechanical gates (G1–G9) that would
+  have caught each class. **S00 installs the gates and comes first.**
+
+Two P0s are live and both are reproduced: a submission whose question has a
+performance input over 4 MB never receives its grade (the result callback
+exceeds the body cap), and a question saved with blank constraints — the wizard's
+default — is refused by the agent's validator, so every submission against it
+ends as "error".
+
+Working rule for any item, here or there: **make the feature work end to end,
+then the UI, then scale** — open for extension, closed for modification.
+
+---
+
+## Product walkthrough — 2026-09-14 (all ten closed; leftovers below)
 
 Ten gaps the user hit driving the running stack, plus one spotted in the same
 screenshots. All ten are closed. Where the code contradicted the report, the
@@ -140,7 +169,7 @@ archiving does not stop links.**
   the `results_notified_at` interaction either way.
   _Verified: traced by /integration-check on the X06/X23 branch._
 - **X27 · P2 · XS — The privacy notice and DPA do not mention the results webhook.**
-  Evidence: docs/PRIVACY.md:73-81 lists who candidate data reaches — the employer,
+  Evidence: docs/`PRIVACY.md` §"Who it is shared with" lists who candidate data reaches — the employer,
   the named sub-processors, and "**Nobody else.**" The webhook (X06) sends
   candidate name and email to an address the customer nominates; docs/DPA.md:50-55
   has no row for a controller-configured egress. Why: likely fine in law (the
@@ -218,7 +247,7 @@ per scrape.**
   _Verified: opened by X08, which built the exposition but deliberately stopped
   short of adding infrastructure nobody had asked for._
 - **X09 · P1 · S — Rate limits are per-IP, never per-tenant, in both services.**
-  Evidence: platform config.py:145-167 and api.py:433,461,2480 key on client_ip;
+  Evidence: platform `config.py`'s rate-limit block and api.py:433,461,2480 key on client_ip;
   agent ratelimit.py per-IP and in-memory (A13). Why: an office behind one NAT
   shares one bucket; one tenant cannot be capped independently. Fix: key expensive
   buckets (draft, submit, invites) on org_id in addition to IP; agent limiting moved
@@ -227,7 +256,7 @@ per scrape.**
 - **X10 · P1 · M — Interviewer-facing gaps a first paying customer hits.**
   Evidence: no question import/bulk upload (only hand-form or AI
   draft, api.py:554); no candidate-facing feedback or score (CandidatePage.tsx:345);
-  no re-invite/extend-deadline (STATUS.md:118-121); no custom domain/white-label
+  no re-invite/extend-deadline (the re-invite gap in X10); no custom domain/white-label
   beyond logo/org text (models.py:165-166).
   Why: procurement and onboarding stall on table-stakes features. Fix: import and
   re-invite are what is left here. (Team and self-serve org onboarding shipped
@@ -308,8 +337,8 @@ retention.**
   _Verified: cited lines read in this audit; source: backend._
 - **P08 · P2 · S — Candidate email plus the secret token land in access logs via the
 draft GET query string.**
-  Evidence: GET /invite/{token}/draft?candidate_email= (api.py:2641-2645,
-  web/src/api.ts:322); uvicorn logs the query string regardless of LOG_PII;
+  Evidence: GET /invite/{token}/draft?candidate_email=
+  (`api::candidate_get_drafts`, `web/src/api.ts::readDraft`); uvicorn logs the query string regardless of LOG_PII;
   test_logging_redaction.py covers only email_client. Why: PII + bearer-equivalent
   token in plain logs. Fix: carry the email in a header or POST body.
   Narrowed but NOT closed by X08: `observability.QueryStringFilter` now redacts
@@ -345,7 +374,7 @@ depends on the session time zone.**
   DateTime(timezone=True)); emit offsets in CSV.
   _Verified: cited lines read in this audit; source: backend._
 - **P16 · P2 · XS — AssessmentUpdate.proctored defaults True on PUT.**
-  Evidence: schemas.py:176; a client omitting the field on a settings edit silently
+  Evidence: `schemas::AssessmentUpdate.proctored` (defaults True); a client omitting the field on a settings edit silently
   turns monitoring on for future invites. Why: silent behaviour change on a
   full-replace endpoint. Fix: make proctored required on PUT.
   _Verified: cited lines read in this audit; source: backend._
@@ -376,16 +405,17 @@ payloads 500 or get stored.**
   echo the agent's new infra_error for a toolchain the jail can't see ("runtime
   not installed: … not on the jail PATH: 'ruby'").
   _Verified: cited lines read in this audit; source: quality._
-- **P22 · P2 · M — api.py is a 3,196-line god-module with the split seams already
+- **P22 · P2 · M — api.py is a 5,718-line god-module with the split seams already
 drawn.**
-  Evidence: 52 routes, 132 top-level defs, 13 banner sections (lines 160, 383, 399,
-  500, 691, 1117, 1370, 1721, 2014, 2674, 3032, 3084); maintainability index 0;
-  _assessment_attempt_rows 1567-1720 has cyclomatic complexity 40; four copies of
-  the load+404/403 helper (504, 514, 699, 1121); archive/unarchive pairs duplicated
-  (1007-1042 ≡ 1312-1343); create_invite ≡ create_assessment_invite (1375-1408 vs
-  1424-1460); count+slice pagination ×8; manual updated_at writes ×9 despite
-  onupdate=_utcnow (models.py:40); Questions CRUD (924-1115) sits under the "Variant
-  sets" banner. Why: every feature touches one file; reviews collide; the 154-line
+  Evidence: 86 route decorators, 183 top-level defs, 28 banner sections;
+  maintainability index 0; `api::_assessment_attempt_rows` is 167 lines with
+  cyclomatic complexity ~40; the load+404/403 helper is copied per resource
+  (`_owned_question`, `_owned_assessment`, `_owned_variant_set`,
+  `_owned_submission`); the archive/unarchive pairs are duplicated
+  (`archive_question` ≡ `archive_assessment`); `create_invite` ≡
+  `create_assessment_invite`; count+slice pagination ×8; 14 manual `updated_at`
+  writes despite `models::_updated_at`'s `onupdate`; Questions CRUD sits under the
+  "Variant sets" banner. Why: every feature touches one file; reviews collide; the 154-line
   function is where the next bug lands. Fix: APIRouter per banner into
   routes/{auth,questions,variant_sets,assessments,invites,analytics,candidate,submissions,callback}.py;
   serializers → mappers.py; one generic _owned(Model, id, current, session) +
@@ -393,7 +423,7 @@ drawn.**
   _Verified: cited lines read in this audit; source: quality,backend._
 - **P26 · P2 · S — The cross-repo parity gates (signing.py, callback contract) never
 run in CI.**
-  Evidence: scripts/checkpoints.sh (agent :41,59; platform :70,88) skip the
+  Evidence: both `scripts/checkpoints.sh` files skip the
   byte-parity checks when ../<companion> isn't checked out — always the case in CI
   (single-repo checkout); CLAUDE.md says "fails the push on divergence" but that
   holds only with the opt-in pre-push hook, bypassable with --no-verify. Why: a
@@ -430,7 +460,7 @@ docstrings and .env.example lag the code.**
   _Verified: single-audit claim, not independently re-verified; source:
   backend,saas._
 - **W09 · P2 · XS — A transient network failure on boot logs the interviewer out.**
-  Evidence: auth/AuthContext.tsx:35-39 clears the token on any me() rejection, not
+  Evidence: auth/`AuthContext.tsx` boot effect clears the token on any me() rejection, not
   just 401. Why: flaky Wi-Fi forces a re-login. Fix: clearToken() only on ApiError
   401; otherwise keep the token and retry.
   _Verified: cited lines read in this audit; source: frontend._
@@ -465,10 +495,10 @@ ErrorBoundary only logs; 401 redirect loses returnTo.**
   recipient parsers and the duplicated invite table were extracted 2026-09-08._
 - **W18 · P2 · S — Hand-written types.ts mirrors 66 pydantic schemas with no drift
 gate.**
-  Evidence: types.ts (627 lines, 61 exports) vs schemas.py (66 classes); no OpenAPI
+  Evidence: types.ts (850 lines, 61 exports) vs schemas.py (66 classes); no OpenAPI
   generation; api.ts:112 is an unchecked `as T`; looseness already exists:
   QuestionIn.required_complexity: string vs backend str | None (schemas.py:98),
-  InviteStatus = string (types.ts:163). Why: a renamed/nullable backend field ships
+  InviteStatus = string (`types.ts`). Why: a renamed/nullable backend field ships
   silently. Fix: openapi-typescript from /openapi.json → types.gen.ts with a CI diff
   step.
   _Verified: cited lines read in this audit; source: quality._
@@ -582,10 +612,11 @@ timestamps wrong.**
   Submission.status got its index with the grading-durability change), Invite.status,
   AssessmentResult.verdict; IntegrityEvent has only single-column indexes for
   (invite_id, candidate_email) reads; status/verdict/category/kind are bare str with
-  comments (models.py:89, 141, 249, 419, 434) hence `# type: ignore[arg-type]` at
-  api.py:200; CandidateDraft.updated_at uses _created_at() (models.py:387) so lacks
-  onupdate, and the table has no created_at contrary to models.py:9-10 and
-  CONVENTIONS. Why: full scans on the hot paths as data grows; invalid states
+  comments (`models::Organization.plan_status`, `OrgAsset.kind`, `Question.status`,
+  `Invite.status`, `QuestionTestCase.category`) hence the `# type: ignore[arg-type]`
+  in `api.py`; `models::CandidateDraft.updated_at` uses `_created_at()` so lacks
+  onupdate, and the table has no created_at contrary to `models.py`'s own header
+  comment and CONVENTIONS. Why: full scans on the hot paths as data grows; invalid states
   representable. Fix: one migration adding the indexes; sa.Enum(native_enum=False)
   or CHECK constraints; fix the draft timestamps.
   _Verified: single-audit claim, not independently re-verified; source: quality._
