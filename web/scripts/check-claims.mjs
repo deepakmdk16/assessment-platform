@@ -77,8 +77,11 @@ for (const file of [...walk(WEB_SRC), EMAIL_TEMPLATES]) {
         while ((m = pattern.exec(line)) !== null) {
           const text = m[1].trim()
           if (text.length < MIN_CLAIM_CHARS || !CLAIM_KEYWORDS.test(text)) continue
-          const row = registered.find((claim) => text.includes(claim))
-          if (row) used.add(row)
+          // Every matching row, not just the first: rows nest ("Fullscreen,
+          // pasting blocked," contains "pasting blocked,"), and marking only the
+          // longest used would report the shorter one as retired copy.
+          const rows = registered.filter((claim) => text.includes(claim))
+          if (rows.length) for (const row of rows) used.add(row)
           else unregistered.push(`${key}:${i + 1}: "${text.slice(0, 90)}"`)
         }
       }

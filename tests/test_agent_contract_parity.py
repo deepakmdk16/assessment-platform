@@ -25,6 +25,7 @@ S01/S02 are still outstanding.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -51,7 +52,21 @@ AGENT_ROOT: Path | None = next(
     (p for p in _AGENT_CANDIDATES if (p / "assessment_agent" / "questions.py").is_file()), None
 )
 
-pytestmark = pytest.mark.skipif(
+# CI is responsible for making the companion present (checks.yml checks it out),
+# so there a missing companion is a failure, not a skip — otherwise the gate
+# degrades to a silent pass, which is the failure mode it was written to end.
+_REQUIRED = os.getenv("REQUIRE_COMPANION_REPO") == "1"
+if _REQUIRED and AGENT_ROOT is None:
+    raise RuntimeError(
+        "REQUIRE_COMPANION_REPO=1 but the agent repo is not checked out at "
+        f"{' or '.join(str(p) for p in _AGENT_CANDIDATES)} — the cross-repo parity "
+        "gate would silently skip."
+    )
+
+# Only the tests that actually import the agent. The body-cap tests below read
+# nothing but this repo, and must keep running on a lone checkout — a skip would
+# beat their strict xfail and quietly retire the R2-001 gate.
+needs_agent = pytest.mark.skipif(
     AGENT_ROOT is None,
     reason="companion agent repo not checked out beside this one — parity gate skipped",
 )
@@ -117,8 +132,13 @@ def _platform_stores(payload: dict[str, Any]) -> Question | None:
         return None
     if case_floor_violations([tc.category for tc in body.test_cases]):
         return None
+    # `create_question` strips an explicit id and generates a slug when nothing is
+    # left, so a blank id can never reach storage. Mirror that here rather than
+    # storing the blank — otherwise this probe invents a divergence the API cannot
+    # produce, and "fix" it by 422-ing the supported send-an-empty-id path.
+    explicit_id = (body.id or "").strip()
     return Question(
-        id=body.id or "parity_probe",
+        id=explicit_id or "generated-slug-1",
         org_id=1,
         title=body.title,
         prompt=body.prompt,
@@ -128,6 +148,10 @@ def _platform_stores(payload: dict[str, Any]) -> Question | None:
         required_complexity=body.required_complexity,
         example_input=body.example_input,
         example_output=body.example_output,
+        difficulty=body.difficulty,
+        reference_solution=body.reference_solution,
+        reference_language=body.reference_language,
+        duration_minutes=body.duration_minutes,
         test_cases=[
             QuestionTestCase(
                 name=tc.name,
@@ -206,10 +230,6 @@ def _bad_category(p: dict[str, Any]) -> None:
     p["test_cases"].append({**p["test_cases"][0], "name": "odd_one", "category": "smoke"})
 
 
-def _blank_id(p: dict[str, Any]) -> None:
-    p["id"] = "   "
-
-
 def _xfail(finding: str, session: str) -> pytest.MarkDecorator:
     return pytest.mark.xfail(
         strict=True,
@@ -220,7 +240,7 @@ def _xfail(finding: str, session: str) -> pytest.MarkDecorator:
 # Each entry: the mutation, and either no marks (the platform already refuses it)
 # or an xfail naming the finding. R2-002 names blank constraints, weight <= 0,
 # empty expected, duplicate case names and time limit 0 explicitly; the blank
-# title/prompt/id cases are the same class of missing `min_length` and ride with
+# title and prompt cases are the same class of missing `min_length` and ride with
 # it into S02.
 DIVERGENCE_CASES = [
     pytest.param(_blank_constraints, id="blank_constraints", marks=_xfail("R2-002", "S02")),
@@ -232,12 +252,12 @@ DIVERGENCE_CASES = [
     pytest.param(_empty_expected, id="empty_expected", marks=_xfail("R2-002", "S02")),
     pytest.param(_duplicate_case_names, id="duplicate_case_names", marks=_xfail("R2-002", "S02")),
     pytest.param(_blank_case_name, id="blank_case_name", marks=_xfail("R2-002", "S02")),
-    pytest.param(_blank_id, id="blank_id", marks=_xfail("R2-002", "S02")),
     # Already in parity: the platform's `Category` literal and the agent's agree.
     pytest.param(_bad_category, id="invalid_category"),
 ]
 
 
+@needs_agent
 @pytest.mark.parametrize("mutate", DIVERGENCE_CASES)
 def test_platform_refuses_what_the_agent_refuses(mutate: Mutation) -> None:
     """The core cross-repo invariant: a question the platform accepts must grade.
@@ -263,6 +283,7 @@ def test_platform_refuses_what_the_agent_refuses(mutate: Mutation) -> None:
     )
 
 
+@needs_agent
 def test_the_baseline_question_is_accepted_by_both() -> None:
     """Guards the cases above: if the baseline itself stopped being valid, every
     parametrised case would pass for the wrong reason."""
@@ -271,6 +292,7 @@ def test_the_baseline_question_is_accepted_by_both() -> None:
     assert _agent_refuses(stored) is None
 
 
+@needs_agent
 def test_case_floor_constant_matches_the_agent() -> None:
     """`question_rules.MIN_CORRECTNESS_CASES` is a hand-kept mirror of the agent's.
 
@@ -294,9 +316,6 @@ def test_case_floor_constant_matches_the_agent() -> None:
 # `api.py::_limit_body_size` 413s anything over MAX_BODY_BYTES. The agent does not
 # retry a 4xx, so the grade is lost. For the callback to be deliverable for every
 # question the platform will store, the platform must BOUND what it stores.
-_CANDIDATE_OUTPUT_CAP_ENV = "ASSESS_OUTPUT_LIMIT_MB"
-
-
 def _stored_case_char_caps() -> tuple[int | None, int | None]:
     """The platform's own `max_length` on a stored test case's stdin and expected
     (None = unbounded)."""
@@ -308,32 +327,72 @@ def _stored_case_char_caps() -> tuple[int | None, int | None]:
     return cap("stdin"), cap("expected")
 
 
-@_xfail("R2-001", "S01")
-def test_the_largest_storable_question_fits_the_callback_body_cap() -> None:
-    """A stored question must not be able to produce an undeliverable result.
+def _stored_case_count_cap() -> int | None:
+    """The platform's own cap on how many cases one question may carry."""
+    meta = QuestionCreate.model_fields["test_cases"].metadata
+    return next((m.max_length for m in meta if hasattr(m, "max_length")), None)
 
-    Two things have to hold, and neither does today:
-      1. the platform bounds each stored case's `stdin`/`expected`;
-      2. that bound, times the number of cases, plus the agent's per-case output
-         cap, fits under MAX_BODY_BYTES.
+
+@_xfail("R2-001", "S01")
+def test_a_stored_question_is_size_bounded() -> None:
+    """Step one of R2-001, and the half that needs no agent: what the platform
+    stores has to have a maximum size at all.
+
+    Until it does, no arithmetic about the callback is even possible — a question
+    can carry a 9.6 MB performance input (three of the dev questions do), and the
+    result for it is 413'd at `api.py::_limit_body_size` and lost.
     """
     stdin_cap, expected_cap = _stored_case_char_caps()
-    assert stdin_cap is not None and expected_cap is not None, (
-        "TestCaseIn.stdin / .expected carry no max_length, so a stored question has no "
-        "size bound at all — a 9.6 MB performance input is storable today and its grade "
-        "is silently lost at the callback (R2-001). `_limit_body_size`'s docstring already "
-        "claims the schema caps bound what is stored; make that true."
+    missing = [
+        name
+        for name, cap in (
+            ("TestCaseIn.stdin", stdin_cap),
+            ("TestCaseIn.expected", expected_cap),
+            ("QuestionCreate.test_cases", _stored_case_count_cap()),
+        )
+        if cap is None
+    ]
+    assert not missing, (
+        f"unbounded: {', '.join(missing)}. A stored question therefore has no size bound, "
+        "so no cap on the result callback can be guaranteed (R2-001). "
+        "`_limit_body_size`'s docstring already claims the schema caps bound what is "
+        "stored; make that true."
     )
 
-    # `actual` is the candidate program's stdout for the case, capped by the agent's
-    # ASSESS_OUTPUT_LIMIT_MB (64 MB by default) — it rides in the same body.
-    output_cap = 64 * 1024 * 1024
-    n_cases = 50  # the platform does not cap the case count either (R2-073)
-    worst_case = n_cases * (stdin_cap + expected_cap + output_cap)
+
+@needs_agent
+@_xfail("R2-001", "S01")
+def test_the_largest_storable_question_fits_the_callback_body_cap() -> None:
+    """Step two: the worst body the agent can build for a storable question must
+    fit under the cap the platform itself enforces.
+
+    The agent's per-case output cap is read from the agent, not mirrored here —
+    mirroring a cross-repo constant by hand is the failure this whole file exists
+    to replace.
+    """
+    stdin_cap, expected_cap = _stored_case_char_caps()
+    case_cap = _stored_case_count_cap()
+    if stdin_cap is None or expected_cap is None or case_cap is None:
+        pytest.fail("unbounded stored question — see test_a_stored_question_is_size_bounded")
+
+    _agent()  # puts the agent repo on sys.path
+    import assessment_agent.runner as agent_runner
+
+    output_cap = getattr(agent_runner, "_OUTPUT_LIMIT_BYTES", None)
+    assert output_cap is not None, (
+        "the agent's per-case output cap (runner._OUTPUT_LIMIT_BYTES, ASSESS_OUTPUT_LIMIT_MB) "
+        "could not be read — it moved, and this gate can no longer measure the real body."
+    )
+
+    # Per case the callback echoes `input`, `expected` and `actual`
+    # (`assessment_agent/agent.py::result_to_dict`); `actual` is the candidate
+    # program's stdout, bounded only by the agent's output cap.
+    worst_case = case_cap * (stdin_cap + expected_cap + output_cap)
     assert worst_case < config.MAX_BODY_BYTES, (
         f"the largest storable question renders a ~{worst_case:,}-byte callback body, over "
-        f"the {config.MAX_BODY_BYTES:,}-byte cap `_limit_body_size` enforces. Bound the stored "
-        f"input, the case count, and the echoed output ({_CANDIDATE_OUTPUT_CAP_ENV}) together."
+        f"the {config.MAX_BODY_BYTES:,}-byte cap `_limit_body_size` enforces. Bound the "
+        "stored input, the case count and the echoed output together — or have the agent "
+        "send an excerpt rather than the whole input."
     )
 
 

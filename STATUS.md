@@ -104,6 +104,27 @@ gate fails if a listed violation starts *passing*, so the list cannot rot.
 
 Both lints run in `npm run lint`, so they gate CI and the pre-push hook.
 
+### S00 review leftovers — 2026-09-14
+
+- **P2 · S — Platform CI now depends on the agent repo's live default branch.**
+  `.github/workflows/checks.yml:38` checks out `deepakmdk16/AssesmentAgent` with
+  no `ref`, so an agent-side change to `signing.py` or `validate_question` can
+  turn every open platform PR red, including ones touching only CSS. That is
+  arguably correct for a contract gate — the byte-parity checks already behave
+  this way locally — but it couples unrelated work. If it becomes disruptive,
+  either pin `ref` (and accept that the gate then tests against a stale agent) or
+  move the cross-repo checks into their own non-blocking job.
+- **P3 · XS — `web/scripts/check-copy.mjs:38` mixes case-sensitive and
+  case-insensitive patterns.** `/\bProblem\b/` and `/\bLogin\b/` carry no `/i`,
+  so "the problem statement" and "the login page" pass a gate that bans both
+  words. The two `Organizations?` rows could also collapse into one `/i` row.
+- **P3 · S — The two copy lints duplicate their prose extractor.**
+  `PROSE_PATTERNS`, `CLASS_ATTRIBUTE`, `walk()` and the path-key normalisation are
+  byte-identical in `web/scripts/check-copy.mjs` and `web/scripts/check-claims.mjs`,
+  and each re-walks `web/src` in its own node process. Extract `web/scripts/prose.mjs`
+  when either needs its next change — a fix to the extractor currently has to be
+  made twice.
+
 ---
 
 ## Product walkthrough — 2026-09-14 (all ten closed; leftovers below)

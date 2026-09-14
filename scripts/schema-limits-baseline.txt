@@ -3,27 +3,39 @@
 # fails on a line whose field has since been bounded — delete that line with the
 # fix. The file only ever shrinks; there is no flag to regenerate it.
 #
+# A path ending in [] is a list element and {} a dict value: bounding the
+# container does NOT bound these, and both lines must go before the field is done.
+#
 # Owners: the test-case and question fields are R2-001/R2-002 (S01/S02), the time
 # limits R2-022 (S02), the free text R2-073 (S02/S06/S10), invite recipients
 # R2-013 (S07).
 AssessmentCreate.id — str needs max_length
 AssessmentCreate.org_name — str needs max_length
 AssessmentCreate.question_ids — list needs max_length
+AssessmentCreate.question_ids[] — str needs max_length
 AssessmentCreate.slots — list needs max_length
 AssessmentCreate.title — str needs max_length
 AssessmentSlotIn.question_id — str needs max_length
 AssessmentSlotIn.variant_set_id — str needs max_length
 AssessmentUpdate.org_name — str needs max_length
 AssessmentUpdate.question_ids — list needs max_length
+AssessmentUpdate.question_ids[] — str needs max_length
 AssessmentUpdate.slots — list needs max_length
 AssessmentUpdate.title — str needs max_length
+Body_set_org_logo_orgs_current_logo_put.file — str needs max_length
+CandidateDraftIn.candidate_email — str needs max_length
 CandidateDraftIn.language — str needs max_length
 CandidateDraftIn.question_id — str needs max_length
+CandidateFeedbackIn.candidate_email — str needs max_length
+CandidateRunIn.candidate_email — str needs max_length
 CandidateRunIn.language — str needs max_length
 CandidateRunIn.question_id — str needs max_length
+CandidateRunTestsIn.candidate_email — str needs max_length
 CandidateRunTestsIn.language — str needs max_length
 CandidateRunTestsIn.question_id — str needs max_length
+CandidateStartIn.candidate_email — str needs max_length
 CandidateStartIn.candidate_name — str needs max_length
+CandidateSubmitIn.candidate_email — str needs max_length
 CandidateSubmitIn.candidate_name — str needs max_length
 CandidateSubmitIn.language — str needs max_length
 CandidateSubmitIn.question_id — str needs max_length
@@ -32,13 +44,13 @@ ChangePasswordIn.new_password — str needs max_length
 ConfirmEmailChangeIn.token — str needs max_length
 DeleteAccountIn.password — str needs max_length
 ForgotPasswordIn.email — str needs max_length
+IntegrityEventsIn.candidate_email — str needs max_length
 IntegrityEventsIn.question_id — str needs max_length
 InviteCreate.recipients — list needs max_length
+InviteCreate.recipients[] — str needs max_length
 LoginIn.email — str needs max_length
 LoginIn.password — str needs max_length
-OrganizationUpdate.name — str needs max_length
-OrganizationUpdate.results_webhook_url — str needs max_length
-OrganizationUpdate.retention_days — number needs gt/ge/lt/le
+OrgInviteCreate.email — str needs max_length
 QuestionCreate.constraints — str needs max_length
 QuestionCreate.example_input — str needs max_length
 QuestionCreate.example_output — str needs max_length
@@ -64,6 +76,7 @@ QuestionUpdate.required_complexity — str needs max_length
 QuestionUpdate.test_cases — list needs max_length
 QuestionUpdate.time_limit_s — number needs gt/ge/lt/le
 QuestionUpdate.title — str needs max_length
+RegisterIn.email — str needs max_length
 RegisterIn.name — str needs max_length
 RegisterIn.org_invite_token — str needs max_length
 RegisterIn.password — str needs max_length
@@ -77,6 +90,7 @@ TestCaseIn.expected — str needs max_length
 TestCaseIn.name — str needs max_length
 TestCaseIn.stdin — str needs max_length
 TestCaseIn.weight — number needs gt/ge/lt/le
+UpdateMeIn.email — str needs max_length
 UpdateMeIn.name — str needs max_length
 UpdateMeIn.password — str needs max_length
 VariantCreate.constraints — str needs max_length
@@ -102,6 +116,8 @@ VariantSetDraftIn.brief — str needs max_length
 VariantSetDraftIn.difficulty — str needs max_length
 VariantSetDraftIn.language — str needs max_length
 VariantSetDraftIn.target_complexity — str needs max_length
-VariantSetInviteCreate.overrides — str needs max_length
+VariantSetInviteCreate.overrides — dict needs a cap on how many keys it may carry
+VariantSetInviteCreate.overrides{} — str needs max_length
 VariantSetInviteCreate.recipients — list needs max_length
+VariantSetInviteCreate.recipients[] — str needs max_length
 VerifyEmailIn.token — str needs max_length

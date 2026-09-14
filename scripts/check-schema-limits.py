@@ -13,10 +13,16 @@ The models are reached through FastAPI itself — every route's `body_field`, th
 every nested model — so this covers exactly what the API accepts, with no naming
 convention to get wrong and no response model to false-positive on.
 
-Rules, per field:
-  * `str`            -> needs `max_length`
-  * `list`           -> needs `max_length` (a bound on the number of items)
+Rules, applied to every node of a field's type — a list's element type and a
+dict's value type are checked as well as the container, because a cap on the
+number of items says nothing about how big one item may be:
+  * `str`            -> needs `max_length` (unless its format self-bounds, e.g. a date-time)
+  * `list`           -> needs `max_length`, and its element type must be bounded too
+  * `dict`           -> needs a key-count cap, and its value type must be bounded too
   * `int` / `float`  -> needs at least one of `gt` / `ge` / `lt` / `le`
+
+Paths read `Model.field`, `Model.field[]` for a list's elements and
+`Model.field{}` for a dict's values.
 
 **Baseline.** The gate ships before the fixes, so the fields unbounded today are
 listed in `scripts/schema-limits-baseline.txt`. A field NOT in the baseline fails
@@ -74,43 +80,94 @@ def _request_models() -> dict[str, type[BaseModel]]:
     return found
 
 
-def _constrained(metadata: list[object], *names: str) -> bool:
-    """True if any of pydantic's constraint objects on the field sets one of `names`."""
-    return any(getattr(m, n, None) is not None for m in metadata for n in names)
+# A string whose format already bounds it: a timestamp or a uuid cannot be a
+# megabyte long whatever the caller sends, because parsing rejects it first.
+_SELF_BOUNDING_FORMATS = frozenset(
+    {"date-time", "date", "time", "duration", "uuid", "ipv4", "ipv6"}
+)
+
+
+def _check_node(path: str, node: dict[str, object], rows: list[str]) -> None:
+    """Walk one JSON-schema node, recording every unbounded string/array/dict/number.
+
+    The schema pydantic itself emits is the substrate, not the python annotation,
+    because the annotation lies about the useful cases: `EmailStr` is neither a
+    `str` nor a generic (it is its own class, so an `is str` test silently exempts
+    every email field), and a `list[str]` bounded only by `maxItems` still carries
+    unbounded strings. The schema says `{"type": "string", "format": "email"}` and
+    `{"type": "array", "items": {"type": "string"}}`, which is exactly what needs
+    checking — and it keeps working for `SecretStr`, `HttpUrl` and whatever gets
+    added next.
+    """
+    # `str | None` and friends: every branch has to be bounded on its own.
+    for branch_key in ("anyOf", "oneOf"):
+        branches = node.get(branch_key)
+        if isinstance(branches, list):
+            for branch in branches:
+                if isinstance(branch, dict) and branch.get("type") != "null":
+                    _check_node(path, branch, rows)
+            return
+
+    # A nested model ($ref) is reached as a request model in its own right.
+    if "$ref" in node:
+        return
+    # A closed set of values is bounded by definition.
+    if "enum" in node or "const" in node:
+        return
+
+    node_type = node.get("type")
+
+    if node_type == "string":
+        if node.get("format") in _SELF_BOUNDING_FORMATS:
+            return
+        if node.get("maxLength") is None:
+            rows.append(f"{path} — str needs max_length")
+    elif node_type == "array":
+        if node.get("maxItems") is None:
+            rows.append(f"{path} — list needs max_length")
+        items = node.get("items")
+        if isinstance(items, dict):
+            _check_node(f"{path}[]", items, rows)
+    elif node_type == "object":
+        values = node.get("additionalProperties")
+        if isinstance(values, dict):
+            if node.get("maxProperties") is None:
+                rows.append(f"{path} — dict needs a cap on how many keys it may carry")
+            _check_node(f"{path}{{}}", values, rows)
+    elif node_type in ("integer", "number"):
+        bounds = ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum")
+        if all(node.get(b) is None for b in bounds):
+            rows.append(f"{path} — number needs gt/ge/lt/le")
 
 
 def _unbounded() -> list[str]:
-    """`Model.field — rule` for every field with no bound, sorted."""
+    """`Model.field — rule` for every unbounded field, sorted.
+
+    A path may nest: `X.items[]` is the element type of a list, `X.map{}` the
+    value type of a dict. Both must be bounded — a cap on the number of items
+    says nothing about how big one item may be (R2-073).
+    """
     rows: list[str] = []
     for model_name, model in sorted(_request_models().items()):
-        for field_name, field in model.model_fields.items():
-            metadata = list(field.metadata)
-            annotation = field.annotation
-            is_list = any(
-                typing.get_origin(a) is list
-                for a in [annotation, *typing.get_args(annotation)]
-            )
-            leaves = _leaf_types(annotation)
-
-            if is_list:
-                if not _constrained(metadata, "max_length"):
-                    rows.append(f"{model_name}.{field_name} — list needs max_length")
-            elif str in leaves:
-                if not _constrained(metadata, "max_length"):
-                    rows.append(f"{model_name}.{field_name} — str needs max_length")
-            elif int in leaves or float in leaves:
-                if not _constrained(metadata, "gt", "ge", "lt", "le"):
-                    rows.append(f"{model_name}.{field_name} — number needs gt/ge/lt/le")
+        schema = model.model_json_schema(ref_template="{model}")
+        properties = schema.get("properties", {})
+        if not isinstance(properties, dict):
+            continue
+        for field_name, node in properties.items():
+            if isinstance(node, dict):
+                _check_node(f"{model_name}.{field_name}", node, rows)
     return sorted(rows)
 
 
 def main() -> int:
     current = set(_unbounded())
-    baseline = {
-        line.strip()
-        for line in BASELINE.read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    }
+    # utf-8 explicitly: the baseline carries em dashes and this output carries
+    # ❌/✓, and the pre-push hook can run under a POSIX locale.
+    baseline = set()
+    for raw in BASELINE.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            baseline.add(line)
 
     new = sorted(current - baseline)
     fixed = sorted(baseline - current)

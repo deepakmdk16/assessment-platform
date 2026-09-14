@@ -69,6 +69,11 @@ jobs:
           restore-keys: mypy-${{ runner.os }}-${{ hashFiles('uv.lock') }}-
 
       - name: Run checkpoints (pytest, ruff, mypy, web gates, secret scan)
+        # This job checked the companion out above, so here its absence is a
+        # failure rather than the local-dev skip — otherwise a moved path would
+        # turn every cross-repo gate back into a silent pass.
+        env:
+          REQUIRE_COMPANION_REPO: '1'
         run: bash scripts/checkpoints.sh
 
   # The unit suite runs on in-memory SQLite by design (fast, offline). This job is
