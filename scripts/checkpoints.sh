@@ -36,6 +36,12 @@ if [ "${RUN_E2E:-0}" = "1" ]; then
   ( cd web && npm run test:e2e )
 fi
 
+echo "==> schema limits"
+# Gate G8: every field of every request body the API accepts must be bounded.
+# The body cap alone does not bound what one field carries into the database, a
+# CSV, an email or the agent. Baseline in scripts/schema-limits-baseline.txt.
+uv run python scripts/check-schema-limits.py
+
 echo "==> secret scan"
 # 1) sensitive files must never be tracked (.env.example is fine)
 if git ls-files | grep -Ei '(^|/)\.env$|\.pem$|(^|/)id_rsa$|\.p12$|\.keystore$|(^|/)\.aws/credentials$'; then

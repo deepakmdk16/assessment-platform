@@ -76,6 +76,19 @@ gate fails if a listed violation starts *passing*, so the list cannot rot.
   Listed today: 10 × R2-002 (→ S02), 1 × R2-001 (→ S01).
   The agent's `scripts/checkpoints.sh` runs this test too — the edit that breaks
   it is usually made on that side.
+- **G8 · `tests/test_limiter_coverage.py`** — a route reachable without auth, one
+  that verifies a password, or one that sends email must call `limiter.check`.
+  Rate limiting is opt-IN per handler, so a new route is unlimited and silent
+  about it. Listed today: R2-032 (→ S07), 2 × R2-066 (→ S06), 4 × R2-013 (→ S06/S07).
+  `NO_LIMIT_NEEDED` holds the routes that must *not* consume quota, each with its
+  reason; both lists fail if they name a route that no longer exists.
+- **G8 · `scripts/check-schema-limits.py`** — every field of every request body the
+  API accepts must be bounded (`str`/`list` → `max_length`, numbers → `gt`/`ge`/
+  `lt`/`le`). Models are reached through FastAPI's own `body_field`, so responses
+  are not touched. 99 unbounded fields today, listed in
+  `scripts/schema-limits-baseline.txt`; the file only shrinks, and there is no
+  regenerate flag. Bounding a stored test case's `stdin`/`expected` is what lets
+  G1's size xfail be deleted.
 
 ---
 
