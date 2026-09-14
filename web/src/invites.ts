@@ -92,3 +92,37 @@ export const EXPIRY_PRESETS: { label: string; days: number | null }[] = [
 export function expiryFromDays(days: number, now: Date = new Date()): Date {
   return new Date(now.getTime() + days * 86_400_000)
 }
+
+/** Turn one raw SMTP failure into a sentence an interviewer can act on (U09).
+ *
+ *  `Delivery.error` is whatever smtplib raised, which for the common case is the
+ *  repr of a tuple — `(530, b'5.7.0 Authentication Required ... gsmtp', 'x@y')`.
+ *  Wrapped into a table cell that is a paragraph of noise per recipient; what
+ *  the reader needs is which of a handful of things went wrong and whether it is
+ *  theirs to fix. The raw string is kept for the `title` and still goes to the
+ *  server logs verbatim — this only decides what is shown first.
+ */
+export function explainDeliveryError(raw: string): string {
+  const s = raw.toLowerCase()
+  // Order matters: a 530 body also contains the word "authentication", and the
+  // server-side "not configured" message is not an SMTP reply at all.
+  if (s.includes('not configured on the server')) {
+    return 'The server has no mailer configured, so nothing was sent. The link below still works.'
+  }
+  if (s.includes('smtp_deadline_s') || s.includes('time budget')) {
+    return 'The server ran out of its mail time budget before reaching this address.'
+  }
+  if (s.includes('530') || s.includes('authentication required')) {
+    return "The server did not authenticate to its mail provider — SMTP_PASSWORD is missing or wrong."
+  }
+  if (s.includes('535') || s.includes('username and password not accepted')) {
+    return 'The mail provider rejected the server’s SMTP credentials. For a Gmail sender this must be a 16-character app password.'
+  }
+  if (s.includes('550') || s.includes('user unknown') || s.includes('recipient rejected')) {
+    return 'The mail provider rejected the address as undeliverable — check it for a typo.'
+  }
+  if (s.includes('timed out') || s.includes('timeout')) {
+    return 'The mail server did not answer in time.'
+  }
+  return 'The mail server refused the message.'
+}

@@ -23,6 +23,8 @@ vi.mock('../../api', () => ({
     analyticsOverview: vi.fn(),
     analyticsAssessment: vi.fn(),
     listAssessments: vi.fn(),
+    // The "Variant sets" tab (U07) renders the set list in place.
+    listVariantSets: vi.fn(),
   },
   ApiError: class ApiError extends Error {},
 }))
@@ -46,9 +48,9 @@ function page(items: QuestionOut[]): Page<QuestionOut> {
   return { items, total: items.length, limit: 100, offset: 0 }
 }
 
-function renderPage() {
+function renderPage(path = '/dashboard') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <DashboardPage />
     </MemoryRouter>,
   )
@@ -185,5 +187,60 @@ describe('DashboardPage — lists that do not lie (UI-E)', () => {
     // A skewed question shows immediately when the mean and median disagree.
     expect(await screen.findByText('38')).toBeInTheDocument()
     expect(screen.getByText('6')).toBeInTheDocument()
+  })
+})
+
+
+describe('DashboardPage — one destination for the library (U06, U07)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.analyticsQuestions).mockResolvedValue(page([]) as never)
+    vi.mocked(api.analyticsOverview).mockResolvedValue(overview as never)
+    vi.mocked(api.listAssessments).mockResolvedValue(page([]) as never)
+    vi.mocked(api.analyticsAssessment).mockResolvedValue({} as never)
+    vi.mocked(api.listQuestions).mockResolvedValue(page([q('two-sum', 'Two Sum')]))
+    vi.mocked(api.listVariantSets).mockResolvedValue(page([]) as never)
+  })
+
+  it('leads with the question list, not four charts', async () => {
+    // The analytics used to render a trend, a distribution, a cross-candidate
+    // table and a feedback rollup above the list this page is named for.
+    renderPage()
+    expect(await screen.findByText('Two Sum')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Submissions over time' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Score distribution' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('puts the time range with the list it filters', async () => {
+    renderPage()
+    await screen.findByText('Two Sum')
+    const toolbar = screen.getByRole('group', { name: /time range/i })
+    expect(within(toolbar).getByRole('button', { name: '30d' })).toBeInTheDocument()
+  })
+
+  it('shows variant sets as a tab of this page rather than a place of their own', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText('Two Sum')
+    // The create button belongs to whichever list is showing.
+    expect(screen.getByRole('link', { name: /new question/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Variant sets' }))
+
+    await waitFor(() => expect(api.listVariantSets).toHaveBeenCalled())
+    expect(screen.queryByText('Two Sum')).not.toBeInTheDocument()
+    expect(await screen.findByText(/no variant sets yet/i)).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: /new variant set/i })
+    expect(link).toHaveAttribute('href', '/variant-sets/new')
+  })
+
+  it('opens straight onto the sets tab, which is where /variant-sets redirects', async () => {
+    renderPage('/dashboard?view=sets')
+    expect(await screen.findByRole('tab', { name: 'Variant sets' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    expect(screen.queryByText('Two Sum')).not.toBeInTheDocument()
   })
 })

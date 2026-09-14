@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
+import { Drawer } from './Drawer'
 import { DIFFICULTY_LABELS, difficultyVerdictLabel, ratingClass } from '../badges'
 import {
   bucketClass,
@@ -24,22 +25,51 @@ const RANGES: { label: string; days: number | undefined }[] = [
   { label: 'All', days: undefined },
 ]
 
-/** Workspace analytics folded onto the dashboard (AR1): the time-range control,
- *  KPI tiles, submission trend, score distribution, and the cross-candidate
- *  view for a chosen assessment. `days` is lifted to the parent so the same
- *  window also drives the per-question columns in the question table. */
-export function AnalyticsPanel({
+/** The time range for everything on the dashboard. It lives in the list toolbar
+ *  rather than above the numbers (U06), because it filters the question table
+ *  as much as it filters these figures. */
+export function RangeSeg({
   days,
   onDaysChange,
 }: {
   days: number | undefined
   onDaysChange: (d: number | undefined) => void
 }) {
+  return (
+    <div className="range-seg" role="group" aria-label="Time range">
+      {RANGES.map((r) => (
+        <button
+          key={r.label}
+          type="button"
+          className={r.days === days ? 'on' : undefined}
+          onClick={() => onDaysChange(r.days)}
+        >
+          {r.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Workspace analytics on the dashboard (AR1), as five numbers and nothing else.
+ *
+ *  Until U06 this panel also rendered the trend, the score distribution, the
+ *  cross-candidate table and the feedback rollup inline — four charts stacked
+ *  above the list the page is named for, which pushed the question library
+ *  roughly 900px down. The numbers stay; each one now opens the chart that
+ *  explains it in a drawer, so the page answers one question at a time and the
+ *  library is the body of the page again.
+ *
+ *  `days` is owned by the parent so the same window drives the per-question
+ *  columns in the question table; the control itself is `RangeSeg` above. */
+export function AnalyticsPanel({ days }: { days: number | undefined }) {
   const [overview, setOverview] = useState<OverviewAnalytics | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [assessments, setAssessments] = useState<AssessmentOut[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [xc, setXc] = useState<AssessmentAnalytics | null>(null)
+  // Which number the reader opened. One at a time, by construction.
+  const [openDetail, setOpenDetail] = useState<DetailKey | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -89,13 +119,6 @@ export function AnalyticsPanel({
   if (!overview) {
     return (
       <section className="analytics" aria-busy="true">
-        <div className="range-seg" role="group" aria-label="Time range">
-          {RANGES.map((r) => (
-            <button key={r.label} type="button" disabled>
-              {r.label}
-            </button>
-          ))}
-        </div>
         <div className="stat-grid">
           {/* Five, matching the five <Tile>s below — a skeleton that reserves the
               wrong shape defeats the point. */}
@@ -106,114 +129,125 @@ export function AnalyticsPanel({
             </div>
           ))}
         </div>
-        <p className="page-loading">Loading analytics…</p>
       </section>
     )
   }
 
+  const assessmentPicker =
+    assessments.length > 0 ? (
+      <label className="picker-label">
+        Assessment{' '}
+        <select className="field" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+          {assessments.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.title}
+            </option>
+          ))}
+        </select>
+      </label>
+    ) : null
+
   return (
     <section className="analytics">
-      <div className="range-seg" role="group" aria-label="Time range">
-        {RANGES.map((r) => (
-          <button
-            key={r.label}
-            type="button"
-            className={r.days === days ? 'on' : undefined}
-            onClick={() => onDaysChange(r.days)}
-          >
-            {r.label}
-          </button>
-        ))}
-      </div>
-
       <div className="stat-grid">
+        {/* "Questions" opens nothing: the library it counts is the next thing on
+            the page, so a drawer over it would be a door to the room you are in. */}
         <Tile label="Questions" value={String(overview.questions)} sub="active in library" />
         <Tile
           label="Submissions"
           value={String(overview.submissions)}
           sub={`${overview.graded} graded`}
+          opens="over time"
+          onOpen={() => setOpenDetail('trend')}
         />
-        <Tile label="Candidates" value={String(overview.candidates)} sub="distinct emails" />
+        <Tile
+          label="Candidates"
+          value={String(overview.candidates)}
+          sub="distinct emails"
+          opens="compare"
+          onOpen={() => setOpenDetail('candidates')}
+        />
+        {/* Pass rate and average score are two summaries of one distribution, so
+            they open the same drawer rather than pretending to be two subjects. */}
         <Tile
           label="Pass rate"
           value={pct(overview.pass_rate)}
           sub={`${overview.passed} of ${overview.graded} graded`}
           accent
+          opens="distribution"
+          onOpen={() => setOpenDetail('scores')}
         />
-        <Tile label="Avg score" value={score(overview.avg_score_pct)} sub="across graded" />
+        <Tile
+          label="Avg score"
+          value={score(overview.avg_score_pct)}
+          sub="across graded"
+          opens="distribution"
+          onOpen={() => setOpenDetail('scores')}
+        />
       </div>
 
-      <div className="analytics-row">
-        <div className="card">
-          <div className="card-head">
-            <span className="card-title">Submissions over time</span>
-            <span className="hint">passed vs total</span>
-          </div>
-          <div className="chart">
-            <TrendChart trend={overview.trend} />
-          </div>
+      <Drawer
+        open={openDetail === 'trend'}
+        title="Submissions over time"
+        hint="passed vs total"
+        onClose={() => setOpenDetail(null)}
+      >
+        <div className="chart">
+          <TrendChart trend={overview.trend} />
         </div>
+      </Drawer>
 
-        <div className="card">
-          <div className="card-head">
-            <span className="card-title">Score distribution</span>
-            <span className="hint">graded submissions</span>
-          </div>
-          <div className="chart">
-            <Histogram buckets={overview.score_distribution} />
-          </div>
+      <Drawer
+        open={openDetail === 'scores'}
+        title="Score distribution"
+        hint="graded submissions"
+        onClose={() => setOpenDetail(null)}
+      >
+        <div className="chart">
+          <Histogram buckets={overview.score_distribution} />
         </div>
-      </div>
+      </Drawer>
 
-      <div className="card">
-        <div className="card-head">
-          <span className="card-title">Cross-candidate — by assessment</span>
-          {assessments.length > 0 && (
-            <label className="picker-label">
-              Assessment{' '}
-              <select
-                className="field"
-                value={selectedId}
-                onChange={(e) => setSelectedId(e.target.value)}
-              >
-                {assessments.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-        </div>
+      <Drawer
+        open={openDetail === 'candidates'}
+        title="Cross-candidate"
+        hint="by assessment"
+        onClose={() => setOpenDetail(null)}
+      >
         {assessments.length === 0 ? (
           <p className="empty-state">
             Create an assessment and invite candidates to compare them here.
           </p>
-        ) : xc && xc.candidates.length > 0 ? (
-          <CrossCandidate data={xc} />
         ) : (
-          <p className="empty-state">No candidates have started this assessment yet.</p>
+          <>
+            <div className="card-head">{assessmentPicker}</div>
+            {xc && xc.candidates.length > 0 ? (
+              <CrossCandidate data={xc} />
+            ) : (
+              <p className="empty-state">No candidates have started this assessment yet.</p>
+            )}
+            {xc && (
+              <>
+                <div className="card-head">
+                  <span className="card-title">Candidate feedback</span>
+                  <span className="hint">
+                    {xc.feedback && xc.feedback.responses > 0
+                      ? `${xc.feedback.responses} of ${xc.feedback.finished} sittings answered`
+                      : 'optional, asked once a sitting is over'}
+                  </span>
+                </div>
+                <FeedbackRollup feedback={xc.feedback} />
+              </>
+            )}
+          </>
         )}
-      </div>
-
-      {xc && (
-        <div className="card">
-          <div className="card-head">
-            <span className="card-title">Candidate feedback</span>
-            <span className="hint">
-              {xc.feedback && xc.feedback.responses > 0
-                ? `${xc.feedback.responses} of ${xc.feedback.finished} sittings answered`
-                : 'optional, asked once a sitting is over'}
-            </span>
-          </div>
-          <div className="card-body">
-            <FeedbackRollup feedback={xc.feedback} />
-          </div>
-        </div>
-      )}
+      </Drawer>
     </section>
   )
 }
+
+/** The numbers that open something, and what they open. */
+type DetailKey = 'trend' | 'scores' | 'candidates'
 
 /** What candidates made of one assessment (P2b). An erasure deletes the feedback
  *  with the rest of the sitting, so an erased candidate leaves no row here and
@@ -312,18 +346,37 @@ function Tile({
   value,
   sub,
   accent,
+  opens,
+  onOpen,
 }: {
   label: string
   value: string
   sub: string
   accent?: boolean
+  /** What the drawer behind this number holds, e.g. "distribution". Shown in
+   *  place of `sub` so the tile says it is a door without a second line. */
+  opens?: string
+  onOpen?: () => void
 }) {
-  return (
-    <div className={accent ? 'stat stat-accent' : 'stat'}>
+  const inner = (
+    <>
       <div className="stat-label">{label}</div>
       <div className="stat-value">{value}</div>
-      <div className="stat-sub">{sub}</div>
-    </div>
+      <div className="stat-sub">{opens ?? sub}</div>
+    </>
+  )
+  if (!onOpen) return <div className={accent ? 'stat stat-accent' : 'stat'}>{inner}</div>
+  return (
+    <button
+      type="button"
+      className={`stat stat-open${accent ? ' stat-accent' : ''}`}
+      onClick={onOpen}
+      // The number and its qualifier are both in the tile, but the button's own
+      // name has to say what pressing it does.
+      aria-label={`${label}: ${value}, ${sub}. Show ${opens}.`}
+    >
+      {inner}
+    </button>
   )
 }
 

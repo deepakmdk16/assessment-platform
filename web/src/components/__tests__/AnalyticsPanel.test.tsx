@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { AnalyticsPanel } from '../AnalyticsPanel'
+import { AnalyticsPanel, RangeSeg } from '../AnalyticsPanel'
 import { api } from '../../api'
 import type { AssessmentAnalytics, OverviewAnalytics } from '../../types'
 
@@ -86,19 +86,41 @@ describe('AnalyticsPanel (AR1)', () => {
     vi.mocked(api.analyticsAssessment).mockResolvedValue(xc)
   })
 
+  /** Open the drawer behind one of the numbers. */
+  async function openTile(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
+    await user.click(await screen.findByRole('button', { name }))
+  }
+
   it('renders KPI tiles from the overview', async () => {
-    render(<AnalyticsPanel days={30} onDaysChange={() => {}} />)
+    render(<AnalyticsPanel days={30} />)
     expect(await screen.findByText('148')).toBeInTheDocument() // submissions
     expect(screen.getByText('58%')).toBeInTheDocument() // pass rate (0.577 -> 58%)
     expect(screen.getByText('71.4')).toBeInTheDocument() // avg score
   })
 
+  it('shows the numbers and nothing else until one is opened (U06)', async () => {
+    // The four charts used to render inline, pushing the question library the
+    // page is named for ~900px down. At rest there is no chart and no table.
+    render(<AnalyticsPanel days={30} />)
+    await screen.findByText('148')
+    expect(screen.queryByText('Priya N.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Score distribution' })).not.toBeInTheDocument()
+    // "Questions" counts the list directly below, so it is not a door.
+    expect(screen.getByRole('button', { name: /submissions/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^questions/i })).not.toBeInTheDocument()
+  })
+
   it('renders the cross-candidate table for the selected assessment', async () => {
-    render(<AnalyticsPanel days={30} onDaysChange={() => {}} />)
-    expect(await screen.findByText('Priya N.')).toBeInTheDocument()
-    expect(screen.getByText('100th')).toBeInTheDocument() // top percentile
-    expect(screen.getByText('Complete')).toBeInTheDocument() // 3/3 submitted
-    expect(screen.getByText('2 / 3 submitted')).toBeInTheDocument() // Sam partial
+    const user = userEvent.setup()
+    render(<AnalyticsPanel days={30} />)
+    await openTile(user, /candidates/i)
+
+    const drawer = await screen.findByRole('dialog')
+    expect(within(drawer).getByText('Priya N.')).toBeInTheDocument()
+    expect(within(drawer).getByText('100th')).toBeInTheDocument() // top percentile
+    expect(within(drawer).getByText('Complete')).toBeInTheDocument() // 3/3 submitted
+    expect(within(drawer).getByText('2 / 3 submitted')).toBeInTheDocument() // Sam partial
   })
 
   it('rolls up candidate feedback, and lists only the answers that carry words', async () => {
@@ -122,7 +144,9 @@ describe('AnalyticsPanel (AR1)', () => {
         ],
       },
     })
-    render(<AnalyticsPanel days={30} onDaysChange={() => {}} />)
+    const user = userEvent.setup()
+    render(<AnalyticsPanel days={30} />)
+    await openTile(user, /candidates/i)
 
     expect(await screen.findByText('4.3/5')).toBeInTheDocument()
     expect(screen.getByText('3 responses')).toBeInTheDocument()
@@ -134,7 +158,6 @@ describe('AnalyticsPanel (AR1)', () => {
     // wordless answers (tests/test_feedback.py), so three responses and one
     // comment is one card, not three.
     expect(screen.getAllByRole('img', { name: /difficulty:/i })).toHaveLength(1)
-    expect(screen.getByText('Clear prompts.')).toBeInTheDocument()
   })
 
   it('says so plainly when nobody has answered yet', async () => {
@@ -151,18 +174,36 @@ describe('AnalyticsPanel (AR1)', () => {
         comments: [],
       },
     })
-    render(<AnalyticsPanel days={30} onDaysChange={() => {}} />)
+    const user = userEvent.setup()
+    render(<AnalyticsPanel days={30} />)
+    await openTile(user, /candidates/i)
+
     expect(await screen.findByText(/no feedback yet/i)).toBeInTheDocument()
     expect(screen.getByText(/optional, asked once a sitting is over/i)).toBeInTheDocument()
     // Not an empty split bar and a row of zeroes.
     expect(screen.queryByText(/too easy · 0/i)).not.toBeInTheDocument()
   })
 
-  it('changing the range calls onDaysChange', async () => {
+  it('opens one number at a time, and closes again', async () => {
+    const user = userEvent.setup()
+    render(<AnalyticsPanel days={30} />)
+
+    await openTile(user, /pass rate/i)
+    const drawer = await screen.findByRole('dialog')
+    expect(within(drawer).getByRole('heading', { name: 'Score distribution' })).toBeInTheDocument()
+    // The cross-candidate drawer is a different door and stays shut.
+    expect(screen.queryByText('Priya N.')).not.toBeInTheDocument()
+
+    await user.click(within(drawer).getByRole('button', { name: /close/i }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+})
+
+describe('RangeSeg', () => {
+  it('reports the chosen window to its parent', async () => {
     const onDaysChange = vi.fn()
     const user = userEvent.setup()
-    render(<AnalyticsPanel days={30} onDaysChange={onDaysChange} />)
-    await screen.findByText('148')
+    render(<RangeSeg days={30} onDaysChange={onDaysChange} />)
     await user.click(screen.getByRole('button', { name: '7d' }))
     expect(onDaysChange).toHaveBeenCalledWith(7)
     await user.click(screen.getByRole('button', { name: 'All' }))

@@ -7,11 +7,23 @@ import type { IntegrityState } from '../integrity'
 import { fullscreenSupported } from '../integrity'
 
 /** Shown on the start gate, before the candidate identifies themselves — nothing
- *  is recorded until the sitting begins, and they read this first. */
+ *  is recorded until the sitting begins, and they read this first.
+ *
+ *  A disclosure since U04: the three bullets plus the AI notice pushed the start
+ *  button below the fold on a laptop, which is the last place to hide a control.
+ *  What is being recorded stays in the visible summary — only the mechanics of
+ *  each rule move behind the toggle, so nothing a candidate is consenting to is
+ *  a click away. */
 export function IntegrityNotice() {
   return (
-    <div className="integrity-notice" role="note">
-      <span className="integrity-notice-title">This sitting is monitored</span>
+    <details className="disclose warn" role="note">
+      <summary>
+        <b>This sitting is monitored</b>
+        <span>
+          {fullscreenSupported() ? 'Fullscreen, pasting blocked, ' : 'Pasting blocked, '}
+          tab switches recorded.
+        </span>
+      </summary>
       <ul>
         {fullscreenSupported() && (
           <li>It runs in fullscreen. Leaving fullscreen pauses you until you return.</li>
@@ -19,7 +31,7 @@ export function IntegrityNotice() {
         <li>Pasting code from outside this page is blocked.</li>
         <li>Tab switches and developer-tools use are recorded and shared with the interviewer.</li>
       </ul>
-    </div>
+    </details>
   )
 }
 

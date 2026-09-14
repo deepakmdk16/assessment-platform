@@ -608,6 +608,68 @@ textarea {
   background: rgba(10, 14, 22, 0.45);
 }
 
+/* A right-hand sheet for the detail behind one summary number (U06). Same
+   native <dialog> as .modal — the browser supplies the focus trap, Esc and the
+   backdrop — pinned to the edge so the list it explains stays visible behind
+   it. `margin: 0 0 0 auto` is what moves a modal dialog off centre. */
+.drawer {
+  width: min(46rem, calc(100vw - 2rem));
+  max-width: none;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0 0 0 auto;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  border-left: 1px solid var(--color-border);
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-lg);
+}
+
+.drawer::backdrop {
+  background: rgba(10, 14, 22, 0.45);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.3rem;
+  border-bottom: 1px solid var(--color-border);
+  flex: none;
+}
+
+.drawer-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.drawer-head .hint {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+/* The one scrolling region: a cross-candidate table can be long, and the head
+   has to stay put while it is read. */
+.drawer-body {
+  padding: 1.1rem 1.3rem 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+@media (max-width: 640px) {
+  .drawer {
+    width: 100vw;
+    border-radius: 0;
+  }
+}
+
 .modal h2 {
   margin: 0;
   font-size: 1.15rem;
@@ -1022,8 +1084,20 @@ textarea {
   font-family: var(--font-mono);
   font-size: 0.76rem;
   color: var(--color-muted);
-  word-break: break-all;
   max-width: 260px;
+}
+
+/* One line, clipped, with the whole value in the cell's title (U09). It used to
+   `word-break: break-all` over as many lines as it needed, and ~70 unbreakable
+   characters per row is what widened the table until "Copy link" was cut off at
+   the window's edge. */
+.invite-url .mono {
+  display: block;
+  min-width: 0;
+  max-width: 15rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .row-actions {
@@ -1044,7 +1118,8 @@ textarea {
 }
 
 /* Per-recipient delivery status inside an invite's Recipients cell: one line
-   per address with a sent/failed dot, and the SMTP error inline on a failure. */
+   per address with a sent/failed dot and a chip. The reason lives in the
+   full-width `.delivery-row` below the invite, not here (U09). */
 .recip-list {
   list-style: none;
   margin: 0;
@@ -1075,9 +1150,25 @@ textarea {
   background: var(--color-bad);
 }
 
-.recip-why {
-  font-size: 0.74rem;
+/* Why an invite was not delivered: one row spanning the table, under the invite
+   it belongs to. A failure is nearly always one server-side cause hitting every
+   address at once, so it is stated once and given room to be a sentence rather
+   than repeated per recipient inside a cell that then has none. */
+.delivery-row td {
+  background: var(--color-bad-soft);
   color: var(--color-bad);
+  font-size: 0.78rem;
+  padding-top: 0.45rem;
+  padding-bottom: 0.5rem;
+}
+
+.delivery-row .delivery-count {
+  font-weight: 600;
+}
+
+.delivery-row .muted {
+  color: inherit;
+  opacity: 0.8;
 }
 
 /* A left-aligned toolbar above a list (e.g. the dashboard's "Show archived"). */
@@ -1720,6 +1811,14 @@ button.tab:hover {
 .tab.on {
   color: var(--color-heading);
   border-bottom-color: var(--color-accent);
+}
+
+/* The same tab vocabulary on a page rather than in the editor chrome (U07):
+   no filled bar, just the rule the tabs sit on. */
+.tabs-page {
+  padding: 0;
+  margin-bottom: 1rem;
+  background: none;
 }
 
 .tab-meta {
@@ -2475,6 +2574,36 @@ button.tab:hover {
   padding: 1rem 1.15rem;
 }
 
+/* A number that opens the chart explaining it (U06). It is a <button>, so the
+   element defaults have to be undone before it can look like its sibling
+   .stat divs; the chevron is the only thing that says it is pressable at rest. */
+.stat-open {
+  position: relative;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.stat-open::after {
+  content: '›';
+  position: absolute;
+  top: 0.7rem;
+  right: 0.85rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--color-faint);
+}
+
+.stat-open:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow);
+}
+
+.stat-open:hover::after {
+  color: var(--color-accent);
+}
+
 /* Skeleton placeholder: a token-coloured bar standing in for text that hasn't
    arrived. Sized in em so it inherits the height of whatever it replaces, which
    is what makes the reserved space match the loaded panel. */
@@ -2757,41 +2886,92 @@ button.tab:hover {
    Candidate-side disclosure + enforcement, and the interviewer's timeline.
    Severity is carried by the chip colour and the event rail, never by an icon
    set, so the same vocabulary reads in both themes. */
-.integrity-notice {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  padding: 0.7rem 0.8rem;
-  border: 1px solid var(--color-accent);
+
+/* A one-line notice on the start screen that opens into its detail (U04). Both
+   consent notices use it: the summary always states WHAT is being agreed to, and
+   only the mechanics sit behind the toggle — the start button was below the fold
+   with them expanded, and a control a timed candidate cannot find is worse than
+   a detail they have to open. `.warn` is the monitored variant. */
+.disclose {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius);
+  background: var(--color-surface-2);
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+.disclose.warn {
+  border-color: var(--color-accent);
   background: var(--color-accent-soft);
 }
 
-.integrity-notice-title {
+.disclose summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  cursor: pointer;
+  /* The default marker is a triangle that breaks the baseline of a flex row;
+     the affordance is the word at the end instead. */
+  list-style: none;
+}
+
+.disclose summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclose summary b {
   font-size: 0.78rem;
   font-weight: 700;
+  color: var(--color-heading);
+}
+
+.disclose.warn summary b {
   color: var(--color-accent-ink);
 }
 
-.integrity-notice ul {
+.disclose summary::after {
+  content: "Details";
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--color-accent-ink);
+  white-space: nowrap;
+}
+
+.disclose[open] summary::after {
+  content: "Hide";
+}
+
+.disclose summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.disclose ul {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
-  margin: 0;
+  margin: 0.5rem 0 0;
   padding: 0;
   list-style: none;
 }
 
-.integrity-notice li {
+.disclose li {
   display: flex;
   gap: 0.5rem;
-  font-size: 0.8rem;
   color: var(--color-text);
 }
 
-.integrity-notice li::before {
+.disclose li::before {
   content: "—";
   color: var(--color-accent-ink);
+}
+
+.disclose p {
+  margin: 0.5rem 0 0;
+  color: var(--color-text);
 }
 
 /* The fullscreen prompt covers the whole viewport and takes its clicks — the
@@ -3224,60 +3404,14 @@ button.tab:hover {
 
 /* The start screen's facts strip (P2a): questions / time / languages, read from
    the pre-start probe so the candidate knows the shape of the sitting before
-   agreeing to it. */
-.gate-facts {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  margin: 0 0 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface-2);
-  overflow: hidden;
-}
-.gate-facts > div {
-  padding: 0.6rem 0.8rem;
-  min-width: 0;
-}
-.gate-facts > div + div {
-  border-left: 1px solid var(--color-border);
-}
-.gate-facts dt {
-  margin: 0 0 0.1rem;
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--color-faint);
-}
-.gate-facts dd {
-  margin: 0;
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--color-heading);
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
-}
-
-/* A quiet note on the start screen (P2a): the same shape as .integrity-notice
-   without its accent — it informs, it does not warn. */
-.gate-note {
+   agreeing to it. Chips since U04 — the bordered three-cell table said the same
+   three things in four times the height, on the one screen whose button has to
+   be reachable without scrolling. */
+.gate-strip {
   display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.7rem 0.8rem;
-  margin-bottom: 0.9rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface-2);
-}
-.gate-note-title {
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: var(--color-heading);
-}
-.gate-note p {
-  margin: 0;
-  font-size: 0.8rem;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 0.2rem;
 }
 
 .gate-legal {

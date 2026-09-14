@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { NewVariantSetPage } from '../NewVariantSetPage'
-import { VariantSetsListPage } from '../VariantSetsListPage'
+import { VariantSetsList } from '../VariantSetsList'
 import { VariantSetInvitePanel } from '../../components/VariantSetInvitePanel'
 import { api } from '../../api'
 import type {
@@ -112,7 +112,7 @@ describe('NewVariantSetPage', () => {
   })
 })
 
-describe('VariantSetsListPage', () => {
+describe('VariantSetsList', () => {
   it('lists sets with their variant count', async () => {
     const row: VariantSetSummary = {
       id: 'set-1',
@@ -129,7 +129,7 @@ describe('VariantSetsListPage', () => {
 
     render(
       <MemoryRouter>
-        <VariantSetsListPage />
+        <VariantSetsList />
       </MemoryRouter>,
     )
 
@@ -142,7 +142,7 @@ describe('VariantSetsListPage', () => {
     vi.mocked(api.listVariantSets).mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 })
     render(
       <MemoryRouter>
-        <VariantSetsListPage />
+        <VariantSetsList />
       </MemoryRouter>,
     )
     expect(await screen.findByText(/no variant sets yet/i)).toBeInTheDocument()

@@ -210,7 +210,7 @@ describe('CandidatePage', () => {
   it('names the monitoring in what the candidate agrees to, when monitored', async () => {
     vi.mocked(api.getInvite).mockResolvedValue({ status: 'active', proctored: true })
     renderCandidatePage()
-    expect(await screen.findByLabelText(/including the monitoring described above/i)).toBeInTheDocument()
+    expect(await screen.findByLabelText(/including the monitoring above/i)).toBeInTheDocument()
   })
 
   it('does not claim monitoring in the consent for an unmonitored sitting', async () => {
@@ -915,10 +915,15 @@ describe('P2a — start screen, confirmation and leaving', () => {
 
     expect(await screen.findByRole('heading', { name: 'Backend engineer screen' })).toBeInTheDocument()
     expect(screen.getByText('Northwind Labs')).toBeInTheDocument()
-    expect(screen.getByText(/this sitting is timed\. a 60-minute clock/i)).toBeInTheDocument()
-    expect(screen.getByText('60 min')).toBeInTheDocument()
+    // The shape of the sitting is three chips, not a bordered table (U04).
+    expect(screen.getByText('3 questions')).toBeInTheDocument()
+    expect(screen.getByText('60-minute clock')).toBeInTheDocument()
     expect(screen.getByText('python, go')).toBeInTheDocument()
-    expect(screen.getByText(/how your work is assessed/i)).toBeInTheDocument()
+    expect(screen.getByText(/the clock starts when you begin/i)).toBeInTheDocument()
+    // Both consent notices still state what is agreed to on the face of the
+    // screen; only the mechanics sit behind the toggle.
+    expect(screen.getByText('Scored automatically')).toBeInTheDocument()
+    expect(screen.getByText(/a person at northwind labs makes the decision, not the ai/i)).toBeInTheDocument()
     expect(screen.getByText(/a person at northwind labs makes any decision/i)).toBeInTheDocument()
     expect(screen.queryByText(/no time limit/i)).not.toBeInTheDocument()
   })
@@ -936,7 +941,7 @@ describe('P2a — start screen, confirmation and leaving', () => {
 
     expect(await screen.findByRole('heading', { name: /coding assessment/i })).toBeInTheDocument()
     expect(screen.getByText(/there’s no time limit/i)).toBeInTheDocument()
-    expect(screen.getByText('No limit')).toBeInTheDocument()
+    expect(screen.getByText('No time limit')).toBeInTheDocument()
     expect(screen.queryByText(/this sitting is timed/i)).not.toBeInTheDocument()
     expect(screen.getByText(/a person makes any decision/i)).toBeInTheDocument()
   })

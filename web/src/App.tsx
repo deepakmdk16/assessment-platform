@@ -14,7 +14,6 @@ import { SubmissionDetailPage } from './pages/SubmissionDetailPage'
 import { AssessmentsListPage } from './pages/AssessmentsListPage'
 import { NewAssessmentPage } from './pages/NewAssessmentPage'
 import { AssessmentDetailPage } from './pages/AssessmentDetailPage'
-import { VariantSetsListPage } from './pages/VariantSetsListPage'
 import { NewVariantSetPage } from './pages/NewVariantSetPage'
 import { VariantSetDetailPage } from './pages/VariantSetDetailPage'
 import { CandidatePage } from './pages/CandidatePage'
@@ -129,16 +128,10 @@ export function App() {
         }
       />
 
-      <Route
-        path="/variant-sets"
-        element={
-          <ProtectedRoute>
-            <AppLayout>
-              <VariantSetsListPage />
-            </AppLayout>
-          </ProtectedRoute>
-        }
-      />
+      {/* Variant sets are a view of the question library, not a sibling of it
+          (U07) — so the list lives as a tab on /dashboard and this URL, which
+          people have bookmarked, redirects onto it. */}
+      <Route path="/variant-sets" element={<Navigate to="/dashboard?view=sets" replace />} />
       <Route
         path="/variant-sets/new"
         element={

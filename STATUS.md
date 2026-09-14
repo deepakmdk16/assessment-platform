@@ -30,13 +30,14 @@ so nothing here is waiting on it.
 ## Product walkthrough — 2026-09-14 (fix before any new feature)
 
 Ten gaps the user hit driving the running stack, plus one spotted in the same
-screenshots. **These come before new features**, ahead of the remaining
-IMPROVEMENT-PLAN rows. `U` = this walkthrough. Where the code contradicts the
-report, the entry says so rather than repeating the symptom.
+screenshots. Where the code contradicted the report, the entry says so rather
+than repeating the symptom.
 
-Closed this round: U01 (radio layout), U03 (confirm password), U08's code half
-(`PATCH /auth/me` + the Account edit form), U10's cause (the agent no longer
-writes the example into the prompt body).
+Closed: U01 (radio layout), U03 (confirm password), U04 (start screen — 1050px
+to 720px, Start now 163px above a 909px fold), U06 + U07 (analytics behind the
+numbers, one rail entry for the library), U08's code half, U09 (delivery failure
+out of the cell, link truncated), U10's cause. Design direction A, signed off
+against https://claude.ai/code/artifact/6d348599-0df6-4e19-9acc-47375dceeffe
 
 - **U02 · P1 · S — Password resets are not delivered. Remaining half is a
 credential.**
@@ -49,15 +50,6 @@ credential.**
   still wrong or unset**, so nothing is delivered until a Gmail *app password*
   (16 characters, not the account password) is set in `.env`. Fix: set it and
   restart — the boot now says which of the two failures it is.
-- **U04 · P2 · M — The candidate start screen is a wall.**
-  Evidence: title, a 3-cell meta table, the monitoring notice (3 bullets), "How
-  your work is assessed" (5 lines), name, email, a 3-line consent sentence, then
-  the button — ~1050px tall in a 909px column, so the button a timed candidate
-  is looking for sits below the fold. Why: it is the first thing a candidate
-  sees and the last thing before a clock starts. Fix: **mockup first** (repo
-  CLAUDE.md). Likely shape: meta inline under the title, the two notices behind
-  disclosures, consent one line with the detail behind the links it already
-  carries.
 - **U05 · P2 · S — Leaving a sitting: reported unguarded, but NOT REPRODUCIBLE.**
   Evidence *against* the report: driven in a real browser against the running
   stack, `page.close({runBeforeUnload:true})` after typing raises the
@@ -72,22 +64,6 @@ credential.**
   exact exit action** (tab close? browser Back? a click — on what?) before
   writing code; a `useBlocker`-style in-app guard needs a data router
   (`createBrowserRouter`), which `main.tsx` does not use.
-- **U06 · P2 · L — The Questions tab is four pages at once.**
-  Evidence: one route carries the question library, five stat tiles, a
-  submissions-over-time chart, a score distribution, and a cross-candidate
-  ranking table with its own assessment picker and score spread. Why: nothing is
-  answerable at a glance, and the list the page is named for is below all of it.
-  Fix: **mockup first.** High-level numbers only at the top; each tile opens its
-  own detail (feedback comments, per-candidate ratings, score spread); the
-  question library becomes the body of its own tab again.
-- **U07 · P3 · S — "Questions", "New question" and "Variant sets" are three rail
-items for one object.**
-  Evidence: `web/src/components/Sidebar.tsx` — `/dashboard`, `/questions/new`
-  and `/variant-sets`. "New question" is an action, not a destination, and a
-  variant set is a group of questions. Why: the rail advertises three places for
-  one concept. Fix: fold "New question" into the button the Questions page
-  already has, and decide whether variant sets are a view of Questions rather
-  than a sibling. Same surface as U06 — one mockup covers both.
 - **U08b · P3 · S — A member cannot reach billing at all.**
   The reported gap (Settings cannot edit the person) is closed: `PATCH /auth/me`
   is back for name + address, with the address confirmed from its own inbox
@@ -96,15 +72,8 @@ items for one object.**
   with prices and this month's usage against the allowance. What remains is that
   P3a hides admin-only sections outright, so a *member* who wants to upgrade
   sees no panel and no route to ask. Fix: decide whether a member sees billing
-  read-only with a "ask an admin" line, or nothing at all — a product call, not
+  read-only with an "ask an admin" line, or nothing at all — a product call, not
   a bug.
-- **U09 · P2 · S — An opened assessment does not use the window.**
-  Evidence: in the invite table the "Recipients & delivery" column holds a
-  wrapped multi-line SMTP error per recipient, squeezing Status / Expires / Link
-  into a strip and clipping the "Copy link" button at the right edge. Why: the
-  delivery state is unreadable and a control is cut off. Fix: move a delivery
-  error out of the cell (a row or disclosure under the recipient), and check the
-  page's max-width against the shell.
 - **U10b · P3 · XS — Questions drafted before today still carry the duplicate.**
   The cause is fixed agent-side (`authoring.py:_to_loader_dict` no longer
   appends the worked example to the prompt body, so the prompt is the statement
@@ -125,6 +94,22 @@ reported — visible in the same screenshot)*
   gate that rejects a constraints field naming an algorithm or a complexity
   class. Fits P4a (draft verification gates) — add it there rather than as its
   own pass.
+
+### Walkthrough leftovers — 2026-09-14
+
+- **P3 · XS — "Show archived" stayed a checkbox, not a third tab.** The signed-off
+  mockup drew three tabs (All / Variant sets / Archived). Archived is an orthogonal
+  filter — archived *variant sets* exist too — so a third tab would have made it
+  unreachable from the sets view. `DashboardPage.tsx` list-toolbar. Revisit if the
+  checkbox reads as clutter beside the tab strip.
+- **P3 · XS — The analytics drawer still fetches on page load.** `AnalyticsPanel`
+  fetches `listAssessments` + `analyticsAssessment` on mount even though the
+  cross-candidate drawer is shut, which is what it did before U06. Gate both on
+  the drawer opening once someone notices the two requests.
+- **P3 · XS — `Invite.deliveries` errors are summarised from the FIRST failure.**
+  `InviteTable.tsx` shows one reason per invite. Two recipients failing for
+  different reasons (one 530, one bad address) shows only the first. Correct
+  almost always — a delivery failure is one server-side cause — but not always.
 
 ---
 
