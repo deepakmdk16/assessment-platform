@@ -227,6 +227,38 @@ def create_verify_token(interviewer: Interviewer) -> str:
     )
 
 
+def create_change_email_token(interviewer: Interviewer, new_email: str) -> str:
+    """A link mailed to the address someone wants to move TO (U08).
+
+    The new address is carried in the token rather than stored on the account,
+    so nothing is written until the person proves they can read mail there —
+    a typo costs a lost link, never a login. Bound to the *current* address too,
+    so the link dies the moment the account's email changes by any other route.
+    """
+    return _encode(
+        {
+            "use": "change_email",
+            "sub": str(interviewer.id),
+            "email": interviewer.email,
+            "new": new_email,
+        },
+        VERIFY_TOKEN_TTL,
+    )
+
+
+def change_email_from_token(token: str, session: Session) -> tuple[Interviewer, str] | None:
+    """The account and the address a change-email link moves it to, or None if
+    the link is invalid, expired, or no longer applies."""
+    interviewer = interviewer_from_action_token(token, "change_email", session)
+    if interviewer is None:
+        return None
+    payload = _decode(token, "change_email")
+    new_email = (payload or {}).get("new")
+    if not isinstance(new_email, str) or not new_email:
+        return None
+    return interviewer, new_email
+
+
 def create_reset_token(interviewer: Interviewer) -> str:
     # Bound to the current hash, which makes a reset link single-use: once the
     # password changes — through this link or any other route — the binding no
@@ -245,16 +277,18 @@ def create_reset_token(interviewer: Interviewer) -> str:
 
 
 def interviewer_from_action_token(token: str, use: str, session: Session) -> Interviewer | None:
-    """The account a `verify` / `reset` link belongs to, or None if the link is
-    invalid, expired, or no longer applies (address changed, password already
-    changed)."""
+    """The account a `verify` / `reset` / `change_email` link belongs to, or None
+    if the link is invalid, expired, or no longer applies (address changed,
+    password already changed)."""
     payload = _decode(token, use)
     if payload is None:
         return None
     interviewer = _subject(payload, session)
     if interviewer is None:
         return None
-    if use == "verify" and payload.get("email") != interviewer.email:
+    # Both are bound to the address the link was minted for, so changing it
+    # kills every outstanding link to the old one.
+    if use in {"verify", "change_email"} and payload.get("email") != interviewer.email:
         return None
     if use == "reset" and payload.get("pwd") != _hash_fingerprint(interviewer.password_hash):
         return None

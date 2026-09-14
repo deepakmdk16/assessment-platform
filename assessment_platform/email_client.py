@@ -35,6 +35,64 @@ _DEADLINE_EXCEEDED = (
 )
 
 
+class SmtpCredentialsRejectedError(RuntimeError):
+    """The provider refused the configured credentials. Retrying never fixes it."""
+
+
+def check_login() -> str | None:
+    """Prove the mailer can actually reach and authenticate to the provider.
+
+    `config.missing_smtp_vars()` proves only that the settings are *set*. A set
+    but wrong password, or a host that wants auth we never send, fails exactly
+    like a working mailer until the first real send — which happens in a
+    background task off a request that already answered 202, so nobody is
+    watching. That is how every password reset can be refused with
+    `530 Authentication Required` while the UI reports success (U02).
+
+    Sends no mail: connect, STARTTLS, LOGIN, quit. Raises
+    SmtpCredentialsRejectedError when the provider rejected the credentials — a
+    permanent failure that must stop the boot while `.env` is still editable.
+    Returns a message for anything else (DNS, connect, TLS, timeout), which the
+    caller logs without refusing to start: a provider that is briefly down must
+    not also block a restart. Returns None when the mailer is healthy or there
+    is no host to check.
+    """
+    if config.SMTP_HOST is None:
+        return None
+    try:
+        with smtplib.SMTP(
+            config.SMTP_HOST, config.SMTP_PORT, timeout=config.SMTP_TIMEOUT_S
+        ) as smtp:
+            if config.SMTP_USE_TLS:
+                smtp.starttls()
+            if config.SMTP_USER and config.SMTP_PASSWORD:
+                smtp.login(config.SMTP_USER, config.SMTP_PASSWORD)
+            elif not _is_local_host(config.SMTP_HOST):
+                # `_deliver` skips login when either credential is empty, so every
+                # send goes out unauthenticated. A local relay (MailHog, Mailpit)
+                # is fine with that; a provider is not, and answers 530 on the
+                # first RCPT — invisibly, in a background task.
+                return (
+                    f"SMTP_USER/SMTP_PASSWORD are not both set, so mail to "
+                    f"{config.SMTP_HOST} is sent unauthenticated and will almost "
+                    "certainly be refused (Gmail answers 530 Authentication "
+                    "Required). SMTP_PASSWORD must be a 16-character app "
+                    "password, not the account password."
+                )
+    except smtplib.SMTPAuthenticationError as exc:
+        raise SmtpCredentialsRejectedError(
+            f"{config.SMTP_HOST} rejected SMTP_USER/SMTP_PASSWORD ({exc}). For a Gmail "
+            "sender this must be a 16-character app password, not the account password."
+        ) from exc
+    except Exception as exc:
+        return f"could not reach {config.SMTP_HOST}: {exc}"
+    return None
+
+
+def _is_local_host(host: str) -> bool:
+    return host.lower() in {"localhost", "127.0.0.1", "::1", "[::1]", "mailhog", "mailpit"}
+
+
 @dataclass(frozen=True)
 class Delivery:
     """The outcome of emailing one recipient. `error` is None iff `sent`."""

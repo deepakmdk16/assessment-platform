@@ -3309,11 +3309,18 @@ button.tab:hover {
 
 .radio-row input {
   flex: none;
+  /* Cancel the global `input { width: 100% }` (see "forms" above) as every other
+     control in a flex row does. Without it `flex: none` (= `0 0 auto`) takes its
+     basis from that 100% and refuses to shrink, so the radio claims the whole
+     row and the label is squeezed into a min-content column beside it (U01). */
+  width: auto;
   margin: 0.25rem 0 0;
   accent-color: var(--color-accent);
 }
 
 .radio-row label {
+  flex: 1;
+  min-width: 0;
   font-size: 0.85rem;
   color: var(--color-text);
 }

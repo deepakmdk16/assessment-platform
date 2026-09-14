@@ -27,6 +27,107 @@ so nothing here is waiting on it.
 
 ---
 
+## Product walkthrough — 2026-09-14 (fix before any new feature)
+
+Ten gaps the user hit driving the running stack, plus one spotted in the same
+screenshots. **These come before new features**, ahead of the remaining
+IMPROVEMENT-PLAN rows. `U` = this walkthrough. Where the code contradicts the
+report, the entry says so rather than repeating the symptom.
+
+Closed this round: U01 (radio layout), U03 (confirm password), U08's code half
+(`PATCH /auth/me` + the Account edit form), U10's cause (the agent no longer
+writes the example into the prompt body).
+
+- **U02 · P1 · S — Password resets are not delivered. Remaining half is a
+credential.**
+  The code half shipped: `email_client.check_login()` now proves the mailer can
+  connect and authenticate at boot, refuses to start on credentials the provider
+  rejects, and logs a named ERROR when SMTP_USER/SMTP_PASSWORD are not both set
+  against a non-local host — the exact shape that produced `530 5.7.0
+  Authentication Required` on every send while `/auth/forgot-password` kept
+  answering 202. Why this is still open: **the deployment's own SMTP_PASSWORD is
+  still wrong or unset**, so nothing is delivered until a Gmail *app password*
+  (16 characters, not the account password) is set in `.env`. Fix: set it and
+  restart — the boot now says which of the two failures it is.
+- **U04 · P2 · M — The candidate start screen is a wall.**
+  Evidence: title, a 3-cell meta table, the monitoring notice (3 bullets), "How
+  your work is assessed" (5 lines), name, email, a 3-line consent sentence, then
+  the button — ~1050px tall in a 909px column, so the button a timed candidate
+  is looking for sits below the fold. Why: it is the first thing a candidate
+  sees and the last thing before a clock starts. Fix: **mockup first** (repo
+  CLAUDE.md). Likely shape: meta inline under the title, the two notices behind
+  disclosures, consent one line with the detail behind the links it already
+  carries.
+- **U05 · P2 · S — Leaving a sitting: reported unguarded, but NOT REPRODUCIBLE.**
+  Evidence *against* the report: driven in a real browser against the running
+  stack, `page.close({runBeforeUnload:true})` after typing raises the
+  `beforeunload` dialog in **both** flows — the 3-question `AssessmentFlow`
+  (`useLeaveGuard(!complete)`, `AssessmentFlow.tsx:169`) and the 1-question
+  `CandidatePage` (`:269`). The editor screen also exposes no in-app link to
+  leave by (`a` count = 0; the header logo is a bare `<img>`). So the guard P2a
+  shipped is working. What the probe DID confirm is latent, not what was
+  reported: `beforeunload` is structurally blind to same-document History
+  transitions, so the day anything adds a router `navigate()` or a `<Link>` to
+  the editor screen, the guard silently stops covering it. Fix: **ask for the
+  exact exit action** (tab close? browser Back? a click — on what?) before
+  writing code; a `useBlocker`-style in-app guard needs a data router
+  (`createBrowserRouter`), which `main.tsx` does not use.
+- **U06 · P2 · L — The Questions tab is four pages at once.**
+  Evidence: one route carries the question library, five stat tiles, a
+  submissions-over-time chart, a score distribution, and a cross-candidate
+  ranking table with its own assessment picker and score spread. Why: nothing is
+  answerable at a glance, and the list the page is named for is below all of it.
+  Fix: **mockup first.** High-level numbers only at the top; each tile opens its
+  own detail (feedback comments, per-candidate ratings, score spread); the
+  question library becomes the body of its own tab again.
+- **U07 · P3 · S — "Questions", "New question" and "Variant sets" are three rail
+items for one object.**
+  Evidence: `web/src/components/Sidebar.tsx` — `/dashboard`, `/questions/new`
+  and `/variant-sets`. "New question" is an action, not a destination, and a
+  variant set is a group of questions. Why: the rail advertises three places for
+  one concept. Fix: fold "New question" into the button the Questions page
+  already has, and decide whether variant sets are a view of Questions rather
+  than a sibling. Same surface as U06 — one mockup covers both.
+- **U08b · P3 · S — A member cannot reach billing at all.**
+  The reported gap (Settings cannot edit the person) is closed: `PATCH /auth/me`
+  is back for name + address, with the address confirmed from its own inbox
+  before it applies, and `AccountPanel` has the form. **Billing was never
+  missing** — `BillingPanel.tsx` already shows `Renews <date>`, the plan cards
+  with prices and this month's usage against the allowance. What remains is that
+  P3a hides admin-only sections outright, so a *member* who wants to upgrade
+  sees no panel and no route to ask. Fix: decide whether a member sees billing
+  read-only with a "ask an admin" line, or nothing at all — a product call, not
+  a bug.
+- **U09 · P2 · S — An opened assessment does not use the window.**
+  Evidence: in the invite table the "Recipients & delivery" column holds a
+  wrapped multi-line SMTP error per recipient, squeezing Status / Expires / Link
+  into a strip and clipping the "Copy link" button at the right edge. Why: the
+  delivery state is unreadable and a control is cut off. Fix: move a delivery
+  error out of the cell (a row or disclosure under the recipient), and check the
+  page's max-width against the shell.
+- **U10b · P3 · XS — Questions drafted before today still carry the duplicate.**
+  The cause is fixed agent-side (`authoring.py:_to_loader_dict` no longer
+  appends the worked example to the prompt body, so the prompt is the statement
+  and the example lives only in `example_input`/`example_output` — which also
+  ends the same duplication in `report.py` and `adversarial.py`). Rows already
+  in the database still have it baked into `prompt`. Why it is P3: it is data,
+  not code, and re-drafting fixes it. Fix: leave it, or strip a trailing
+  `Example:` block once as a one-off script. A platform-side strip on render is
+  explicitly NOT the fix.
+- **U11 · P2 · S — Drafted constraints hand the candidate the solution.** *(not
+reported — visible in the same screenshot)*
+  Evidence: a question's Constraints reads "1 <= N, M <= 1000, so an O(N^2 * K)
+  solution would be too slow … An O(N^2 * log(max_value)) solution is required
+  using binary search on the answer combined with Dijkstra's algorithm or 2D
+  DP." Why: constraints are supposed to bound the input, not name the
+  algorithm — this is the assessment telling the candidate what to write, which
+  makes the question worthless as a signal. Fix: agent-side prompt + a draft
+  gate that rejects a constraints field naming an algorithm or a complexity
+  class. Fits P4a (draft verification gates) — add it there rather than as its
+  own pass.
+
+---
+
 ## Launch audit — 2026-09-06
 
 - **P03 · P1 · S — Assessment and variant-set invites cannot be revoked (no route);

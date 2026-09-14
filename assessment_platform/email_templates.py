@@ -238,6 +238,38 @@ def confirm_address(*, name: str, url: str) -> Email:
     return Email(subject="Confirm your email address", text=text, html=html)
 
 
+def change_email(*, name: str, url: str, old_email: str) -> Email:
+    """Sent to the address someone is moving TO (U08), so opening the link is
+    itself the proof they can read mail there. Names the address being left so a
+    misdirected link reads as a mistake rather than an instruction."""
+    text = (
+        f"Hi {name},\n\n"
+        f"Confirm this address as the new sign-in email for your coding-assessment "
+        f"account (currently {old_email}) by opening:\n"
+        f"{url}\n\n"
+        "Nothing changes until you do. The link is valid for 3 days. If you didn't "
+        "ask for this, ignore this email — the account keeps its current address."
+    )
+    html = _layout(
+        heading="Confirm your new email address",
+        blocks=[
+            _p(f"Hi {name},"),
+            _p(
+                "Confirm this address as the new sign-in email for your "
+                f"coding-assessment account (currently {old_email}). Nothing "
+                "changes until you do."
+            ),
+            f'<p style="margin:24px 0 0">{_button("Confirm new address", url)}</p>',
+            _fallback(url),
+        ],
+        footer=(
+            "The link is valid for 3 days. If you didn't ask for this, ignore this "
+            "email — the account keeps its current address."
+        ),
+    )
+    return Email(subject="Confirm your new email address", text=text, html=html)
+
+
 def reset_password(*, name: str, url: str) -> Email:
     text = (
         f"Hi {name},\n\n"

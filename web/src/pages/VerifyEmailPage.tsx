@@ -12,7 +12,11 @@ const brand = (
   </div>
 )
 
-export function VerifyEmailPage() {
+/** Spends an emailed address link. Two kinds land here: the sign-up
+ *  confirmation, and a change of sign-in address (U08) routed at
+ *  `/confirm-email`. Same states, same failure handling — only which endpoint is
+ *  called, which claim names the address, and the wording differ. */
+export function VerifyEmailPage({ change = false }: { change?: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams()
   // Read once so the link keeps working across a re-render; it is only removed
   // from the address bar after it has been spent (see confirm()).
@@ -20,7 +24,7 @@ export function VerifyEmailPage() {
   const { user, loading, refresh } = useAuth()
   // The token names the account being confirmed, which need not be the one
   // signed in on this browser.
-  const email = token ? emailFromToken(token) : null
+  const email = token ? emailFromToken(token, change ? 'new' : 'email') : null
   const [status, setStatus] = useState<'pending' | 'confirmed' | 'bad' | 'failed'>(
     token ? 'pending' : 'bad',
   )
@@ -30,7 +34,7 @@ export function VerifyEmailPage() {
     if (!token) return
     setStatus('pending')
     try {
-      await api.verifyEmail(token)
+      await (change ? api.confirmEmailChange(token) : api.verifyEmail(token))
       if (user) await refresh().catch(() => undefined)
       setStatus('confirmed')
     } catch (err) {
@@ -42,7 +46,7 @@ export function VerifyEmailPage() {
     }
     // Spent: take it out of the address bar so it doesn't linger in history.
     setSearchParams({}, { replace: true })
-  }, [token, user, refresh, setSearchParams])
+  }, [token, user, refresh, setSearchParams, change])
 
   useEffect(() => {
     // Wait for the session to settle so a signed-in user is refreshed after confirming
@@ -62,7 +66,7 @@ export function VerifyEmailPage() {
             <div className="auth-mark good" aria-hidden="true">
               ✓
             </div>
-            <h1>Email confirmed</h1>
+            <h1>{change ? 'Email address changed' : 'Email confirmed'}</h1>
             <p className="auth-lead">
               {email ? (
                 <>
@@ -71,7 +75,9 @@ export function VerifyEmailPage() {
               ) : (
                 'Your address is'
               )}{' '}
-              now confirmed for your account.
+              {change
+                ? 'now the address you sign in with.'
+                : 'now confirmed for your account.'}
             </p>
             <Link to={user ? '/dashboard' : '/login'} className="btn block">
               {user ? 'Go to your workspace' : 'Log in'}
@@ -99,8 +105,9 @@ export function VerifyEmailPage() {
             </div>
             <h1>This link doesn't work</h1>
             <p className="auth-lead">
-              Confirmation links expire after three days. Log in and send yourself a new one from
-              the banner or Settings.
+              {change
+                ? 'Address links expire after three days, and are void once the account’s address changes by any other route. Log in and ask for the change again from Settings.'
+                : 'Confirmation links expire after three days. Log in and send yourself a new one from the banner or Settings.'}
             </p>
             <Link to="/login" className="btn block sec">
               Log in

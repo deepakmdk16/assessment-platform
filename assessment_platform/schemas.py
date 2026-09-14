@@ -525,6 +525,25 @@ class VerifyEmailIn(BaseModel):
     token: str
 
 
+class UpdateMeIn(BaseModel):
+    """Edit your own profile (U08). Both fields optional — send only what changed.
+
+    The address is NOT applied here: it is confirmed from the new mailbox first,
+    so a typo costs a link rather than a login.
+    """
+
+    name: str | None = None
+    email: EmailStr | None = None
+    # Required only when `email` is a change. The address is the sign-in
+    # identity, so moving it is how a lifted access token would take the account
+    # over — the same reason DeleteAccountIn asks again.
+    password: str | None = None
+
+
+class ConfirmEmailChangeIn(BaseModel):
+    token: str
+
+
 class DeleteAccountIn(BaseModel):
     # Re-entering the password is what stops a walked-away-from session (or a
     # lifted access token) from deleting the account.

@@ -35,6 +35,8 @@ export function App() {
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/verify-email" element={<VerifyEmailPage />} />
+      {/* A change of sign-in address (U08). Same page, different endpoint. */}
+      <Route path="/confirm-email" element={<VerifyEmailPage change />} />
       {/* An organisation invitation link. Deliberately outside ProtectedRoute:
           it is opened by people who have no account yet as often as by people
           who do. */}

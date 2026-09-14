@@ -15,6 +15,7 @@ export function RegisterPage() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const { login } = useAuth()
@@ -45,6 +46,13 @@ export function RegisterPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
+    // The account is created from a single unverified typing otherwise, and a
+    // typo locks the new interviewer straight out — the reset path is email,
+    // which is exactly what they cannot reach yet (U03).
+    if (password !== confirm) {
+      setError("Passwords don't match.")
+      return
+    }
     setSubmitting(true)
     try {
       await api.register({
@@ -118,6 +126,17 @@ export function RegisterPage() {
             <p className="field-hint">
               At least 12 characters. Passwords that appear in known breaches are refused.
             </p>
+          </div>
+          <div className="field">
+            <label htmlFor="confirm-password">Confirm password</label>
+            <input
+              id="confirm-password"
+              type="password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              autoComplete="new-password"
+              required
+            />
           </div>
           <button type="submit" className="btn block" disabled={submitting}>
             {submitting

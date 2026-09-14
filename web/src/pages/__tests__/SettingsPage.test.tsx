@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsPage } from '../SettingsPage'
-import { api, setToken } from '../../api'
+import { api, ApiError, setToken } from '../../api'
 import type { Organization, User } from '../../types'
 
 const refreshMock = vi.fn()
@@ -24,6 +24,7 @@ vi.mock('../../api', () => {
   return {
     api: {
       resendVerification: vi.fn(),
+      updateMe: vi.fn(),
       changePassword: vi.fn(),
       deleteAccount: vi.fn(),
       // BillingPanel, NotificationsPanel and PrivacyPanel each load on mount.
@@ -82,6 +83,9 @@ async function fillPasswordChange(user: ReturnType<typeof userEvent.setup>, conf
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // AccountPanel awaits refresh() after a save — a bare vi.fn() returns
+  // undefined, which is not awaitable the way the real context's is.
+  refreshMock.mockResolvedValue(undefined)
   authState.user = owner()
   vi.mocked(api.getOrg).mockResolvedValue(org('admin'))
 })
@@ -227,6 +231,62 @@ describe('Settings → Account', () => {
 
     await waitFor(() => expect(api.resendVerification).toHaveBeenCalledTimes(1))
     expect(await screen.findByText(/check o@test.io for the new link/i)).toBeInTheDocument()
+  })
+
+  it('saves a corrected name without asking for a password', async () => {
+    // P3b left Account read-only, so an interviewer could not fix their own
+    // name in the product at all (U08).
+    const user = userEvent.setup()
+    vi.mocked(api.updateMe).mockResolvedValue(owner({ name: 'Ada Lovelace' }))
+    renderAt('/settings/account')
+
+    const nameField = await screen.findByLabelText('Name')
+    await user.clear(nameField)
+    await user.type(nameField, 'Ada Lovelace')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() => expect(api.updateMe).toHaveBeenCalledWith({ name: 'Ada Lovelace' }))
+    expect(screen.queryByLabelText(/current password/i)).not.toBeInTheDocument()
+    expect(await screen.findByText('Saved.')).toBeInTheDocument()
+  })
+
+  it('asks for the password once the address is being moved, and says it is not applied yet', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.updateMe).mockResolvedValue(owner())
+    renderAt('/settings/account')
+
+    const emailField = await screen.findByLabelText('Email')
+    await user.clear(emailField)
+    await user.type(emailField, 'new@test.io')
+    // The field appears only once the address actually differs.
+    await user.type(await screen.findByLabelText(/current password/i), 'hunter2hunter2')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() =>
+      expect(api.updateMe).toHaveBeenCalledWith({
+        email: 'new@test.io',
+        password: 'hunter2hunter2',
+      }),
+    )
+    // The account has NOT moved yet — saying otherwise is how a typo becomes a
+    // lockout, since sign-in is by address.
+    const notice = await screen.findByText(/check/i)
+    expect(notice).toHaveTextContent('new@test.io')
+    expect(notice).toHaveTextContent('o@test.io')
+  })
+
+  it('reports a wrong password in the words the field uses', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.updateMe).mockRejectedValue(new ApiError(403, 'password is incorrect.'))
+    renderAt('/settings/account')
+
+    const emailField = await screen.findByLabelText('Email')
+    await user.clear(emailField)
+    await user.type(emailField, 'new@test.io')
+    await user.type(await screen.findByLabelText(/current password/i), 'wrong-password-1')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Password is incorrect.')
   })
 
   it('stops offering resend once the link has been sent', async () => {

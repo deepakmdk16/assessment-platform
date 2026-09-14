@@ -95,12 +95,16 @@ def test_me_requires_auth_401(anon_client: TestClient) -> None:
 def test_the_interviewer_carries_no_branding_of_their_own(client: TestClient) -> None:
     """P3b: branding is the organisation's, so /auth/me is identity only.
 
-    `PATCH /auth/me` went with the two fields it existed to carry — there is no
-    longer anything about a person that a person can change here.
+    `PATCH /auth/me` is back for the two things that ARE about the person — their
+    name and their address (U08) — but not for the branding fields it used to
+    carry: sending one changes nothing and it never appears in the response.
     """
     body = client.get("/auth/me").json()
     assert set(body) == {"id", "email", "name", "email_verified"}
-    assert client.patch("/auth/me", json={"default_org_name": "Acme Corp"}).status_code == 405
+    resp = client.patch("/auth/me", json={"default_org_name": "Acme Corp"})
+    assert resp.status_code == 200
+    assert set(resp.json()) == {"id", "email", "name", "email_verified"}
+    assert "Acme" not in resp.text
 
 
 def test_questions_require_auth_401(anon_client: TestClient) -> None:

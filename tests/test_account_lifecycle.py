@@ -323,3 +323,128 @@ def test_delete_account_purges_owned_data_only(anon_client: TestClient) -> None:
         assert s.exec(select(Invite)).all() == []
         assert {tc.question_id for tc in s.exec(select(QuestionTestCase)).all()} == {"keep_me"}
     assert anon_client.get("/questions", headers=_auth(keeper)).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Editing your own profile (U08)                                                #
+# --------------------------------------------------------------------------- #
+
+
+def _signed_in(
+    client: TestClient, outbox: list[dict[str, str]] | None = None, email: str = "me@x.io"
+) -> dict[str, str]:
+    """Register + sign in. Registration mails its own confirm-address link, so
+    the outbox is emptied here and only holds what the test itself triggers."""
+    _register(client, email)
+    if outbox is not None:
+        outbox.clear()
+    return _auth(_login(client, email).json()["access_token"])
+
+
+def test_name_is_edited_in_place(anon_client: TestClient) -> None:
+    headers = _signed_in(anon_client)
+    resp = anon_client.patch("/auth/me", json={"name": "Ada Lovelace"}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Ada Lovelace"
+    assert anon_client.get("/auth/me", headers=headers).json()["name"] == "Ada Lovelace"
+
+
+def test_blank_name_is_refused(anon_client: TestClient) -> None:
+    headers = _signed_in(anon_client)
+    assert anon_client.patch("/auth/me", json={"name": "   "}, headers=headers).status_code == 422
+
+
+def test_email_change_is_not_applied_until_the_new_address_confirms(
+    anon_client: TestClient, outbox: list[dict[str, str]]
+) -> None:
+    """The whole point: a typo must cost a link, not a login. Sign-in is by
+    address, and the way back from a wrong one is a reset mail sent to it."""
+    headers = _signed_in(anon_client, outbox)
+    resp = anon_client.patch(
+        "/auth/me", json={"email": "new@x.io", "password": PW}, headers=headers
+    )
+    assert resp.status_code == 200
+    # Unchanged on the account until the link is opened...
+    assert resp.json()["email"] == "me@x.io"
+    assert anon_client.get("/auth/me", headers=headers).json()["email"] == "me@x.io"
+    # ...and the link went to the NEW mailbox, which is what proves it is readable.
+    assert [m["to"] for m in outbox] == ["new@x.io"]
+
+    anon_client.post("/auth/confirm-email-change", json={"token": _link_token(outbox[0]["url"])})
+    me = anon_client.get("/auth/me", headers=headers).json()
+    assert me["email"] == "new@x.io"
+    # Opening a link mailed to that address IS the confirmation, so no second nag.
+    assert me["email_verified"] is True
+    assert _login(anon_client, "new@x.io").status_code == 200
+
+
+def test_email_change_requires_the_password(
+    anon_client: TestClient, outbox: list[dict[str, str]]
+) -> None:
+    """A lifted access token alone must not move where sign-in and password
+    resets land — that is the whole account."""
+    headers = _signed_in(anon_client, outbox)
+    assert anon_client.patch("/auth/me", json={"email": "new@x.io"}, headers=headers).status_code == 403
+    assert (
+        anon_client.patch(
+            "/auth/me", json={"email": "new@x.io", "password": "wrong-password-1"}, headers=headers
+        ).status_code
+        == 403
+    )
+    assert outbox == []
+
+
+def test_email_change_refuses_an_address_already_registered(
+    anon_client: TestClient, outbox: list[dict[str, str]]
+) -> None:
+    _register(anon_client, "taken@x.io")
+    headers = _signed_in(anon_client, outbox)
+    resp = anon_client.patch(
+        "/auth/me", json={"email": "taken@x.io", "password": PW}, headers=headers
+    )
+    assert resp.status_code == 409
+    assert outbox == []
+
+
+def test_change_link_dies_once_the_address_moves(
+    anon_client: TestClient, outbox: list[dict[str, str]]
+) -> None:
+    """Two links out, one spent: the second is bound to an address the account no
+    longer has, so it cannot silently move it again."""
+    headers = _signed_in(anon_client, outbox)
+    anon_client.patch("/auth/me", json={"email": "one@x.io", "password": PW}, headers=headers)
+    anon_client.patch("/auth/me", json={"email": "two@x.io", "password": PW}, headers=headers)
+    first, second = (_link_token(m["url"]) for m in outbox)
+
+    assert anon_client.post("/auth/confirm-email-change", json={"token": first}).status_code == 204
+    assert anon_client.post("/auth/confirm-email-change", json={"token": second}).status_code == 400
+    assert anon_client.get("/auth/me", headers=headers).json()["email"] == "one@x.io"
+
+
+def test_a_verify_token_cannot_be_replayed_as_a_change(
+    anon_client: TestClient, outbox: list[dict[str, str]]
+) -> None:
+    """The `use` claim keeps the kinds apart — a confirm-address link must not
+    move an address."""
+    headers = _signed_in(anon_client, outbox)
+    anon_client.post("/auth/resend-verification", headers=headers)
+    verify_token = _link_token(outbox[-1]["url"])
+    assert (
+        anon_client.post(
+            "/auth/confirm-email-change", json={"token": verify_token}
+        ).status_code
+        == 400
+    )
+
+
+def test_changing_nothing_to_the_same_address_sends_no_mail(
+    anon_client: TestClient, outbox: list[dict[str, str]]
+) -> None:
+    headers = _signed_in(anon_client, outbox)
+    resp = anon_client.patch(
+        "/auth/me", json={"name": "Ada", "email": "ME@x.io"}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Ada"
+    # Same address in different case is the same account (emails are lower-cased).
+    assert outbox == []
