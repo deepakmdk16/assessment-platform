@@ -14,7 +14,11 @@ export async function registerInterviewer(page: Page): Promise<{ email: string; 
   await page.goto('/register')
   await page.getByLabel('Name').fill(`Interviewer ${suffix}`)
   await page.getByLabel('Email').fill(email)
-  await page.getByLabel('Password').fill(password)
+  // Exact, and both fields: sign-up asks for the password twice since U03, and
+  // getByLabel is a substring match — 'Password' alone now matches the
+  // confirmation too and fails on strict mode.
+  await page.getByLabel('Password', { exact: true }).fill(password)
+  await page.getByLabel('Confirm password').fill(password)
   await page.getByRole('button', { name: 'Create account' }).click()
 
   await expect(page.getByRole('heading', { name: 'Questions' })).toBeVisible()

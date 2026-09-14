@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { InviteTable } from '../InviteTable'
@@ -71,7 +71,54 @@ describe('InviteTable', () => {
         ]}
       />,
     )
+    // Per address: who, and whether it arrived.
     expect(screen.getByText('ok@x.io')).toBeInTheDocument()
-    expect(screen.getByText(/mailbox full/)).toBeInTheDocument()
+    expect(screen.getByText('Sent')).toBeInTheDocument()
+    expect(screen.getByText('Not sent')).toBeInTheDocument()
+  })
+
+  it('states a delivery failure once, under the invite, in words (U09)', () => {
+    // The raw SMTP repr used to wrap inside the Recipients cell once per
+    // recipient, squeezing Status/Expires/Link into strips and clipping the
+    // Copy link button off the right edge.
+    const raw =
+      "(530, b'5.7.0 Authentication Required. For more information, go to https://support.google.com/mail/?p=WantAuthError g4-2002 - gsmtp', 'sender@gmail.com')"
+    render(
+      <InviteTable
+        showDeliveries
+        invites={[
+          invite({
+            deliveries: [
+              { recipient: 'a@x.io', sent: false, error: raw },
+              { recipient: 'b@x.io', sent: false, error: raw },
+            ],
+          }),
+        ]}
+      />,
+    )
+
+    expect(screen.getByText('2 of 2 not delivered')).toBeInTheDocument()
+    expect(screen.getByText(/SMTP_PASSWORD is missing or wrong/)).toBeInTheDocument()
+    // Said once for the invite, not once per recipient, and never raw.
+    expect(screen.queryByText((t) => t.includes('WantAuthError'))).not.toBeInTheDocument()
+    expect(screen.getByText(/still valid if you send it yourself/i)).toBeInTheDocument()
+  })
+
+  it('says nothing extra when every recipient got the mail', () => {
+    render(
+      <InviteTable
+        showDeliveries
+        invites={[invite({ deliveries: [{ recipient: 'ok@x.io', sent: true, error: null }] })]}
+      />,
+    )
+    expect(screen.queryByText(/not delivered/i)).not.toBeInTheDocument()
+  })
+
+  it('leads the link cell with the action, so content cannot clip it', () => {
+    render(<InviteTable invites={[invite({ url: 'http://127.0.0.1:5173/t/' + 'a'.repeat(64) })]} />)
+    const cell = screen.getByRole('button', { name: /copy link/i }).closest('td')
+    expect(cell).not.toBeNull()
+    // The whole URL is still there to select and still readable on hover.
+    expect(within(cell as HTMLElement).getByTitle(/\/t\/a+$/)).toBeInTheDocument()
   })
 })

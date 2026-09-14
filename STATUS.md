@@ -27,6 +27,72 @@ so nothing here is waiting on it.
 
 ---
 
+## Product walkthrough — 2026-09-14 (fix before any new feature)
+
+Ten gaps the user hit driving the running stack, plus one spotted in the same
+screenshots. All ten are closed. Where the code contradicted the report, the
+entry below says so rather than repeating the symptom.
+
+Closed: U01 (radio layout), U02 (mail preflight + the app password now set —
+verified by a real reset leaving the server), U03 (confirm password), U04 (start
+screen 1050px → 720px, Start 163px above a 909px fold), U05 (a tab switch is
+acknowledged on return), U06 + U07 (analytics behind the numbers, one rail entry
+for the library), U08 (`PATCH /auth/me` + the Account form), U09 (delivery
+failure out of the cell, link truncated), U10 (the agent no longer writes the
+example into the prompt body). Layout direction A, signed off against
+https://claude.ai/code/artifact/6d348599-0df6-4e19-9acc-47375dceeffe
+
+What remains is the leftovers below, plus:
+
+- **U08b · P3 · S — A member cannot reach billing at all.**
+  The reported gap (Settings cannot edit the person) is closed. **Billing was
+  never missing** — `BillingPanel.tsx` already shows `Renews <date>`, the plan
+  cards with prices and this month's usage against the allowance. What remains is
+  that P3a hides admin-only sections outright, so a *member* who wants to upgrade
+  sees no panel and no route to ask. Fix: decide whether a member sees billing
+  read-only with an "ask an admin" line, or nothing at all — a product call, not
+  a bug.
+- **U10b · P3 · XS — Questions drafted before today still carry the duplicate.**
+  The cause is fixed agent-side (`authoring.py:_to_loader_dict`). Rows already in
+  the database still have the example baked into `prompt`. It is data, not code,
+  and re-drafting clears it. Fix: leave it, or strip a trailing `Example:` block
+  once as a one-off script. A platform-side strip on render is NOT the fix.
+- **U11 · P2 · S — Drafted constraints hand the candidate the solution.** *(not
+reported — visible in the same screenshot)*
+  Evidence: a question's Constraints reads "1 <= N, M <= 1000, so an O(N^2 * K)
+  solution would be too slow … An O(N^2 * log(max_value)) solution is required
+  using binary search on the answer combined with Dijkstra's algorithm or 2D
+  DP." Why: constraints are supposed to bound the input, not name the
+  algorithm — this is the assessment telling the candidate what to write, which
+  makes the question worthless as a signal. Fix: agent-side prompt + a draft
+  gate that rejects a constraints field naming an algorithm or a complexity
+  class. Fits P4a (draft verification gates) — add it there rather than as its
+  own pass.
+
+### Walkthrough leftovers — 2026-09-14
+
+- **P2 · S — An unmonitored sitting sees nothing of a tab switch.** U05's
+  acknowledgement rides on `useIntegrity`, which is `enabled` only when the invite
+  is `proctored`. That is deliberate — nothing is recorded without the monitoring
+  consent, so there is nothing to acknowledge — but it means an interviewer who
+  turns proctoring off gets no tab-switch signal at all and may not realise it.
+  Fix: say so where proctoring is turned off, not by tracking regardless.
+- **P3 · XS — "Show archived" stayed a checkbox, not a third tab.** The signed-off
+  mockup drew three tabs (All / Variant sets / Archived). Archived is an orthogonal
+  filter — archived *variant sets* exist too — so a third tab would have made them
+  unreachable from the sets view. `DashboardPage.tsx` list-toolbar. Revisit if the
+  checkbox reads as clutter beside the tab strip.
+- **P3 · XS — The analytics drawer still fetches on page load.** `AnalyticsPanel`
+  fetches `listAssessments` + `analyticsAssessment` on mount even though the
+  cross-candidate drawer is shut, which is what it did before U06. Gate both on
+  the drawer opening once someone notices the two requests.
+- **P3 · XS — `Invite.deliveries` errors are summarised from the FIRST failure.**
+  `InviteTable.tsx` shows one reason per invite. Two recipients failing for
+  different reasons (one 530, one bad address) shows only the first. Correct
+  almost always — a delivery failure is one server-side cause — but not always.
+
+---
+
 ## Launch audit — 2026-09-06
 
 - **P03 · P1 · S — Assessment and variant-set invites cannot be revoked (no route);

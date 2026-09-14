@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -115,5 +115,29 @@ describe('AppLayout', () => {
     await user.click(screen.getByRole('button', { name: /hide for now/i }))
 
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('offers one rail entry per destination, not three for the question library (U07)', () => {
+    // "New question" is an action, not a place, and a variant set is a group of
+    // the library's own rows — both moved onto the Questions page.
+    renderLayout()
+    const nav = screen.getByRole('navigation')
+    const entries = within(nav)
+      .getAllByRole('link')
+      .map((a) => a.textContent?.trim())
+    expect(entries).toEqual(['Questions', 'Assessments', 'Submissions', 'Team', 'Settings'])
+  })
+
+  it('keeps Questions current while you are inside the library', () => {
+    render(
+      <MemoryRouter initialEntries={['/variant-sets']}>
+        <ThemeProvider>
+          <AppLayout>
+            <p>page content</p>
+          </AppLayout>
+        </ThemeProvider>
+      </MemoryRouter>,
+    )
+    expect(screen.getByRole('link', { name: 'Questions' })).toHaveAttribute('aria-current', 'page')
   })
 })

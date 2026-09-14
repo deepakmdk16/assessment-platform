@@ -19,10 +19,14 @@ export function Sidebar() {
   const { user } = useAuth()
   const { pathname } = useLocation()
 
-  const onNew = pathname === '/questions/new'
-  const onQuestions = pathname === '/dashboard' || (pathname.startsWith('/questions/') && !onNew)
+  // "Questions" is the one destination for the whole library (U07): authoring a
+  // question is an action on that page, not a place, and a variant set is a
+  // group of its rows — so /questions/new and /variant-sets light it up too.
+  const onQuestions =
+    pathname === '/dashboard' ||
+    pathname.startsWith('/questions/') ||
+    pathname.startsWith('/variant-sets')
   const onSubmissions = pathname.startsWith('/submissions')
-  const onVariantSets = pathname.startsWith('/variant-sets')
   const onAssessments = pathname.startsWith('/assessments')
   const onTeam = pathname.startsWith('/team')
   const onSettings = pathname.startsWith('/settings')
@@ -47,19 +51,6 @@ export function Sidebar() {
           Questions
         </Link>
         <Link
-          to="/variant-sets"
-          className={onVariantSets ? 'on' : undefined}
-          aria-current={onVariantSets ? 'page' : undefined}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <rect x="3" y="3" width="7" height="7" rx="1.5" />
-            <rect x="14" y="3" width="7" height="7" rx="1.5" />
-            <rect x="3" y="14" width="7" height="7" rx="1.5" />
-            <rect x="14" y="14" width="7" height="7" rx="1.5" />
-          </svg>
-          Variant sets
-        </Link>
-        <Link
           to="/assessments"
           className={onAssessments ? 'on' : undefined}
           aria-current={onAssessments ? 'page' : undefined}
@@ -78,12 +69,6 @@ export function Sidebar() {
             <path d="M9 5h9M9 12h9M9 19h9M4 5h.01M4 12h.01M4 19h.01" />
           </svg>
           Submissions
-        </Link>
-        <Link to="/questions/new" className={onNew ? 'on' : undefined}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-          New question
         </Link>
         <Link
           to="/team"

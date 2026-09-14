@@ -13,6 +13,8 @@ function outOfFullscreen(over: Partial<IntegrityState> = {}): IntegrityState {
     fullscreenExits: 2,
     pasteBlocked: null,
     dismissPasteBlock: vi.fn(),
+    awayNotice: null,
+    dismissAwayNotice: vi.fn(),
     enterFullscreen: vi.fn(async () => {}),
     flush: vi.fn(),
     ...over,
@@ -94,5 +96,44 @@ describe('leaving a monitored sitting', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     rerender(<IntegrityOverlay integrity={outOfFullscreen({ fullscreenExits: 2 })} />)
     expect(screen.getByRole('button', { name: /re-enter fullscreen/i })).toBeInTheDocument()
+  })
+})
+
+describe('coming back from another tab (U05)', () => {
+  function idle(over: Partial<IntegrityState> = {}): IntegrityState {
+    return { ...outOfFullscreen(), mustReturnToFullscreen: false, fullscreenExits: 0, ...over }
+  }
+
+  it('says the switch was seen, in seconds, and does not block the editor', async () => {
+    // A tab switch is the one thing a browser gives a page no way to prevent,
+    // so acknowledging it is the whole of what can be done — and silence left
+    // the candidate believing nothing had happened.
+    const dismissAwayNotice = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <IntegrityOverlay
+        integrity={idle({ awayNotice: { durationMs: 42_000 }, dismissAwayNotice })}
+      />,
+    )
+
+    const notice = screen.getByRole('status')
+    expect(notice).toHaveTextContent('You left this tab for 42 seconds.')
+    expect(notice).toHaveTextContent(/shared with the interviewer/i)
+    expect(notice).toHaveTextContent(/clock kept running/i)
+    // Recorded, not refused: nothing is covering the editor.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /dismiss/i }))
+    expect(dismissAwayNotice).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads a longer absence in minutes', () => {
+    render(<IntegrityOverlay integrity={idle({ awayNotice: { durationMs: 132_000 } })} />)
+    expect(screen.getByRole('status')).toHaveTextContent('You left this tab for 2m 12s.')
+  })
+
+  it('renders nothing at all while the candidate is present', () => {
+    const { container } = render(<IntegrityOverlay integrity={idle()} />)
+    expect(container).toBeEmptyDOMElement()
   })
 })

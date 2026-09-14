@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   describeRecipients,
+  explainDeliveryError,
   inviteState,
   parseRecipients,
   parseServerDate,
@@ -127,5 +128,38 @@ describe('inviteState — timezone correctness', () => {
       status: 'active' as const, deliveries: [],
     }
     expect(inviteState(invite, now)).toBe('active')
+  })
+})
+
+describe('explainDeliveryError (U09)', () => {
+  it('names the fix for the failure the running stack actually produced', () => {
+    const raw =
+      "(530, b'5.7.0 Authentication Required. For more information, go to https://support.google.com/mail/?p=WantAuthError g4-2002 - gsmtp', 'sender@gmail.com')"
+    expect(explainDeliveryError(raw)).toContain('SMTP_PASSWORD')
+  })
+
+  it('separates a rejected credential from a missing one', () => {
+    expect(explainDeliveryError("(535, b'5.7.8 Username and Password not accepted')")).toContain(
+      'app password',
+    )
+  })
+
+  it('reads a bad address as the interviewer’s typo, not a server fault', () => {
+    expect(explainDeliveryError("(550, b'5.1.1 User unknown')")).toContain('typo')
+  })
+
+  it('passes through the two server-side outcomes that are not SMTP replies', () => {
+    expect(
+      explainDeliveryError('email is not configured on the server; the link was logged, not sent.'),
+    ).toContain('no mailer configured')
+    expect(
+      explainDeliveryError("the server's email time budget (SMTP_DEADLINE_S) ran out before this address was reached; the link was not sent."),
+    ).toContain('time budget')
+  })
+
+  it('falls back to something true rather than guessing', () => {
+    expect(explainDeliveryError('connection reset by peer')).toBe(
+      'The mail server refused the message.',
+    )
   })
 })

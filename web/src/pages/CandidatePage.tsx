@@ -129,31 +129,32 @@ function clearDraft(token: string, candidateEmail: string): void {
 /** What the candidate is walking into, in one sentence, before they identify
  *  themselves. "Timed" only when it is (P2a). */
 function gateLead(info: InviteStatusResponse | null): string {
-  const problems = (info?.question_count ?? 1) > 1 ? 'problems' : 'problem'
-  const clock =
-    info?.duration_minutes != null
-      ? `This sitting is timed. A ${info.duration_minutes}-minute clock starts when you begin, and you’ll`
-      : 'There’s no time limit. You’ll'
-  return `${clock} see the ${problems} and a code editor on the next screen. Use the email address your invite was sent to.`
+  // What the chips above already say is deliberately not repeated (U04): this
+  // line is only what they cannot carry — when the clock starts, and which
+  // address to use.
+  return info?.duration_minutes != null
+    ? 'The clock starts when you begin. Use the email address your invite was sent to.'
+    : 'There’s no time limit. Use the email address your invite was sent to.'
 }
 
-/** Questions / time / languages, from the pre-start probe (P2a). */
+/** Questions / time / languages, from the pre-start probe (P2a).
+ *
+ *  A chip strip rather than the bordered three-cell table it used to be (U04):
+ *  the same three facts in a quarter of the height, on a screen whose button was
+ *  below the fold. */
 function GateFacts({ info }: { info: InviteStatusResponse }) {
+  const count = info.question_count ?? 1
+  const languages = (info.languages ?? []).join(', ')
   return (
-    <dl className="gate-facts">
-      <div>
-        <dt>Questions</dt>
-        <dd>{info.question_count ?? 1}</dd>
-      </div>
-      <div>
-        <dt>Time</dt>
-        <dd>{info.duration_minutes != null ? `${info.duration_minutes} min` : 'No limit'}</dd>
-      </div>
-      <div>
-        <dt>Languages</dt>
-        <dd>{(info.languages ?? []).join(', ')}</dd>
-      </div>
-    </dl>
+    <div className="gate-strip">
+      <span className="chip chip-neutral">
+        {count} {count === 1 ? 'question' : 'questions'}
+      </span>
+      <span className={info.duration_minutes != null ? 'chip chip-accent' : 'chip chip-neutral'}>
+        {info.duration_minutes != null ? `${info.duration_minutes}-minute clock` : 'No time limit'}
+      </span>
+      {languages && <span className="chip chip-neutral">{languages}</span>}
+    </div>
   )
 }
 
@@ -163,15 +164,18 @@ function GateFacts({ info }: { info: InviteStatusResponse }) {
 function AssessmentNotice({ orgName }: { orgName?: string | null }) {
   const who = orgName ? `A person at ${orgName}` : 'A person'
   return (
-    <div className="gate-note" role="note">
-      <span className="gate-note-title">How your work is assessed</span>
+    <details className="disclose" role="note">
+      <summary>
+        <b>Scored automatically</b>
+        <span>{who} makes the decision, not the AI.</span>
+      </summary>
       <p>
         Your code is run against test cases and scored automatically, and an AI model writes a
         short summary of it for the interviewer. {who} makes any decision about your application,
         not the AI. To ask for a human review of your result, contact the interviewer who
         invited you.
       </p>
-    </div>
+    </details>
   )
 }
 
@@ -585,24 +589,29 @@ export function CandidatePage() {
                 {gateError}
               </p>
             )}
-            <div className="field">
-              <label htmlFor="candidate_name">Name</label>
-              <input
-                id="candidate_name"
-                value={candidateName}
-                onChange={(e) => setCandidateName(e.target.value)}
-                required
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="candidate_email">Email</label>
-              <input
-                id="candidate_email"
-                type="email"
-                value={candidateEmail}
-                onChange={(e) => setCandidateEmail(e.target.value)}
-                required
-              />
+            {/* Two short fields on a wide card: stacked, they cost 80px of the
+                height that put the start button below the fold (U04). `.grid2`
+                collapses back to one column on a narrow screen. */}
+            <div className="grid2">
+              <div className="field">
+                <label htmlFor="candidate_name">Name</label>
+                <input
+                  id="candidate_name"
+                  value={candidateName}
+                  onChange={(e) => setCandidateName(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="candidate_email">Email</label>
+                <input
+                  id="candidate_email"
+                  type="email"
+                  value={candidateEmail}
+                  onChange={(e) => setCandidateEmail(e.target.value)}
+                  required
+                />
+              </div>
             </div>
             <div className="consent-check">
               <input
@@ -612,7 +621,9 @@ export function CandidatePage() {
                 onChange={(e) => setConsented(e.target.checked)}
               />
               <label htmlFor="candidate_consent">
-                I’ve read the{' '}
+                I agree to my assessment
+                {gateProctored ? ' — including the monitoring above — ' : ' '}
+                being recorded and shared with the interviewer, and I’ve read the{' '}
                 <a href="/privacy" target="_blank" rel="noreferrer">
                   privacy notice
                 </a>{' '}
@@ -620,9 +631,7 @@ export function CandidatePage() {
                 <a href="/terms" target="_blank" rel="noreferrer">
                   terms
                 </a>
-                , and I agree to my assessment
-                {gateProctored ? ' — including the monitoring described above — ' : ' '}
-                being recorded and shared with the interviewer.
+                .
               </label>
             </div>
             <button type="submit" className="btn submit block" disabled={starting || !consented}>

@@ -10,7 +10,10 @@ import type { VariantSetSummary } from '../types'
 // already bitten. A page you can see the end of is a page you can trust.
 const PAGE_SIZE = 25
 
-export function VariantSetsListPage() {
+/** The variant-set list, without a page head of its own — it is rendered as the
+ *  "Variant sets" tab of the question library (U07), which supplies the title
+ *  and the create button. */
+export function VariantSetsList() {
   const navigate = useNavigate()
   const [items, setItems] = useState<VariantSetSummary[] | null>(null)
   const [total, setTotal] = useState(0)
@@ -37,25 +40,6 @@ export function VariantSetsListPage() {
 
   return (
     <div>
-      <div className="page-head">
-        <div>
-          <h1>
-            Variant sets
-            {total > 0 && <span className="count">{total}</span>}
-          </h1>
-          <div className="sub">
-            Draft several interchangeable versions of one problem, so each candidate gets a
-            different-but-equivalent question.
-          </div>
-        </div>
-        <Link to="/variant-sets/new" className="btn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-          New variant set
-        </Link>
-      </div>
-
       {error && <p className="form-error">{error}</p>}
       {!error && items === null && <p className="page-loading">Loading…</p>}
 

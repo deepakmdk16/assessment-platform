@@ -11,7 +11,9 @@ test('changing the password signs the old one out and the new one in', async ({ 
   // Settings is one route per section now (P3a): the address lives on Account,
   // the password on Security.
   await page.goto('/settings/account')
-  await expect(page.getByText('Not confirmed')).toBeVisible()
+  // Exact: the Account panel's own field hint opens with the same two words
+  // since U08 gave it an edit form, and the chip is what this asserts.
+  await expect(page.getByText('Not confirmed', { exact: true })).toBeVisible()
 
   await page.goto('/settings/security')
   await page.getByLabel('Current password').fill(password)

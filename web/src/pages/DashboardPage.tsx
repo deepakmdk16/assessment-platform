@@ -1,9 +1,10 @@
 import { useEffect, useState, type MouseEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { formatDuration, score } from '../analytics/format'
 import { badgeClass, difficultyClass } from '../badges'
-import { AnalyticsPanel } from '../components/AnalyticsPanel'
+import { AnalyticsPanel, RangeSeg } from '../components/AnalyticsPanel'
+import { VariantSetsList } from './VariantSetsList'
 import { Meter } from '../components/Meter'
 import { Pager } from '../components/Pager'
 import type { QuestionAnalytics, QuestionOut } from '../types'
@@ -15,6 +16,11 @@ const PAGE_SIZE = 25
 
 export function DashboardPage() {
   const navigate = useNavigate()
+  // Variant sets are a view of this library rather than a place of their own
+  // (U07), so which list is showing is a query parameter on this route — which
+  // also keeps /dashboard?view=sets linkable, and is where /variant-sets lands.
+  const [params, setParams] = useSearchParams()
+  const view = params.get('view') === 'sets' ? 'sets' : 'questions'
   const [questions, setQuestions] = useState<QuestionOut[] | null>(null)
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
@@ -107,6 +113,8 @@ export function DashboardPage() {
     }
   }
 
+  const sets = view === 'sets'
+
   return (
     <div>
       <div className="page-head">
@@ -115,25 +123,56 @@ export function DashboardPage() {
             Questions
             {total > 0 && <span className="count">{total}</span>}
           </h1>
-          <div className="sub">Author problems, invite candidates, and review graded submissions.</div>
+          <div className="sub">
+            {sets
+              ? 'Several interchangeable versions of one problem, so each candidate gets a different-but-equivalent question.'
+              : 'Author problems, invite candidates, and review graded submissions.'}
+          </div>
         </div>
-        <Link to="/questions/new" className="btn">
+        {/* Creating is an action on this page, not a rail destination (U07). */}
+        <Link to={sets ? '/variant-sets/new' : '/questions/new'} className="btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
             <path d="M12 5v14M5 12h14" />
           </svg>
-          New question
+          {sets ? 'New variant set' : 'New question'}
         </Link>
       </div>
 
-      <AnalyticsPanel days={days} onDaysChange={setDays} />
+      <AnalyticsPanel days={days} />
 
-      {error && <p className="form-error">{error}</p>}
-      {!error && questions === null && <p className="page-loading">Loading…</p>}
+      <div className="tabs tabs-page" role="tablist" aria-label="Library view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!sets}
+          className={`tab${sets ? '' : ' on'}`}
+          onClick={() => setParams({}, { replace: true })}
+        >
+          All questions
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={sets}
+          className={`tab${sets ? ' on' : ''}`}
+          onClick={() => setParams({ view: 'sets' }, { replace: true })}
+        >
+          Variant sets
+        </button>
+      </div>
+
+      {sets && <VariantSetsList />}
+
+      {!sets && error && <p className="form-error">{error}</p>}
+      {!sets && !error && questions === null && <p className="page-loading">Loading…</p>}
 
       {/* The toolbar renders as soon as questions load (even when empty) so
           archiving your last question never hides the "Show archived" toggle. */}
-      {questions !== null && (
+      {!sets && questions !== null && (
         <div className="list-toolbar">
+          {/* The window filters the table's own columns as much as the figures
+              above it, so the control belongs with the list (U06). */}
+          <RangeSeg days={days} onDaysChange={setDays} />
           <label className="check">
             <input
               type="checkbox"
@@ -150,7 +189,7 @@ export function DashboardPage() {
         </div>
       )}
 
-      {questions?.length === 0 && (
+      {!sets && questions?.length === 0 && (
         <p className="empty-state">
           {showArchived
             ? 'No questions yet. Create your first one to start inviting candidates.'
@@ -158,7 +197,7 @@ export function DashboardPage() {
         </p>
       )}
 
-      {questions && questions.length > 0 && (
+      {!sets && questions && questions.length > 0 && (
         <div className="card">
           <div className="tbl-wrap">
             <table className="tbl">

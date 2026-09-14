@@ -256,6 +256,15 @@ export const api = {
   verifyEmail: (token: string) =>
     request<void>('/auth/verify-email', { method: 'POST', body: { token } }),
 
+  /** Edit your own profile (U08). A changed `email` is NOT applied by this call:
+   *  the server mails a confirmation link to the new address, and the account
+   *  only moves once that link is opened. `password` is required for that. */
+  updateMe: (body: { name?: string; email?: string; password?: string }) =>
+    request<User>('/auth/me', { method: 'PATCH', body, auth: true }),
+
+  confirmEmailChange: (token: string) =>
+    request<void>('/auth/confirm-email-change', { method: 'POST', body: { token } }),
+
   resendVerification: () =>
     request<{ detail: string }>('/auth/resend-verification', { method: 'POST', auth: true }),
 

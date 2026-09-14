@@ -36,6 +36,14 @@ function renderRegisterPage(url = '/register') {
   )
 }
 
+/** Fill both password fields with the same value — the pair the form compares
+ *  before it posts anything (U03). Exact labels, since /password/i now matches
+ *  two inputs. */
+async function typePassword(user: ReturnType<typeof userEvent.setup>, pw: string) {
+  await user.type(screen.getByLabelText('Password'), pw)
+  await user.type(screen.getByLabelText('Confirm password'), pw)
+}
+
 describe('RegisterPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -46,7 +54,7 @@ describe('RegisterPage', () => {
     expect(
       screen.getByText('At least 12 characters. Passwords that appear in known breaches are refused.'),
     ).toBeInTheDocument()
-    expect(screen.getByLabelText(/password/i)).toHaveAttribute('minlength', '12')
+    expect(screen.getByLabelText('Password')).toHaveAttribute('minlength', '12')
   })
 
   it('registers, logs in and navigates to the dashboard', async () => {
@@ -58,7 +66,7 @@ describe('RegisterPage', () => {
 
     await user.type(screen.getByLabelText(/name/i), 'Ada')
     await user.type(screen.getByLabelText(/email/i), 'a@b.com')
-    await user.type(screen.getByLabelText(/password/i), 'correct-horse-battery')
+    await typePassword(user, 'correct-horse-battery')
     await user.click(screen.getByRole('button', { name: /create account/i }))
 
     await waitFor(() => {
@@ -72,6 +80,24 @@ describe('RegisterPage', () => {
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/dashboard'))
   })
 
+  it('refuses a mismatched confirmation without creating the account', async () => {
+    // A typo here used to become the account's real password, and the reset
+    // path is email — which is what a locked-out interviewer cannot reach.
+    const user = userEvent.setup()
+    renderRegisterPage()
+
+    await user.type(screen.getByLabelText(/name/i), 'Ada')
+    await user.type(screen.getByLabelText(/email/i), 'a@b.com')
+    await user.type(screen.getByLabelText('Password'), 'correct-horse-battery')
+    await user.type(screen.getByLabelText('Confirm password'), 'correct-horse-bettery')
+    await user.click(screen.getByRole('button', { name: /create account/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent("Passwords don't match.")
+    expect(api.register).not.toHaveBeenCalled()
+    expect(loginMock).not.toHaveBeenCalled()
+    expect(navigateMock).not.toHaveBeenCalled()
+  })
+
   it('shows the API refusal verbatim', async () => {
     const user = userEvent.setup()
     vi.mocked(api.register).mockRejectedValue(
@@ -82,7 +108,7 @@ describe('RegisterPage', () => {
 
     await user.type(screen.getByLabelText(/name/i), 'Ada')
     await user.type(screen.getByLabelText(/email/i), 'a@b.com')
-    await user.type(screen.getByLabelText(/password/i), 'password1234')
+    await typePassword(user, 'password1234')
     await user.click(screen.getByRole('button', { name: /create account/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -126,7 +152,7 @@ describe('RegisterPage · from an organisation invitation', () => {
     await waitFor(() => expect(screen.getByLabelText('Email')).toHaveValue('sam@acme.io'))
 
     await user.type(screen.getByLabelText('Name'), 'Sam Okafor')
-    await user.type(screen.getByLabelText('Password'), 'pw-long-enough-12')
+    await typePassword(user, 'pw-long-enough-12')
     await user.click(screen.getByRole('button', { name: /create account and join/i }))
 
     await waitFor(() =>

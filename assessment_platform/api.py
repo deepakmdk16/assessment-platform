@@ -69,8 +69,10 @@ from . import (
 )
 from .auth import (
     REFRESH_COOKIE,
+    change_email_from_token,
     clear_refresh_cookie,
     create_access_token,
+    create_change_email_token,
     create_refresh_token,
     create_reset_token,
     create_verify_token,
@@ -141,6 +143,7 @@ from .schemas import (
     ChangePasswordIn,
     CheckoutIn,
     CheckoutOut,
+    ConfirmEmailChangeIn,
     DashboardSubmissionOut,
     DeleteAccountIn,
     DifficultyVerdict,
@@ -189,6 +192,7 @@ from .schemas import (
     TestCaseOut,
     TokenOut,
     TrendPointOut,
+    UpdateMeIn,
     UsageOut,
     VariantDraftOut,
     VariantOut,
@@ -234,6 +238,24 @@ def _require_email_configured() -> None:
         )
 
 
+def _check_email_deliverable() -> None:
+    """Prove the mailer can log in, not merely that its settings are filled.
+
+    `_require_email_configured` above is a presence check, so a *wrong* password
+    boots clean and then refuses every send from a background task nobody is
+    watching — a password reset answers 202, the interviewer sees success, and no
+    mail ever arrives (U02). Credentials the provider rejects are a permanent
+    failure and stop the boot here, where `.env` is still editable. Anything else
+    is logged and allowed through: a provider that is briefly unreachable must
+    not also prevent a restart.
+    """
+    if config.TESTING:
+        return
+    problem = email_client.check_login()
+    if problem:
+        logger.error("Email preflight: %s", problem)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Logging and error reporting first, so a failure in the rest of this hook is
@@ -248,6 +270,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Fail fast, before the port is bound: a mail misconfiguration is cheap to fix
     # now and expensive to discover from a candidate's silence later.
     _require_email_configured()
+    _check_email_deliverable()
     # Production runs Alembic migrations; create_all only when explicitly opted in
     # (dev/E2E) so a missing migration surfaces instead of being papered over.
     if config.AUTO_CREATE_TABLES:
@@ -1173,6 +1196,77 @@ def delete_me(
     _purge_account(_require_id(current.id), session)
     session.commit()
     clear_refresh_cookie(response)
+
+
+@app.patch("/auth/me", response_model=InterviewerOut)
+def update_me(
+    body: UpdateMeIn,
+    request: Request,
+    background: BackgroundTasks,
+    current: Interviewer = Depends(get_current_interviewer),
+    session: Session = Depends(get_session),
+) -> InterviewerOut:
+    """Correct your own name, and start a change of address (U08).
+
+    The name is applied here. The address is NOT: a confirmation link goes to the
+    *new* mailbox and the account only moves when that link is opened. The
+    address is the sign-in identity and the way back from a wrong one is a reset
+    mail sent to it, so applying a typo immediately would lock the account — the
+    same trap the sign-up confirmation field exists to close.
+    """
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name cannot be empty.")
+        current.name = name
+    if body.email is not None and (email := _normalize_email(body.email)) != current.email:
+        # Changing where sign-in and password resets land is a takeover if a
+        # lifted access token can do it alone, so the password is asked for again
+        # (as `DELETE /auth/me` does). Rate-limited on the same bucket as the
+        # other account mails, since this one sends to an attacker-chosen address.
+        if not body.password or not verify_password(body.password, current.password_hash):
+            raise HTTPException(status_code=403, detail="password is incorrect.")
+        limiter.check(
+            "forgot", client_ip(request), config.LOGIN_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
+        )
+        taken = session.exec(select(Interviewer).where(Interviewer.email == email)).first()
+        if taken is not None:
+            raise HTTPException(status_code=409, detail=f"email {email!r} already registered.")
+        token = create_change_email_token(current, email)
+        url = f"{config.FRONTEND_BASE_URL}/confirm-email?token={token}"
+        background.add_task(
+            email_client.send_account_email,
+            email,
+            email_templates.change_email(name=current.name, url=url, old_email=current.email),
+            url,
+        )
+    current.updated_at = datetime.now(timezone.utc)
+    session.add(current)
+    session.commit()
+    session.refresh(current)
+    return _interviewer_out(current)
+
+
+@app.post("/auth/confirm-email-change", status_code=204)
+def confirm_email_change(
+    body: ConfirmEmailChangeIn, session: Session = Depends(get_session)
+) -> None:
+    """Spend a change-of-address link (U08). Opening it is itself the proof that
+    the new mailbox is readable, so the address lands already confirmed."""
+    found = change_email_from_token(body.token, session)
+    if found is None:
+        raise HTTPException(status_code=400, detail="this link is invalid or has expired.")
+    interviewer, new_email = found
+    # Re-checked here, not just when the link was requested: someone else may
+    # have registered the address in between.
+    taken = session.exec(select(Interviewer).where(Interviewer.email == new_email)).first()
+    if taken is not None and taken.id != interviewer.id:
+        raise HTTPException(status_code=409, detail=f"email {new_email!r} already registered.")
+    interviewer.email = new_email
+    interviewer.email_verified_at = datetime.now(timezone.utc)
+    interviewer.updated_at = datetime.now(timezone.utc)
+    session.add(interviewer)
+    session.commit()
 
 
 @app.get("/auth/me", response_model=InterviewerOut)
