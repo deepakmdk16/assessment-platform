@@ -114,6 +114,13 @@ gate fails if a listed violation starts *passing*, so the list cannot rot.
   **Moderate-impact axe rules are out of scope by the impact filter, so R2-164's
   missing landmarks and headings are NOT covered** — S17 should tighten the
   filter once it has fixed them.
+  **The baseline is environment-dependent**: ubuntu reflows text wider than
+  macOS, so two entries (`assessment-new | phone | horizontal-overflow`,
+  `privacy | scrollable-region-focusable`) reproduce on the CI runner and not on
+  a laptop. A NEW violation therefore fails everywhere, but the "this one is
+  fixed, delete it" direction is enforced in **CI only** — CI is the reference
+  environment for the list. Setting `CI=1` locally on macOS will report those two
+  as stale; that is the platform difference, not a bug.
 
 Both lints run in `npm run lint`, so they gate CI and the pre-push hook; the
 visual gate rides the `e2e` job.

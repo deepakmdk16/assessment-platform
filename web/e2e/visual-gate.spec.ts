@@ -17,9 +17,11 @@
  * them, so adding a route costs one line. Depth stays in the flow specs.
  *
  * Known failures are listed in KNOWN_VIOLATIONS with the finding that owns them
- * and the session that closes it, strict in both directions: a new violation
- * fails immediately, and a listed one that stops happening fails too, so the list
- * shrinks and cannot rot.
+ * and the session that closes it. A new violation fails immediately, everywhere.
+ * The other direction — a listed violation that no longer happens — is enforced
+ * in CI only, because the baseline is environment-dependent: ubuntu's font
+ * metrics reflow text wider than macOS's, and two entries reproduce on the runner
+ * and not on a laptop. CI is the reference environment for the list.
  *
  * Screenshots land in `web/test-results/visual-gate/` for a human to look at.
  * They are NOT compared against baselines — a pixel baseline over 4 variants of
@@ -79,6 +81,9 @@ const KNOWN_VIOLATIONS: Record<string, string> = {
   'question-edit | phone | horizontal-overflow': 'R2-159 — same wizard, edit mode, S13',
   'question-detail | phone | horizontal-overflow': 'R2-154 — delivery aside does not wrap, S13',
   'candidate-start | phone | horizontal-overflow': 'R2-156 — start-screen card overflows, S13',
+  // CI-only: ubuntu's font metrics render this text wider than macOS's, and it
+  // tips over 390px there. Real either way — it has 12px of slack on one platform.
+  'assessment-new | phone | horizontal-overflow': 'found in CI — 12px at 390px, S13',
 
   // Contrast — R2-145: --color-faint is 2.80–3.85:1 in both themes, below AA.
   // One token, every surface that uses it for a subtitle or a label. S17.
@@ -113,6 +118,9 @@ const KNOWN_VIOLATIONS: Record<string, string> = {
   // A scrollable region a keyboard user cannot reach or scroll. Also found by
   // this gate, and only once /team was added to the list.
   'team | scrollable-region-focusable': 'found by this gate — members table, S17',
+  // CI-only, same reason: the legal text reflows taller on ubuntu and the region
+  // becomes scrollable at 390px, where macOS fits it.
+  'privacy | scrollable-region-focusable': 'found in CI — legal text at 390px, S17',
 }
 
 const a11yKey = (route: string, rule: string) => `${route} | ${rule}`
@@ -378,6 +386,18 @@ test.describe('visual gate', () => {
   // Runs last (Playwright preserves declaration order within a file, and the
   // config pins workers: 1), reading what every variant wrote to disk.
   test('KNOWN_VIOLATIONS holds nothing that is already fixed', async () => {
+    // Strict in CI only. The baseline is environment-dependent — ubuntu's font
+    // metrics reflow text wider than macOS's, so two entries here reproduce on
+    // the runner and not on a developer's machine. Enforcing staleness locally
+    // would fail every local run for a violation that is genuinely still there.
+    // CI is the authority on which known violations still reproduce; the other
+    // direction (a NEW violation) stays strict everywhere, which is the half
+    // that stops drift.
+    test.skip(
+      !process.env.CI,
+      'staleness is judged in CI — the baseline depends on the platform s font metrics'
+    )
+
     const files = await fs.readdir(SEEN_DIR).catch(() => [] as string[])
     const expected = VIEWPORTS.length * THEMES.length
     // Only judge staleness on a COMPLETE run. If a variant failed or was skipped
