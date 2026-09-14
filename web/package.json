@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "eslint . && node scripts/check-no-hex.mjs",
+    "lint": "eslint . && node scripts/check-no-hex.mjs && node scripts/check-copy.mjs && node scripts/check-claims.mjs",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",

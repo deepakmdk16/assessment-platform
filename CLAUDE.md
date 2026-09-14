@@ -19,6 +19,10 @@ deterministic grade.
   Styling is **token-driven**: all appearance lives in `web/src/styles/` (a restyle
   edits CSS, never `.tsx`). No inline `style=` / hex in components — enforced by
   `npm run lint`. See CONVENTIONS.md → "Styling".
+  **Copy is gated too** (same `npm run lint`): use the canonical noun from
+  [docs/GLOSSARY.md](docs/GLOSSARY.md), and any sentence that asserts behaviour
+  ("recorded", "blocked", "autosaved", "monitored") needs a row in
+  [docs/CLAIMS.md](docs/CLAIMS.md) naming the test that proves it.
   **New UI feature / non-trivial visual change → mockup first.** Build a static
   mockup (use the `artifact-design` skill) and get sign-off **before** editing
   `.tsx` — don't iterate live in the running app. Skip for token tweaks, copy

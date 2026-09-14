@@ -89,6 +89,20 @@ gate fails if a listed violation starts *passing*, so the list cannot rot.
   `scripts/schema-limits-baseline.txt`; the file only shrinks, and there is no
   regenerate flag. Bounding a stored test case's `stdin`/`expected` is what lets
   G1's size xfail be deleted.
+- **G5 · `docs/GLOSSARY.md` + `web/scripts/check-copy.mjs`** — one word per concept.
+  The lint reads PROSE only (JSX text and quoted strings containing a space), so
+  `OrganizationOut` and `/auth/login` are untouched while the copy is held to
+  British spelling and the canonical noun. 12 known drift sites today (R2-108,
+  R2-111, R2-112, R2-118 → S10), keyed by file + fragment.
+- **G2 · `docs/CLAIMS.md` + `web/scripts/check-claims.mjs`** — a sentence asserting
+  behaviour ("recorded", "blocked", "autosaved", "monitored", "cannot be") must
+  have a row naming the test that proves it. 17 claims registered; 5 of their rows
+  say **owed**, which is the honest list of promises the product cannot currently
+  back: fullscreen (R2-003 → S04), the devtools half of the consent screen (S04),
+  "No consent recorded" (S04), multi-question autosave (R2-030 → S08), and the
+  buzzer-failure notice (R2-029 → S08).
+
+Both lints run in `npm run lint`, so they gate CI and the pre-push hook.
 
 ---
 
