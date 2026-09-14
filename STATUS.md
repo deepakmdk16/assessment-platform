@@ -102,7 +102,27 @@ gate fails if a listed violation starts *passing*, so the list cannot rot.
   "No consent recorded" (S04), multi-question autosave (R2-030 → S08), and the
   buzzer-failure notice (R2-029 → S08).
 
-Both lints run in `npm run lint`, so they gate CI and the pre-push hook.
+- **G4 · `web/e2e/visual-gate.spec.ts`** (S00b) — every route at 1280x800 and
+  390x844, in light and dark: no horizontal overflow, no serious/critical axe
+  violation, and a screenshot for a human. Runs in the `e2e` CI job and under
+  `RUN_E2E=1`; screenshots upload as a failure artifact. 26 known violations
+  (R2-145 contrast -> S17, R2-154/156/159 overflow -> S13, plus link-in-text-block
+  which this gate found and the audit had missed). Keys are `route | rule` for
+  accessibility and `route | viewport | horizontal-overflow` for layout —
+  deliberately coarser than the 4-variant matrix, so one contrast ratio landing
+  the right side of AA in one theme cannot make the list go stale four ways.
+  **Moderate-impact axe rules are out of scope by the impact filter, so R2-164's
+  missing landmarks and headings are NOT covered** — S17 should tighten the
+  filter once it has fixed them.
+
+Both lints run in `npm run lint`, so they gate CI and the pre-push hook; the
+visual gate rides the `e2e` job.
+
+**E2E ports are now overridable** (`E2E_PLATFORM_PORT` / `E2E_FRONTEND_PORT` /
+`E2E_AGENT_PORT`, defaults unchanged), so the suite can run beside a live dev
+stack instead of demanding :9000 be free. The platform server is handed a
+matching `FRONTEND_BASE_URL` — without it, invite links point at whatever holds
+the default port and every candidate spec walks into the wrong stack.
 
 ### S00 review leftovers — 2026-09-14
 

@@ -77,3 +77,15 @@ jobs:
           name: playwright-report
           path: web/playwright-report/
           retention-days: 7
+
+      # The visual gate's assertions are machine-readable, but a layout or theme
+      # regression is something a person has to LOOK at — that is the whole
+      # premise of G4. Ship the screenshots with the failure.
+      - name: Upload visual-gate screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-gate-screenshots
+          path: web/test-results/visual-gate/
+          retention-days: 7
+          if-no-files-found: ignore

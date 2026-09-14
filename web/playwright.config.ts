@@ -5,12 +5,25 @@ import path from 'node:path'
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(dir, '..')
 
-const FRONTEND_URL = 'http://127.0.0.1:5173'
-const PLATFORM_URL = 'http://127.0.0.1:9000'
+// Ports. The defaults are the real ones and nothing below changes unless a port
+// is explicitly overridden — but a developer running the dev stack (`scripts/dev.sh`
+// on :9000 + vite on :5173) otherwise cannot run E2E at all, because the platform
+// server here deliberately refuses to reuse an existing listener. Overriding lets
+// the suite run beside a live dev stack on a spare set:
+//   E2E_PLATFORM_PORT=9100 E2E_FRONTEND_PORT=5273 E2E_AGENT_PORT=8200 RUN_E2E=1 …
+const PLATFORM_PORT = process.env.E2E_PLATFORM_PORT ?? '9000'
+const FRONTEND_PORT = process.env.E2E_FRONTEND_PORT ?? '5173'
 // NOT :8000 — that's the real assess-agent's port. With reuseExistingServer on
 // (local runs), a running agent container answering /health there would be
 // silently reused as if it were the mock, and specs then hit a real grader.
-const AGENT_URL = 'http://127.0.0.1:8100'
+const AGENT_PORT = process.env.E2E_AGENT_PORT ?? '8100'
+
+const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`
+const PLATFORM_URL = `http://127.0.0.1:${PLATFORM_PORT}`
+const AGENT_URL = `http://127.0.0.1:${AGENT_PORT}`
+
+// Each port set gets its own throwaway DB, so two suites can never share one file.
+const E2E_DB = PLATFORM_PORT === '9000' ? 'e2e-platform.db' : `e2e-platform-${PLATFORM_PORT}.db`
 
 // One shared backend + a single SQLite file back every spec, so the suite runs
 // serially. Tests stay independent by minting unique interviewer emails and
@@ -41,7 +54,7 @@ export default defineConfig({
       // fresh is instant; a busy port now fails loudly instead.
       reuseExistingServer: false,
       stdout: 'pipe',
-      env: { MOCK_AGENT_PORT: '8100' },
+      env: { MOCK_AGENT_PORT: AGENT_PORT },
     },
     {
       // Wipe the SQLite file (and any -wal/-shm sidecars) BEFORE starting so the
@@ -49,7 +62,7 @@ export default defineConfig({
       // it never ALTERs an existing one — so a stale e2e-platform.db left by an
       // earlier run (from before a later migration) would 500 on a missing column.
       // CI is already clean via checkout; this makes local runs just as robust.
-      command: 'rm -f e2e-platform.db* && uv run platform-api',
+      command: `rm -f ${E2E_DB}* && uv run platform-api`,
       cwd: repoRoot,
       url: `${PLATFORM_URL}/health`,
       // Never reuse: a leftover dev server on :9000 runs old code against the
@@ -61,7 +74,7 @@ export default defineConfig({
       env: {
         AGENT_BASE_URL: AGENT_URL,
         PLATFORM_BASE_URL: PLATFORM_URL,
-        DATABASE_URL: 'sqlite:///./e2e-platform.db',
+        DATABASE_URL: `sqlite:///./${E2E_DB}`,
         // Test mode: force SMTP off so invites don't hit real Gmail during E2E.
         PLATFORM_TESTING: '1',
         // The E2E DB is wiped and recreated on the fly (see the command above), so
@@ -74,6 +87,13 @@ export default defineConfig({
         // back to Vite's "localhost" default, the run must fail here rather than
         // pass while the SameSite=lax refresh cookie is silently dropped.
         CORS_ORIGINS: FRONTEND_URL,
+        // Candidate invite links are built server-side as
+        // `{FRONTEND_BASE_URL}/t/{token}` and the specs navigate straight to
+        // them. It defaults to :5173, so on an overridden port set every
+        // candidate spec would walk out of this stack and into whatever is on
+        // :5173 — a dev server with a different database, where the token does
+        // not exist. Pin it to the frontend this suite actually started.
+        FRONTEND_BASE_URL: FRONTEND_URL,
         // Disable rate limits so a run of many logins/submits can't flake. Every
         // bucket must be listed by name: a limiter added later defaults to ON, and
         // an E2E run does in one window what a human would spread over a day.
@@ -84,16 +104,26 @@ export default defineConfig({
         DRAFT_SAVE_RATE_LIMIT_MAX: '0',
         RUN_RATE_LIMIT_MAX: '0',
         HOST: '127.0.0.1',
-        PORT: '9000',
+        PORT: PLATFORM_PORT,
       },
     },
     {
-      // No --host/--port override: vite.config.ts owns those now. Overriding
-      // here would keep hiding a regression in that file from this suite.
-      command: 'npm run dev',
+      // No --port on the DEFAULT path: vite.config.ts owns the host and port, and
+      // overriding them unconditionally would hide a regression in that file from
+      // this suite. Only an explicit E2E_FRONTEND_PORT passes one through, which
+      // is opt-in and never what CI runs.
+      command: process.env.E2E_FRONTEND_PORT
+        ? `npm run dev -- --port ${FRONTEND_PORT} --strictPort`
+        : 'npm run dev',
       url: FRONTEND_URL,
-      reuseExistingServer: !process.env.CI,
+      // Reuse only on the default port. On an overridden set the whole point is a
+      // private stack, and adopting a stray listener would point the app back at
+      // :9000 — the dev server, with the dev database and the wrong CORS origin.
+      reuseExistingServer: !process.env.CI && !process.env.E2E_FRONTEND_PORT,
       stdout: 'pipe',
+      // src/api.ts defaults to :9000; on an overridden set it must follow the
+      // platform this suite actually started.
+      env: { VITE_API_BASE_URL: PLATFORM_URL },
     },
   ],
 })
