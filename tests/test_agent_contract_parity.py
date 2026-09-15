@@ -540,3 +540,19 @@ def test_the_intake_caps_do_not_reach_the_response_model() -> None:
     stdin_cap, expected_cap = _stored_case_char_caps()
     assert stdin_cap is not None and expected_cap is not None
     TestCaseOut(id=1, name="legacy", stdin="9" * (stdin_cap + 1), expected="9" * (expected_cap + 1))
+
+
+def test_refusing_an_oversized_question_does_not_echo_it_back(client: Any) -> None:
+    """The size caps exist to stop a large body costing more than it should; a
+    422 that serializes pydantic's `input` back turned a 13 MB rejected question
+    into a 13 MB response, so the refusal cost as much as accepting it would.
+    """
+    cases = [
+        {"name": f"c{i}", "stdin": "1\n" * 173_000, "expected": "x",
+         "category": "correctness", "weight": 1.0}
+        for i in range(_stored_case_count_cap() or 25)
+    ]
+    resp = client.post("/questions", json={**_valid_payload(), "test_cases": cases})
+    assert resp.status_code == 422, resp.status_code
+    assert len(resp.content) < 4096, f"{len(resp.content):,}-byte response to a rejected question"
+    assert "over the" in resp.json()["detail"][0]["msg"]

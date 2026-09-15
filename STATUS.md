@@ -135,6 +135,14 @@ the default port and every candidate spec walks into the wrong stack.
 
 ### S00b review leftovers — 2026-09-14
 
+- **P3 · S — A question stored before S01's caps can be read but not edited.**
+  Nine dev cases across three questions exceed `MAX_CASE_STDIN_CHARS`, so a PUT
+  of one now 422s where it used to 413 — better (the message names the budget and
+  the wizard renders it) but still not editable until the interviewer shrinks the
+  performance case by hand, in an editor that loaded megabytes to show it. No
+  production data exists. Fix: refuse at the wizard's test-case step with a live
+  size readout, so the limit is visible before Save rather than after.
+
 - **P2 · S — `MAX_BODY_BYTES` was raised 4x for every route, not just the two
   that need it.** S01 raised the cap from 4 to 16 MiB so the largest storable
   question still fits in one body (R2-012), but `_limit_body_size` is global, so

@@ -42,6 +42,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import ValidationError
@@ -361,6 +362,29 @@ async def _request_context(request: Request, call_next: Any) -> Any:
     response = await call_next(request)
     response.headers[observability.REQUEST_ID_HEADER] = request_id
     return response
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 without echoing the rejected body back.
+
+    pydantic puts the offending value in each error's `input`, and FastAPI's
+    default handler serializes it, so refusing a 13 MB question for its size
+    answered it with a 13 MB response — the amplification the size caps exist to
+    prevent, served by the very check that enforces them. The client reads `loc`
+    and `msg` (`web/src/api.ts` joins the msgs into the page's alert); it does not
+    read back the value it just sent. `ctx` is dropped with it: it can carry the
+    original exception object, which is not JSON at all.
+    """
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": [
+                {"type": e.get("type", ""), "loc": list(e.get("loc", ())), "msg": e.get("msg", "")}
+                for e in exc.errors()
+            ]
+        },
+    )
 
 
 @app.exception_handler(Exception)
