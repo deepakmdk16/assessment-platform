@@ -1,0 +1,129 @@
+// Gate G5: one word per concept in user-facing copy.
+//
+// The 2026-09-14 audit found fifteen separate naming collisions (R2-107..R2-121):
+// four nouns for the tenant in a single hint, three names for one graded sitting
+// on adjacent screens, "Sign in" as an H1 above a "Log in" button. None of it is
+// a bug and all of it makes the product read as several products. docs/GLOSSARY.md
+// is the canonical list; this enforces the mechanical half of it — the variants
+// where one spelling is simply wrong.
+//
+// It lints PROSE, not identifiers. `OrganizationOut`, `useLogin` and
+// `/auth/login` are the code's own vocabulary and must not be touched, so text is
+// extracted first: JSX text nodes, and string literals that contain a space
+// (an identifier or a URL path does not). That is what keeps this at zero false
+// positives over ~57 occurrences of "Organization" in web/src.
+//
+// KNOWN is the copy that is already wrong today, keyed by file + the offending
+// fragment so it survives edits elsewhere in the file. It is strict: when the copy
+// is fixed the entry fails until it is deleted. New drift is never allowed in.
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join, relative } from 'node:path'
+
+const WEB_SRC = 'src'
+const EMAIL_TEMPLATES = '../assessment_platform/email_templates.py'
+
+// Prose contexts: a JSX text node, or a quoted string with a space in it.
+const PROSE_PATTERNS = [
+  />([^<>{}]*[A-Za-z][^<>{}]*)</g,
+  /'([^']*\s[^']*)'/g,
+  /"([^"]*\s[^"]*)"/g,
+  /`([^`]*\s[^`]*)`/g,
+]
+
+// `className="editor-hint blocked"` is markup, not copy, and reads exactly like a
+// sentence to the patterns above. Strip class attributes before extracting.
+const CLASS_ATTRIBUTE = /\bclass(Name)?=(\{`[^`]*`\}|"[^"]*"|'[^']*'|\{[^}]*\})/g
+
+// Each: the variant to refuse, and the word docs/GLOSSARY.md makes canonical.
+const BANNED = [
+  [/\bOrganizations?\b/, 'Organisation — British spelling is the house style (GLOSSARY)'],
+  [/\borganizations?\b/, 'organisation — British spelling is the house style (GLOSSARY)'],
+  [/\bapplicants?\b/i, 'candidate — one noun for the person taking the assessment'],
+  [/\bhiring teams?\b/i, 'interviewer — the candidate deals with a person, not a department'],
+  [/\bLog in\b/, 'Sign in — the backend and every email already say sign in'],
+  [/\blog in\b/, 'sign in'],
+  [/\bLogin\b/, 'Sign-in (noun) / Sign in (verb)'],
+  [/\bProblem\b/, 'Question — the object is called a question everywhere else'],
+]
+
+// file -> fragments that are allowed to stay, with the finding that owns them.
+const KNOWN = {
+  'src/components/WorkspacePanel.tsx': { 'Organization name': 'R2-108 → S10' },
+  'src/pages/AssessmentDetailPage.tsx': { 'Organization name': 'R2-108 → S10' },
+  'src/pages/NewAssessmentPage.tsx': { 'Organization name': 'R2-108 → S10' },
+  'src/pages/DashboardPage.tsx': { Problem: 'R2-111 → S10' },
+  'src/pages/SubmissionDetailPage.tsx': { Problem: 'R2-111 → S10' },
+  'src/pages/LoginPage.tsx': { 'Login failed': 'R2-112 → S10', 'Log in': 'R2-112 → S10' },
+  'src/pages/RegisterPage.tsx': { 'Log in': 'R2-112 → S10' },
+  'src/pages/ForgotPasswordPage.tsx': { 'Back to log in': 'R2-112 → S10' },
+  'src/pages/ResetPasswordPage.tsx': { 'Back to log in': 'R2-112 → S10' },
+  'src/pages/VerifyEmailPage.tsx': { 'Log in': 'R2-112 → S10' },
+  '../assessment_platform/email_templates.py': { 'hiring team': 'R2-118 → S10' },
+}
+
+function walk(dir) {
+  const out = []
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name)
+    if (statSync(p).isDirectory()) {
+      if (name !== '__tests__' && name !== 'test') out.push(...walk(p))
+    } else if (/\.(tsx|ts)$/.test(name) && !/\.test\./.test(name)) out.push(p)
+  }
+  return out
+}
+
+function fragmentsOf(rawLine) {
+  const line = rawLine.replace(CLASS_ATTRIBUTE, '')
+  const out = []
+  for (const pattern of PROSE_PATTERNS) {
+    pattern.lastIndex = 0
+    let m
+    while ((m = pattern.exec(line)) !== null) out.push(m[1])
+  }
+  return out
+}
+
+const violations = []
+const matchedKnown = new Set()
+
+for (const file of [...walk(WEB_SRC), EMAIL_TEMPLATES]) {
+  const key = file.startsWith('..') ? file : relative('.', file)
+  const allowed = KNOWN[key] ?? {}
+  readFileSync(file, 'utf8')
+    .split('\n')
+    .forEach((line, i) => {
+      for (const fragment of fragmentsOf(line)) {
+        for (const [pattern, canonical] of BANNED) {
+          if (!pattern.test(fragment)) continue
+          const excuse = Object.keys(allowed).find((f) => fragment.includes(f))
+          if (excuse) {
+            matchedKnown.add([key, excuse].join('\u0000'))
+            continue
+          }
+          violations.push(`${key}:${i + 1}: "${fragment.trim().slice(0, 80)}" → use ${canonical}`)
+        }
+      }
+    })
+}
+
+const stale = []
+for (const [file, fragments] of Object.entries(KNOWN))
+  for (const [fragment, owner] of Object.entries(fragments))
+    if (!matchedKnown.has([file, fragment].join('\u0000'))) stale.push(`${file}: "${fragment}" (${owner})`)
+
+let failed = false
+if (violations.length) {
+  failed = true
+  console.error('Copy uses a word docs/GLOSSARY.md does not make canonical:')
+  for (const v of violations) console.error('  ' + v)
+  console.error('\nOne word per concept. Fix the copy, or — if the glossary is wrong —')
+  console.error('change the glossary and this list in the same commit.')
+}
+if (stale.length) {
+  failed = true
+  console.error('\nThese entries in KNOWN no longer match any copy — delete them:')
+  for (const s of stale) console.error('  ' + s)
+  console.error('\n(The copy was fixed. The list only ever shrinks.)')
+}
+if (failed) process.exit(1)
+console.log(`check-copy: ${matchedKnown.size} known copy-drift site(s), none new ✓`)

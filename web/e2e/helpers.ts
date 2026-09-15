@@ -146,7 +146,7 @@ export async function createAssessmentInvite(
   questionId: string,
   recipients: string[],
 ): Promise<string> {
-  const api = process.env.E2E_API_URL ?? 'http://127.0.0.1:9000'
+  const api = process.env.E2E_API_URL ?? `http://127.0.0.1:${process.env.E2E_PLATFORM_PORT ?? '9000'}`
   const login = await page.request.post(`${api}/auth/login`, { data: creds })
   expect(login.ok()).toBeTruthy()
   const headers = { Authorization: `Bearer ${(await login.json()).access_token}` }

@@ -21,3 +21,7 @@ __pycache__/
 # Previously only ignored via a personal global gitignore, so a fresh clone would
 # have committed it.
 .claude/settings.local.json
+
+# The companion repo, when checked out inside this workspace (CI does this so
+# the cross-repo parity gate can run). Never ours to track.
+/AssesmentAgent/

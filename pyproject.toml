@@ -44,7 +44,10 @@ line-length = 100
 target-version = "py310"
 # Alembic autogenerates migration files from its own template (typing.Sequence /
 # Union imports, etc.); don't lint generated migrations.
-extend-exclude = ["alembic/versions"]
+# `AssesmentAgent/` is the companion repo, which CI checks out INSIDE the
+# workspace so the cross-repo parity gate can run (GitHub Actions cannot check
+# out above it). It is a different repo with its own gate — don't lint it here.
+extend-exclude = ["alembic/versions", "AssesmentAgent"]
 
 [tool.ruff.lint]
 # pyflakes(F), pycodestyle(E), isort(I), pep8-naming(N), bugbear(B), pyupgrade(UP).
@@ -60,3 +63,9 @@ ignore_missing_imports = true
 check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+# Collect only this repo's suite. CI checks the companion agent repo out into
+# `AssesmentAgent/` for the cross-repo parity gate (tests/test_agent_contract_parity.py);
+# without this, pytest would recurse into it and run the agent's entire suite here.
+testpaths = ["tests"]

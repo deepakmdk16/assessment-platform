@@ -16,7 +16,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-# Mirror of the agent's `MIN_CORRECTNESS_CASES` (F4 floor). Keep identical.
+# Mirror of the agent's `MIN_CORRECTNESS_CASES` (F4 floor). The agent is a
+# separate deployable and not a dependency here, so this stays a hand-kept
+# mirror — but it is no longer kept by a comment: `tests/test_agent_contract_parity.py`
+# imports the agent's constant from the sibling checkout and fails if the two differ.
 MIN_CORRECTNESS_CASES = 4
 
 

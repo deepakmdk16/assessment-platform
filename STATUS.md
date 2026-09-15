@@ -56,6 +56,121 @@ then the UI, then scale** — open for extension, closed for modification.
 
 ---
 
+## Installed gates (S00) — what a session must do when it closes a finding
+
+The audit's nine failure classes get mechanical checks, installed **before** the
+fixes so no new drift lands while the fixes are outstanding. Each gate records the
+violations that exist today as a **strict** expected-failure or an explicit
+allowlist naming the finding and the session that closes it — strict meaning the
+gate fails if a listed violation starts *passing*, so the list cannot rot.
+
+**When your session fixes a listed finding, delete its entry in the same commit**
+— the gate will fail until you do.
+
+- **G1 · `tests/test_agent_contract_parity.py`** — the platform may not store a
+  question the agent refuses to grade, and may not build a result callback over
+  its own body cap. Imports the agent from the sibling checkout (`../AssesmentAgent`
+  locally, `./AssesmentAgent` in CI, which `checks.yml` now checks out) and skips
+  with a notice when absent. Also asserts `question_rules.MIN_CORRECTNESS_CASES`
+  equals the agent's, replacing the old "keep identical" comment.
+  Listed today: 10 × R2-002 (→ S02), 1 × R2-001 (→ S01).
+  The agent's `scripts/checkpoints.sh` runs this test too — the edit that breaks
+  it is usually made on that side.
+- **G8 · `tests/test_limiter_coverage.py`** — a route reachable without auth, one
+  that verifies a password, or one that sends email must call `limiter.check`.
+  Rate limiting is opt-IN per handler, so a new route is unlimited and silent
+  about it. Listed today: R2-032 (→ S07), 2 × R2-066 (→ S06), 4 × R2-013 (→ S06/S07).
+  `NO_LIMIT_NEEDED` holds the routes that must *not* consume quota, each with its
+  reason; both lists fail if they name a route that no longer exists.
+- **G8 · `scripts/check-schema-limits.py`** — every field of every request body the
+  API accepts must be bounded (`str`/`list` → `max_length`, numbers → `gt`/`ge`/
+  `lt`/`le`). Models are reached through FastAPI's own `body_field`, so responses
+  are not touched. 99 unbounded fields today, listed in
+  `scripts/schema-limits-baseline.txt`; the file only shrinks, and there is no
+  regenerate flag. Bounding a stored test case's `stdin`/`expected` is what lets
+  G1's size xfail be deleted.
+- **G5 · `docs/GLOSSARY.md` + `web/scripts/check-copy.mjs`** — one word per concept.
+  The lint reads PROSE only (JSX text and quoted strings containing a space), so
+  `OrganizationOut` and `/auth/login` are untouched while the copy is held to
+  British spelling and the canonical noun. 12 known drift sites today (R2-108,
+  R2-111, R2-112, R2-118 → S10), keyed by file + fragment.
+- **G2 · `docs/CLAIMS.md` + `web/scripts/check-claims.mjs`** — a sentence asserting
+  behaviour ("recorded", "blocked", "autosaved", "monitored", "cannot be") must
+  have a row naming the test that proves it. 17 claims registered; 5 of their rows
+  say **owed**, which is the honest list of promises the product cannot currently
+  back: fullscreen (R2-003 → S04), the devtools half of the consent screen (S04),
+  "No consent recorded" (S04), multi-question autosave (R2-030 → S08), and the
+  buzzer-failure notice (R2-029 → S08).
+
+- **G4 · `web/e2e/visual-gate.spec.ts`** (S00b) — every route at 1280x800 and
+  390x844, in light and dark: no horizontal overflow, no serious/critical axe
+  violation, and a screenshot for a human. Runs in the `e2e` CI job and under
+  `RUN_E2E=1`; screenshots upload as a failure artifact. 26 known violations
+  (R2-145 contrast -> S17, R2-154/156/159 overflow -> S13, plus link-in-text-block
+  which this gate found and the audit had missed). Keys are `route | rule` for
+  accessibility and `route | viewport | horizontal-overflow` for layout —
+  deliberately coarser than the 4-variant matrix, so one contrast ratio landing
+  the right side of AA in one theme cannot make the list go stale four ways.
+  **Moderate-impact axe rules are out of scope by the impact filter, so R2-164's
+  missing landmarks and headings are NOT covered** — S17 should tighten the
+  filter once it has fixed them.
+  **The baseline is environment-dependent**: ubuntu reflows text wider than
+  macOS, so two entries (`assessment-new | phone | horizontal-overflow`,
+  `privacy | scrollable-region-focusable`) reproduce on the CI runner and not on
+  a laptop. A NEW violation therefore fails everywhere, but the "this one is
+  fixed, delete it" direction is enforced in **CI only** — CI is the reference
+  environment for the list. Setting `CI=1` locally on macOS will report those two
+  as stale; that is the platform difference, not a bug.
+
+Both lints run in `npm run lint`, so they gate CI and the pre-push hook; the
+visual gate rides the `e2e` job.
+
+**E2E ports are now overridable** (`E2E_PLATFORM_PORT` / `E2E_FRONTEND_PORT` /
+`E2E_AGENT_PORT`, defaults unchanged), so the suite can run beside a live dev
+stack instead of demanding :9000 be free. The platform server is handed a
+matching `FRONTEND_BASE_URL` — without it, invite links point at whatever holds
+the default port and every candidate spec walks into the wrong stack.
+
+### S00b review leftovers — 2026-09-14
+
+- **P2 · S — The visual gate does not cover `/submissions/:id` or
+  `/variant-sets/:id`.** Both need a fixture the spec does not build (a graded
+  submission; a drafted set), and both are table-heavy interviewer surfaces —
+  the shape most likely to overflow at 390 px, which is what R2-154 and R2-159
+  are about. Add them with their fixtures; the spec's header names them.
+- **P3 · XS — `web/e2e/visual-gate.spec.ts` and `web/e2e/helpers.ts` each carry
+  their own copy of the API base-URL expression.** Export it from `helpers.ts`
+  once; the copy that gets missed only fails under an overridden port set, which
+  CI never exercises.
+- **P3 · S — Visual-gate screenshots are written to a hand-built relative path
+  rather than attached via `testInfo.attach()`.** Run from the repo root instead
+  of `web/`, the PNGs land outside both the CI artifact path and `.gitignore`.
+  Attaching them would fold them into the existing `playwright-report` artifact
+  and remove the second upload step in `e2e.yml`.
+
+### S00 review leftovers — 2026-09-14
+
+- **P2 · S — Platform CI now depends on the agent repo's live default branch.**
+  `.github/workflows/checks.yml:38` checks out `deepakmdk16/AssesmentAgent` with
+  no `ref`, so an agent-side change to `signing.py` or `validate_question` can
+  turn every open platform PR red, including ones touching only CSS. That is
+  arguably correct for a contract gate — the byte-parity checks already behave
+  this way locally — but it couples unrelated work. If it becomes disruptive,
+  either pin `ref` (and accept that the gate then tests against a stale agent) or
+  move the cross-repo checks into their own non-blocking job.
+- **P3 · XS — `web/scripts/check-copy.mjs:38` mixes case-sensitive and
+  case-insensitive patterns.** `/\bProblem\b/` and `/\bLogin\b/` carry no `/i`,
+  so "the problem statement" and "the login page" pass a gate that bans both
+  words. The two `Organizations?` rows could also collapse into one `/i` row.
+- **P3 · S — The two copy lints duplicate their prose extractor.**
+  `PROSE_PATTERNS`, `CLASS_ATTRIBUTE`, `walk()` and the path-key normalisation are
+  byte-identical in `web/scripts/check-copy.mjs` and `web/scripts/check-claims.mjs`,
+  and each re-walks `web/src` in its own node process. Extract `web/scripts/prose.mjs`
+  when either needs its next change — a fix to the extractor currently has to be
+  made twice.
+
+---
+
 ## Product walkthrough — 2026-09-14 (all ten closed; leftovers below)
 
 Ten gaps the user hit driving the running stack, plus one spotted in the same

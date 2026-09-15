@@ -36,6 +36,12 @@ if [ "${RUN_E2E:-0}" = "1" ]; then
   ( cd web && npm run test:e2e )
 fi
 
+echo "==> schema limits"
+# Gate G8: every field of every request body the API accepts must be bounded.
+# The body cap alone does not bound what one field carries into the database, a
+# CSV, an email or the agent. Baseline in scripts/schema-limits-baseline.txt.
+uv run python scripts/check-schema-limits.py
+
 echo "==> secret scan"
 # 1) sensitive files must never be tracked (.env.example is fine)
 if git ls-files | grep -Ei '(^|/)\.env$|\.pem$|(^|/)id_rsa$|\.p12$|\.keystore$|(^|/)\.aws/credentials$'; then
@@ -74,6 +80,25 @@ if grep -InE '^[[:space:]]*SMTP_PASSWORD[[:space:]]*=[[:space:]]*[a-z]{16}[[:spa
   echo "❌ .env.example looks like it holds a REAL app password (above) — it must only ever hold placeholders"; exit 1
 fi
 
+# Where the companion repo is: beside this one (local dev) or inside the
+# workspace (CI checks it out there — Actions cannot check out above it). Empty
+# when it isn't present at all, and every cross-repo check below then skips with
+# a notice rather than failing.
+#
+# Except in CI, which is the thing responsible for making it present: there
+# REQUIRE_COMPANION_REPO=1 turns "absent" into a failure. Without that, a renamed
+# path or a failed checkout would put every cross-repo gate back to a silent skip
+# that exits 0 — the exact failure mode they were written to end.
+_companion=""
+for _c in ../AssesmentAgent ./AssesmentAgent; do
+  if [ -d "$_c/assessment_agent" ]; then _companion="$_c"; break; fi
+done
+
+if [ -z "$_companion" ] && [ "${REQUIRE_COMPANION_REPO:-0}" = "1" ]; then
+  echo "❌ REQUIRE_COMPANION_REPO=1 but the companion agent repo is not checked out"
+  echo "   beside this one or inside the workspace — every cross-repo gate would skip."; exit 1
+fi
+
 echo "==> signing.py parity (cross-repo)"
 # signing.py is mirrored byte-for-byte in the companion repo; if the two diverge,
 # every signed request 401s. This is the "keep them identical" comment turned into
@@ -81,7 +106,7 @@ echo "==> signing.py parity (cross-repo)"
 # local pre-push case, where the edit is actually made — and skips with a notice
 # otherwise (e.g. CI checks out a single repo). See CLAUDE.md → signing.py.
 _own_signing="assessment_platform/signing.py"
-_companion_signing="../AssesmentAgent/assessment_agent/signing.py"
+_companion_signing="${_companion:-/nonexistent}/assessment_agent/signing.py"
 if [ -f "$_companion_signing" ]; then
   if cmp -s "$_own_signing" "$_companion_signing"; then
     echo "  ✓ identical to companion repo"
@@ -100,7 +125,7 @@ echo "==> callback contract parity (cross-repo)"
 # payload the other rejects. Same gate as signing.py; skips when the companion
 # repo isn't checked out beside this one. See contract/callback_contract.py.
 _own_contract="contract/callback_contract.py"
-_companion_contract="../AssesmentAgent/contract/callback_contract.py"
+_companion_contract="${_companion:-/nonexistent}/contract/callback_contract.py"
 if [ -f "$_companion_contract" ]; then
   if cmp -s "$_own_contract" "$_companion_contract"; then
     echo "  ✓ identical to companion repo"

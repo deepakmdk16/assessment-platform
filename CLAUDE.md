@@ -19,6 +19,10 @@ deterministic grade.
   Styling is **token-driven**: all appearance lives in `web/src/styles/` (a restyle
   edits CSS, never `.tsx`). No inline `style=` / hex in components — enforced by
   `npm run lint`. See CONVENTIONS.md → "Styling".
+  **Copy is gated too** (same `npm run lint`): use the canonical noun from
+  [docs/GLOSSARY.md](docs/GLOSSARY.md), and any sentence that asserts behaviour
+  ("recorded", "blocked", "autosaved", "monitored") needs a row in
+  [docs/CLAIMS.md](docs/CLAIMS.md) naming the test that proves it.
   **New UI feature / non-trivial visual change → mockup first.** Build a static
   mockup (use the `artifact-design` skill) and get sign-off **before** editing
   `.tsx` — don't iterate live in the running app. Skip for token tweaks, copy
@@ -195,6 +199,14 @@ aborts the push; E2E stays opt-in via `RUN_E2E=1` (CI already gates it). Gates
 
 1. `uv run pytest` passes; `uv run ruff check .` and `uv run mypy` clean.
 2. If `web/` changed: `npm run build`, `typecheck`, `lint`, `test` all clean.
+   `lint` includes the copy and claims gates — see [docs/GLOSSARY.md](docs/GLOSSARY.md)
+   and [docs/CLAIMS.md](docs/CLAIMS.md).
+   - **If a `.tsx` changed, run the visual gate**: `RUN_E2E=1 bash scripts/checkpoints.sh`,
+     or `cd web && npx playwright test visual-gate`. It renders the routes it
+     lists (see the spec) at 1280x800 and 390x844 in both themes and asserts no
+     horizontal overflow and no serious/critical axe violation. CI runs it on
+     every PR, but finding it there costs a round trip. Beside a live dev stack:
+     `E2E_PLATFORM_PORT=9100 E2E_FRONTEND_PORT=5273 E2E_AGENT_PORT=8200 npx playwright test visual-gate`.
 3. `/code-review` (or a self-review of the diff) has been run.
 4. New endpoints have tests that run **offline** (mock the agent call; no network,
    no real LLM).

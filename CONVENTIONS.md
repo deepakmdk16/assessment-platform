@@ -49,6 +49,18 @@ behavior; this covers what a reviewer can verify in a diff.
 - The platform **never** derives a verdict/score — it persists the agent's
   callback payload as-is.
 
+## Citing code in docs
+
+**Cite `file::symbol`, never `file:line`.** A line number is correct for exactly
+one commit and silently wrong afterwards; the 2026-09-14 audit found eleven
+documents describing code that had moved (R2-122..R2-132). Write
+`api.py::create_question`, `integrity.ts::enterFullscreen`,
+`agent.py::result_to_dict`. Line numbers are fine in a commit message or a review
+comment — those are pinned to a diff — and nowhere that outlives one.
+
+The same rule is why `STATUS.md` items name symbols: a symbol that no longer
+exists is a grep away from being caught, a stale line number is not.
+
 ## Tests
 
 - Every new endpoint gets a test. Tests run **offline**: mock the outbound agent
