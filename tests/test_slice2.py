@@ -86,7 +86,7 @@ def test_register_rate_limited(anon_client: TestClient, monkeypatch) -> None:
 
 async def _fake_draft(**_kwargs: object) -> dict[str, object]:
     return {
-        "question": {"id": "q1", "title": "T", "prompt": "P", "constraints": "", "test_cases": []},
+        "question": {"id": "q1", "title": "T", "prompt": "P", "constraints": "C", "test_cases": []},
         "warnings": [],
         "engine": "test",
     }

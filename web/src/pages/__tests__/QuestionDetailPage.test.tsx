@@ -301,6 +301,36 @@ describe('QuestionDetailPage — review and correction (UI-B)', () => {
     expect(screen.getByText(/never sent to the candidate/i)).toBeInTheDocument()
   })
 
+  it('renders the markdown a drafted prompt carries, and no empty Constraints heading', async () => {
+    // R2-142: prompts were plain pre-wrap text, so a drafted `**Input**` reached
+    // the reader as asterisks. R2-157: the heading printed over nothing at all
+    // for the 53 questions saved with blank constraints.
+    vi.mocked(api.getQuestion).mockResolvedValue({
+      ...question,
+      prompt: 'Return `-1` when there is **no** answer.',
+      constraints: '',
+    })
+    renderPage()
+
+    expect(await screen.findByText('-1')).toBeInTheDocument()
+    expect(screen.getByText('no')).toBeInTheDocument()
+    expect(screen.queryByText(/`-1`/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /constraints/i })).not.toBeInTheDocument()
+  })
+
+  it('keeps the line breaks of a prompt that is not markdown at all', async () => {
+    // Most questions are plain text whose layout is load-bearing: markdown folds
+    // a single newline into a space, and `pre-wrap` is what stops it.
+    vi.mocked(api.getQuestion).mockResolvedValue({
+      ...question,
+      prompt: 'Example:\n  Input:\n    9\n  Output:\n    6',
+    })
+    renderPage()
+
+    const paragraph = await screen.findByText(/Example:/)
+    expect(paragraph.textContent).toContain('\n  Input:')
+  })
+
   it('links Edit to the wizard seeded from this question', async () => {
     renderPage()
     expect(await screen.findByRole('link', { name: /^edit$/i })).toHaveAttribute(

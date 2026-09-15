@@ -35,16 +35,17 @@ export async function createQuestion(page: Page): Promise<{ id: string; title: s
   await page.getByLabel('Title').fill(title)
   await page.getByLabel('Prompt').fill('Return indices of the two numbers that add up to target.')
   await page.getByRole('button', { name: 'Next' }).click() // → Grading
+  // Constraints are required: the grader refuses a question without them, so the
+  // wizard no longer lets one be saved (R2-002).
+  await page.getByLabel('Constraints').fill('1 <= n <= 1000')
   await page.getByRole('button', { name: 'Next' }).click() // → Test cases
-  // The A1 case-floor is enforced at creation: a question needs ≥4 correctness
-  // cases AND ≥1 performance case or POST /questions 422s. Start from the one
-  // empty row, add four more, and mark the last one performance.
-  await page.getByLabel('Test case 1 name').fill('basic')
-  for (let i = 2; i <= 5; i++) {
-    await page.getByRole('button', { name: 'Add test case' }).click()
+  // The A1 case-floor (≥4 correctness cases AND ≥1 performance case) is what the
+  // wizard now seeds, so the rows are already there — every one needs a name and
+  // an expected output, both of which the grader requires.
+  for (let i = 1; i <= 5; i++) {
     await page.getByLabel(`Test case ${i} name`).fill(`case ${i}`)
+    await page.getByLabel(`Test case ${i} expected output`).fill(`${i}`)
   }
-  await page.getByLabel('Test case 5 category').selectOption('performance')
   await page.getByRole('button', { name: 'Next' }).click() // → Example
   await page.getByRole('button', { name: 'Next' }).click() // → Review
   await page.getByRole('button', { name: 'Create question' }).click()

@@ -43,7 +43,19 @@ describe('AddQuestionPage', () => {
   const next = (user: ReturnType<typeof userEvent.setup>) =>
     user.click(screen.getByRole('button', { name: /^next$/i }))
 
-  it('walks the wizard and submits basics, one test case, and the worked example', async () => {
+  /** Fill the rows the wizard seeds (4 correctness + 1 performance): a question
+   *  under that floor is refused at save, so a walk that leaves them empty is a
+   *  walk no interviewer could complete (R2-010). */
+  const fillSeededCases = async (user: ReturnType<typeof userEvent.setup>) => {
+    const names = screen.getAllByLabelText(/test case \d+ name/i)
+    expect(names).toHaveLength(5)
+    for (const [i, field] of names.entries()) {
+      await user.type(field, `case${i + 1}`)
+      await user.type(screen.getByLabelText(new RegExp(`test case ${i + 1} expected output`, 'i')), `${i}`)
+    }
+  }
+
+  it('walks the wizard and submits basics, the seeded test cases, and the worked example', async () => {
     const user = userEvent.setup()
     vi.mocked(api.createQuestion).mockResolvedValue({ id: 'two-sum' } as QuestionOut)
 
@@ -67,9 +79,8 @@ describe('AddQuestionPage', () => {
     await next(user)
 
     // Step 3: Test cases
-    await user.type(screen.getByLabelText(/test case 1 name/i), 'basic')
+    await fillSeededCases(user)
     await user.type(screen.getByLabelText(/test case 1 input \(stdin\)/i), '2 7 11 15\n9')
-    await user.type(screen.getByLabelText(/test case 1 expected output/i), '0 1')
     await next(user)
 
     // Step 4: Worked example
@@ -88,12 +99,15 @@ describe('AddQuestionPage', () => {
     expect(payload.time_limit_s).toBe(3)
     // Wizard shows 80%; the API receives the 0..1 fraction.
     expect(payload.pass_threshold).toBe(0.8)
-    expect(payload.test_cases).toHaveLength(1)
+    expect(payload.test_cases).toHaveLength(5)
     expect(payload.test_cases[0]).toMatchObject({
-      name: 'basic',
+      name: 'case1',
       category: 'correctness',
       weight: 1,
     })
+    // The floor the grader enforces is what the wizard starts you with.
+    expect(payload.test_cases.filter((tc) => tc.category === 'correctness')).toHaveLength(4)
+    expect(payload.test_cases[4].category).toBe('performance')
 
     // `justCreated` makes the question page offer the invite dialog once.
     await waitFor(() =>
@@ -203,6 +217,88 @@ describe('AddQuestionPage', () => {
     expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
   })
 
+  it('refuses to leave the grading step for the values the grader rejects', async () => {
+    // R2-002: blank Constraints was the wizard's DEFAULT, and the grader refuses
+    // a question without them — 53 saved questions, every submission an "error".
+    // R2-052: a zero here came back as bare pydantic text on the last step.
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <AddQuestionPage />
+      </MemoryRouter>,
+    )
+
+    await user.type(screen.getByLabelText(/^title$/i), 'Two Sum')
+    await user.type(screen.getByLabelText(/^prompt$/i), 'Prompt text.')
+    await next(user)
+
+    await next(user)
+    expect(screen.getByRole('alert')).toHaveTextContent(/constraints are required/i)
+
+    await user.type(screen.getByLabelText(/^constraints$/i), '1 <= n <= 1000')
+    await user.clear(screen.getByLabelText(/time limit/i))
+    await user.type(screen.getByLabelText(/time limit/i), '0')
+    await next(user)
+    expect(screen.getByRole('alert')).toHaveTextContent(/time limit must be more than 0/i)
+
+    await user.clear(screen.getByLabelText(/time limit/i))
+    await user.type(screen.getByLabelText(/time limit/i), '60')
+    await next(user)
+    expect(screen.getByRole('alert')).toHaveTextContent(/10 seconds or less/i)
+
+    await user.clear(screen.getByLabelText(/time limit/i))
+    await user.type(screen.getByLabelText(/time limit/i), '3')
+    await user.clear(screen.getByLabelText(/pass threshold/i))
+    await user.type(screen.getByLabelText(/pass threshold/i), '0')
+    await next(user)
+    expect(screen.getByRole('alert')).toHaveTextContent(/pass threshold must be between 1 and 100/i)
+
+    // Clearing "Time allowed" reads back as 0, which the API refuses outright.
+    await user.clear(screen.getByLabelText(/pass threshold/i))
+    await user.type(screen.getByLabelText(/pass threshold/i), '80')
+    await user.clear(screen.getByLabelText(/time allowed/i))
+    await next(user)
+    expect(screen.getByRole('alert')).toHaveTextContent(/at least 1 minute, or tick indefinite/i)
+  })
+
+  it('says what the test-case floor is, and holds the step until it is met', async () => {
+    // R2-010: the floor was enforced only by the server, so the interviewer met
+    // it as a 422 two steps later, with nothing on this step to explain it.
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <AddQuestionPage />
+      </MemoryRouter>,
+    )
+
+    await user.type(screen.getByLabelText(/^title$/i), 'Two Sum')
+    await user.type(screen.getByLabelText(/^prompt$/i), 'Prompt text.')
+    await next(user)
+    await user.type(screen.getByLabelText(/^constraints$/i), '1 <= n <= 1000')
+    await next(user)
+
+    expect(
+      screen.getByText(/at least 4 correctness cases and one performance case/i),
+    ).toBeInTheDocument()
+
+    await next(user)
+    expect(screen.getByRole('alert')).toHaveTextContent(/every test case needs a name/i)
+
+    for (const [i, field] of screen.getAllByLabelText(/test case \d+ name/i).entries()) {
+      await user.type(field, `case${i + 1}`)
+    }
+    await next(user)
+    expect(screen.getByRole('alert')).toHaveTextContent(/needs an expected output/i)
+
+    for (const [i] of screen.getAllByLabelText(/test case \d+ name/i).entries()) {
+      await user.type(screen.getByLabelText(new RegExp(`test case ${i + 1} expected output`, 'i')), '1')
+    }
+    // Dropping the performance case is the other half of the floor.
+    await user.click(screen.getAllByRole('button', { name: /remove/i })[4])
+    await next(user)
+    expect(screen.getByRole('alert')).toHaveTextContent(/needs at least one performance case/i)
+  })
+
   it('adds and removes test case rows', async () => {
     const user = userEvent.setup()
     render(
@@ -215,15 +311,17 @@ describe('AddQuestionPage', () => {
     await user.type(screen.getByLabelText(/^title$/i), 'Two Sum')
     await user.type(screen.getByLabelText(/^prompt$/i), 'Prompt text.')
     await next(user)
+    await user.type(screen.getByLabelText(/^constraints$/i), '1 <= n <= 1000')
     await next(user)
 
-    expect(screen.getAllByLabelText(/test case \d+ name/i)).toHaveLength(1)
+    // Seeded at the grader's floor, not at one unsaveable row (R2-010).
+    expect(screen.getAllByLabelText(/test case \d+ name/i)).toHaveLength(5)
 
     await user.click(screen.getByRole('button', { name: /add test case/i }))
-    expect(screen.getAllByLabelText(/test case \d+ name/i)).toHaveLength(2)
+    expect(screen.getAllByLabelText(/test case \d+ name/i)).toHaveLength(6)
 
     await user.click(screen.getAllByRole('button', { name: /remove/i })[0])
-    expect(screen.getAllByLabelText(/test case \d+ name/i)).toHaveLength(1)
+    expect(screen.getAllByLabelText(/test case \d+ name/i)).toHaveLength(5)
   })
 })
 
@@ -245,15 +343,14 @@ describe('AddQuestionPage — edit mode (UI-B)', () => {
     // control for it, which is exactly why an edit could destroy it.
     reference_solution: 'def solve(nums): ...',
     reference_language: 'python',
+    // Four correctness cases and a performance case: the floor the grader
+    // enforces, so this fixture is a question the wizard can actually save.
     test_cases: [
-      {
-        id: 'tc1',
-        name: 'basic',
-        stdin: '[1,2,1]',
-        expected: '2',
-        category: 'correctness',
-        weight: 1,
-      },
+      { id: 'tc1', name: 'basic', stdin: '[1,2,1]', expected: '2', category: 'correctness', weight: 1 },
+      { id: 'tc2', name: 'flat', stdin: '[1,1,1]', expected: '1', category: 'correctness', weight: 1 },
+      { id: 'tc3', name: 'single', stdin: '[9]', expected: '1', category: 'correctness', weight: 1 },
+      { id: 'tc4', name: 'empty', stdin: '[]', expected: '0', category: 'correctness', weight: 1 },
+      { id: 'tc5', name: 'big', stdin: '[...]', expected: '7', category: 'performance', weight: 6 },
     ],
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
@@ -357,7 +454,7 @@ describe('AddQuestionPage — edit mode (UI-B)', () => {
     expect(payload.difficulty).toBe('hard')
     expect(payload.duration_minutes).toBe(45)
     expect(payload.pass_threshold).toBeCloseTo(0.8)
-    expect(payload.test_cases).toHaveLength(1)
+    expect(payload.test_cases).toHaveLength(5)
     expect(api.createQuestion).not.toHaveBeenCalled()
   })
 

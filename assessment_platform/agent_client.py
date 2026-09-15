@@ -272,6 +272,30 @@ async def run_tests(
 # flight — so a lost response (ReadTimeout) or a 503 from an agent mid-restart is
 # safe to retry. A 400 (unsupported language, malformed question) is not.
 _TRIGGER_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+# ...and the other end of the same question: a status the agent will answer the
+# same way however often it is asked, because the job AS SENT is unacceptable to
+# it. Asking again is what used to burn every attempt and end the submission as a
+# reasonless "error" (R2-002), so the caller records the agent's reason and stops.
+#
+# 400 only, and deliberately so. It is the status the agent raises ITSELF, after
+# validating the question and the language — a decision about this job's content,
+# which no retry changes. Everything else stays retryable because it is about the
+# deployment rather than the job: 401/403 a token an operator fixes, 404 a route,
+# and 422 FastAPI's own refusal of the request SHAPE — the one a platform deployed
+# ahead of the agent would produce, where the reaper's retries are exactly the
+# recovery. A question shape this agent does not know is a 400 it is not, which is
+# why it is `tests/test_agent_contract_parity.py` that has to catch that in CI,
+# and `POST /submissions/{id}/retry` that recovers it if one ever ships.
+TRIGGER_TERMINAL_STATUSES = frozenset({400})
+
+
+def trigger_refusal(exc: Exception) -> httpx.Response | None:
+    """The agent's response when `exc` is it refusing the job outright, else None."""
+    if isinstance(exc, httpx.HTTPStatusError) and (
+        exc.response.status_code in TRIGGER_TERMINAL_STATUSES
+    ):
+        return exc.response
+    return None
 _TRIGGER_TRANSPORT_ATTEMPTS = int(os.getenv("AGENT_TRIGGER_TRANSPORT_ATTEMPTS", "3"))
 _TRIGGER_RETRY_BACKOFF_S = float(os.getenv("AGENT_TRIGGER_RETRY_BACKOFF_S", "1.0"))
 

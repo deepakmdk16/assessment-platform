@@ -16,6 +16,7 @@ import type {
   RunTestsResponse,
 } from '../types'
 import { CandidateFeedbackForm } from '../components/CandidateFeedbackForm'
+import { QuestionProse } from '../components/QuestionProse'
 import { CandidateNotice } from './CandidateNotice'
 import { ConsoleResult } from './ConsoleResult'
 import { formatRemaining, timerClass } from './candidateTimer'
@@ -469,11 +470,11 @@ export function AssessmentFlow({
             <span className="tab on">Description</span>
           </div>
           <div className="panel-body prose">
-            <p className="pre-text">{cq.prompt}</p>
+            <QuestionProse>{cq.prompt}</QuestionProse>
             {cq.constraints && (
               <>
                 <h3>Constraints</h3>
-                <p className="pre-text">{cq.constraints}</p>
+                <QuestionProse>{cq.constraints}</QuestionProse>
               </>
             )}
             {hasExample && (

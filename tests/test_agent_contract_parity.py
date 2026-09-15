@@ -235,28 +235,22 @@ def _bad_category(p: dict[str, Any]) -> None:
     p["test_cases"].append({**p["test_cases"][0], "name": "odd_one", "category": "smoke"})
 
 
-def _xfail(finding: str, session: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(
-        strict=True,
-        reason=f"{finding} — known divergence, closed by {session}; delete this mark with the fix",
-    )
-
-
-# Each entry: the mutation, and either no marks (the platform already refuses it)
-# or an xfail naming the finding. R2-002 names blank constraints, weight <= 0,
-# empty expected, duplicate case names and time limit 0 explicitly; the blank
-# title and prompt cases are the same class of missing `min_length` and ride with
-# it into S02.
+# Each entry is a mutation the platform must not store. S02 closed the nine that
+# were `xfail`ed here when the gate was installed (R2-002): the platform now
+# refuses blank prose, a zero time limit, weight <= 0, empty expected output, a
+# blank case name and duplicate case names at authoring time, and the agent no
+# longer refuses to GRADE over prose the candidate has already read. Nothing is
+# marked any more — a new divergence fails this list on sight, which is the point.
 DIVERGENCE_CASES = [
-    pytest.param(_blank_constraints, id="blank_constraints", marks=_xfail("R2-002", "S02")),
-    pytest.param(_blank_title, id="blank_title", marks=_xfail("R2-002", "S02")),
-    pytest.param(_blank_prompt, id="blank_prompt", marks=_xfail("R2-002", "S02")),
-    pytest.param(_zero_time_limit, id="zero_time_limit", marks=_xfail("R2-002", "S02")),
-    pytest.param(_zero_weight, id="zero_weight", marks=_xfail("R2-002", "S02")),
-    pytest.param(_negative_weight, id="negative_weight", marks=_xfail("R2-002", "S02")),
-    pytest.param(_empty_expected, id="empty_expected", marks=_xfail("R2-002", "S02")),
-    pytest.param(_duplicate_case_names, id="duplicate_case_names", marks=_xfail("R2-002", "S02")),
-    pytest.param(_blank_case_name, id="blank_case_name", marks=_xfail("R2-002", "S02")),
+    pytest.param(_blank_constraints, id="blank_constraints"),
+    pytest.param(_blank_title, id="blank_title"),
+    pytest.param(_blank_prompt, id="blank_prompt"),
+    pytest.param(_zero_time_limit, id="zero_time_limit"),
+    pytest.param(_zero_weight, id="zero_weight"),
+    pytest.param(_negative_weight, id="negative_weight"),
+    pytest.param(_empty_expected, id="empty_expected"),
+    pytest.param(_duplicate_case_names, id="duplicate_case_names"),
+    pytest.param(_blank_case_name, id="blank_case_name"),
     # Already in parity: the platform's `Category` literal and the agent's agree.
     pytest.param(_bad_category, id="invalid_category"),
 ]
@@ -531,15 +525,23 @@ def test_the_worst_callback_the_agent_can_send_is_accepted(client: Any) -> None:
 
 
 def test_the_intake_caps_do_not_reach_the_response_model() -> None:
-    """`TestCaseOut` inherits `TestCaseIn`, so the intake caps would be enforced on
+    """`TestCaseOut` inherits `TestCaseIn`, so the intake rules would be enforced on
     the way OUT too — and FastAPI validates a response model, so every question
-    stored before S01 (nine dev cases are over the cap) would 500 on read instead
-    of being editable down to size. The re-declaration in `TestCaseOut` is what
-    prevents that; this fails if someone tidies it away.
+    stored before them (nine dev cases over S01's size caps; 198 cases with empty
+    expected output and every legacy zero weight, from S02's) would 500 on read
+    instead of being editable back into shape. The re-declaration in `TestCaseOut`
+    is what prevents that; this fails if someone tidies it away.
     """
     stdin_cap, expected_cap = _stored_case_char_caps()
     assert stdin_cap is not None and expected_cap is not None
-    TestCaseOut(id=1, name="legacy", stdin="9" * (stdin_cap + 1), expected="9" * (expected_cap + 1))
+    TestCaseOut(
+        id=1,
+        name="  ",  # blank (S02)
+        stdin="9" * (stdin_cap + 1),
+        expected="",  # empty (S02)
+        weight=0.0,  # zero (S02)
+    )
+    TestCaseOut(id=2, name="legacy", stdin="9", expected="9" * (expected_cap + 1))
 
 
 def test_refusing_an_oversized_question_does_not_echo_it_back(client: Any) -> None:

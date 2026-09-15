@@ -116,6 +116,37 @@ export function setNoOrganizationHandler(handler: (() => void) | null): void {
  *  because the platform sends no error code; it is the only 403 phrased this
  *  way, and misreading another 403 costs a redirect to a page that then loads
  *  normally. Keep in step with `get_current_membership` in `auth.py`. */
+/** The field a 422 entry is about, in words: ["body", "test_cases", 0, "weight"]
+ *  becomes "Test case 1 weight". An index belongs to the list before it, which is
+ *  why it is folded into that word rather than listed after it. */
+function fieldLabel(loc: unknown): string {
+  if (!Array.isArray(loc)) return ''
+  const words: string[] = []
+  for (const part of loc) {
+    if (part === 'body') continue
+    if (typeof part === 'number') {
+      words.push(`${(words.pop() ?? '').replace(/s$/, '')} ${part + 1}`.trim())
+    } else {
+      words.push(String(part).replace(/_/g, ' '))
+    }
+  }
+  const label = words.join(' ').trim()
+  return label ? label.charAt(0).toUpperCase() + label.slice(1) : ''
+}
+
+/** One 422 entry as a sentence. Pydantic's own messages name a constraint but not
+ *  the field — "Input should be greater than 0" told an interviewer nothing about
+ *  WHICH zero the wizard would not take (R2-052) — so the field is prefixed,
+ *  unless the message already says it (our own ValueErrors usually do). */
+function describeFieldError(d: { loc?: unknown; msg?: string }): string {
+  const msg = (d.msg ?? '').replace(/^Value error, /, '')
+  if (!msg) return ''
+  const label = fieldLabel(d.loc)
+  const noun = label.split(' ').pop()?.toLowerCase() ?? ''
+  if (!label || (noun && msg.toLowerCase().includes(noun))) return msg
+  return `${label}: ${msg}`
+}
+
 function isNoOrganization(status: number, detail: unknown): boolean {
   return status === 403 && typeof detail === 'string' && detail.includes('no organisation')
 }
@@ -193,10 +224,7 @@ async function request<T>(
       // the messages so the page shows words, not "[object Object]".
       const detail: unknown = data.detail
       const joined = Array.isArray(detail)
-        ? detail
-            .map((d: { msg?: string }) => (d.msg ?? '').replace(/^Value error, /, ''))
-            .filter(Boolean)
-            .join(' ')
+        ? detail.map(describeFieldError).filter(Boolean).join('; ')
         : null
       // An empty join would blank the alert entirely, so keep the fallback.
       message = joined || (typeof detail === 'string' ? detail : null) || data.message || message

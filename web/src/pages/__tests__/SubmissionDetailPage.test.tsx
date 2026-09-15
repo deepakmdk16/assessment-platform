@@ -119,6 +119,7 @@ const submission: SubmissionDetail = {
   question_id: 'two-sum',
   candidate: 'Casey Candidate',
   erased: false,
+  error_reason: null,
   language: 'python',
   code: 'print("hi")',
   status: 'done',
@@ -234,6 +235,25 @@ describe('SubmissionDetailPage', () => {
     renderPage()
 
     expect(await screen.findByText(/grading couldn’t complete/i)).toBeInTheDocument()
+  })
+
+  it('says why the grader refused the submission, not just that it failed', async () => {
+    // R2-002: this notice said "the agent couldn't be reached" for every error,
+    // including the one case the interviewer could actually fix — their own
+    // question, refused by the grader for a rule it named.
+    vi.mocked(api.getSubmission).mockResolvedValue({
+      ...submission,
+      status: 'error',
+      error_reason:
+        "the grader refused this submission: invalid question: question 'two-sum': " +
+        'constraints must be non-empty',
+      result: null,
+    })
+    renderPage()
+
+    expect(await screen.findByText(/constraints must be non-empty/i)).toBeInTheDocument()
+    // and the recovery is still offered on the same notice
+    expect(screen.getByRole('button', { name: /retry grading/i })).toBeInTheDocument()
   })
 
   it('surfaces the grading details the API already returned', async () => {

@@ -129,7 +129,7 @@ def test_question_ownership_isolation(anon_client: TestClient) -> None:
     assert anon_client.get("/questions/sum_of_n", headers=_auth(tok_b)).status_code == 403
 
     upd = {
-        "title": "hijack", "prompt": "x", "constraints": "", "time_limit_s": 2.0,
+        "title": "hijack", "prompt": "x", "constraints": "1 <= N", "time_limit_s": 2.0,
         "pass_threshold": 0.9, "required_complexity": None,
         "example_input": None, "example_output": None, "test_cases": [],
     }

@@ -480,6 +480,7 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
         agent_job_id=sub.agent_job_id,
         created_at=sub.created_at,
         late=sub.late,
+        error_reason=sub.error_reason,
         result=result_out,
     )
 
@@ -2436,11 +2437,18 @@ def _agent_detail(exc: httpx.HTTPStatusError) -> str:
 
     A draft 422's detail is a dict carrying `warnings`; join them so the UI shows
     the reason rather than "[object Object]".
+
+    Every branch that reports an agent failure runs this, including the one that
+    must never raise (`_trigger_agent`), so a body that is valid JSON but not an
+    object — a proxy answering `"bad gateway"` — has to be text, not an
+    AttributeError that 500s a candidate's submit and then re-raises out of the
+    reaper on every tick.
     """
     try:
-        detail: Any = exc.response.json().get("detail", exc.response.text)
+        body: Any = exc.response.json()
     except ValueError:
-        detail = exc.response.text
+        return exc.response.text
+    detail: Any = body.get("detail", exc.response.text) if isinstance(body, dict) else body
     if isinstance(detail, dict):
         warnings = detail.get("warnings")
         if warnings:
@@ -4666,6 +4674,7 @@ async def candidate_submit(
     token: str,
     body: CandidateSubmitIn,
     request: Request,
+    background: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> CandidateSubmitOut:
     limiter.check(
@@ -4715,7 +4724,7 @@ async def candidate_submit(
         raise HTTPException(status_code=409, detail=_ALREADY_SUBMITTED_DETAIL) from exc
     session.refresh(sub)
 
-    sub = await _trigger_agent(session, question, sub)
+    sub = await _trigger_agent(session, question, sub, background)
     return CandidateSubmitOut(submission_id=sub.id, status=sub.status)
 
 
@@ -4989,7 +4998,34 @@ def _cas(
     return won
 
 
-async def _trigger_agent(session: Session, question: Question, sub: Submission) -> Submission:
+# An agent refusal is long-ish free text (the question's first broken rule, from
+# the agent's own message). Stored, so bounded: enough to name the field and the
+# rule, short enough that the column is never a place a payload hides.
+MAX_ERROR_REASON_CHARS = 500
+
+
+async def _end_sitting_if_complete(
+    session: Session, sub: Submission, background: BackgroundTasks | None
+) -> None:
+    """X06: a submission that just reached a final state may have ended the sitting;
+    if it did, tell the interviewer. On a request path the send is queued behind the
+    response; in the reaper there is no response to queue behind, so it goes to a
+    worker thread (SMTP and a customer's webhook must not run on the event loop)."""
+    ready = notify.claim_sitting(session, sub)
+    if ready is None:
+        return
+    if background is not None:
+        background.add_task(notify.deliver, ready)
+    else:
+        await asyncio.to_thread(notify.deliver, ready)
+
+
+async def _trigger_agent(
+    session: Session,
+    question: Question,
+    sub: Submission,
+    background: BackgroundTasks | None = None,
+) -> Submission:
     """Claim `sub` for one more agent trigger and make it. Never raises for the agent.
 
     Shared by submit, the manual retry and the reaper. The order is what makes
@@ -5003,8 +5039,10 @@ async def _trigger_agent(session: Session, question: Question, sub: Submission) 
                   never a regression.
     A trigger that still fails after its retries leaves the row "pending" for the
     reaper (re-triggered after TRIGGER_RETRY_AFTER_S), so the caller never 502s
-    the candidate and the attempt is never burned. A lost claim (another worker
-    got there first) returns the row as that worker left it.
+    the candidate and the attempt is never burned — UNLESS the agent refused the
+    job outright (see `agent_client.TRIGGER_TERMINAL_STATUSES`), which no number
+    of retries can change. A lost claim (another worker got there first) returns
+    the row as that worker left it.
     """
     attempt = sub.attempts + 1
     if not _cas(
@@ -5015,6 +5053,7 @@ async def _trigger_agent(session: Session, question: Question, sub: Submission) 
         status="pending",
         agent_job_id=sub.id,
         attempts=attempt,
+        error_reason=None,
     ):
         logger.info(
             "submission %s: trigger claim lost to another worker (status=%s)", sub.id, sub.status
@@ -5024,7 +5063,36 @@ async def _trigger_agent(session: Session, question: Question, sub: Submission) 
     callback_url = f"{PLATFORM_BASE_URL}/assessments/callback"
     try:
         job_id = await agent_client.trigger_assessment(question, sub, callback_url)
-    except Exception as exc:  # agent unreachable / rejected the job, after retries
+    except Exception as exc:  # agent unreachable, or it refused the job outright
+        refused = agent_client.trigger_refusal(exc)
+        if refused is not None:
+            # The agent will not grade this submission as sent — a malformed
+            # question, an unsupported language. Retrying spends the attempts and
+            # ends in the same "error", except with nothing to show for it, which
+            # is the R2-002 candidates actually hit. Record the agent's own reason
+            # and stop; the interviewer fixes the question and retries by hand.
+            reason = (
+                "the grader refused this submission: "
+                f"{_agent_detail(cast(httpx.HTTPStatusError, exc))}"
+            )[:MAX_ERROR_REASON_CHARS]
+            if _cas(
+                session,
+                sub,
+                expect_status="pending",
+                expect_attempts=attempt,
+                status="error",
+                error_reason=reason,
+            ):
+                logger.error(
+                    "submission %s: agent refused the job with %d (attempt %d); "
+                    "recorded as an error, not retried: %s",
+                    sub.id,
+                    refused.status_code,
+                    attempt,
+                    reason,
+                )
+                await _end_sitting_if_complete(session, sub, background)
+            return sub
         logger.warning(
             "submission %s: agent trigger failed (attempt %d/%d); left pending for the reaper: %s",
             sub.id,
@@ -5114,7 +5182,15 @@ async def _reap_tick() -> list[str]:
                     acted.append(sub.id)
                     continue
             if _cas(
-                session, sub, expect_status=sub.status, expect_attempts=sub.attempts, status="error"
+                session,
+                sub,
+                expect_status=sub.status,
+                expect_attempts=sub.attempts,
+                status="error",
+                error_reason=(
+                    f"the grader never answered after {sub.attempts} attempt(s); "
+                    "the submission was not graded."
+                ),
             ):
                 logger.error(
                     "submission %s gave up after %d agent trigger(s) (agent_job_id=%s): "
@@ -5127,16 +5203,8 @@ async def _reap_tick() -> list[str]:
                 # it notifies exactly as a callback would. Without this a sitting
                 # whose agent never came back is the one case where the
                 # interviewer is told nothing at all — the case they most need to
-                # hear about. Already inside a background loop, so `deliver` is
-                # called directly rather than queued.
-                ready = notify.claim_sitting(session, sub)
-                if ready is not None:
-                    # `deliver` is blocking (smtplib, getaddrinfo, httpx) and this
-                    # runs ON the event loop, so it goes to a worker thread — the
-                    # same reason `_retention_tick` does. Inline, one unreachable
-                    # mail host would stall every in-flight request for the whole
-                    # SMTP deadline.
-                    await asyncio.to_thread(notify.deliver, ready)
+                # hear about.
+                await _end_sitting_if_complete(session, sub, None)
                 acted.append(sub.id)
     return acted
 
@@ -5181,6 +5249,7 @@ async def _retention_loop() -> None:
 @app.post("/submissions", response_model=SubmissionOut, status_code=201)
 async def create_submission(
     body: SubmissionCreate,
+    background: BackgroundTasks,
     org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> SubmissionOut:
@@ -5198,13 +5267,14 @@ async def create_submission(
     session.commit()
     session.refresh(sub)
 
-    sub = await _trigger_agent(session, question, sub)
+    sub = await _trigger_agent(session, question, sub, background)
     return _submission_out(sub, None)
 
 
 @app.post("/submissions/{submission_id}/retry", response_model=SubmissionOut)
 async def retry_submission(
     submission_id: str,
+    background: BackgroundTasks,
     org: Membership = Depends(get_current_membership),
     session: Session = Depends(get_session),
 ) -> SubmissionOut:
@@ -5234,7 +5304,7 @@ async def retry_submission(
     # succeeds sends nothing, and the customer's ATS keeps the failure forever as
     # this candidate's result.
     notify.reopen_sitting(session, sub)
-    sub = await _trigger_agent(session, question, sub)
+    sub = await _trigger_agent(session, question, sub, background)
     return _submission_out(sub, None)
 
 

@@ -59,18 +59,116 @@ MAX_TEST_CASES = 25
 # reference solution and the other fields still in the G8 baseline).
 MAX_QUESTION_CASES_BYTES = 12 * 1024 * 1024
 
+# R2-073: the free text a question carries, bounded. Unbounded, a megabyte
+# "title" renders in the grid, the CSV and the results email, and a prompt this
+# platform stores can still be one the agent's own intake refuses. The numbers
+# are an order of magnitude above the largest question in the corpus, not round
+# numbers for their own sake.
+MAX_ID_CHARS = 120
+MAX_TITLE_CHARS = 200
+MAX_PROMPT_CHARS = 20_000
+MAX_CONSTRAINTS_CHARS = 5_000
+MAX_EXAMPLE_CHARS = 8_000
+MAX_COMPLEXITY_CHARS = 120
+MAX_LANGUAGE_CHARS = 40
+MAX_CASE_NAME_CHARS = 200
+MAX_CASE_WEIGHT = 1_000.0
+# Source it too, so the pair of caps that decide whether the agent accepts a
+# submission live together; the agent's own `_MAX_CODE_CHARS` is the same number.
+MAX_CODE_CHARS = 200_000
+# R2-022: the agent applies this to EVERY case and scales it per language (3x for
+# Python), so the real ceiling is MAX_TEST_CASES x 3 x this — 12.5 minutes of
+# sandbox time for one submission at the cap. Every question in the corpus asks
+# for 2-5s; a limit past this is a mis-typed field, not a hard problem.
+MAX_TIME_LIMIT_S = 10.0
+# The people and the things a question is wrapped in. A name renders in the
+# submissions grid, the CSV export and the results email, so it is bounded for
+# the same reason a title is (R2-073); the brief is bounded because the agent's
+# own `_MAX_BRIEF_CHARS` is 20,000 and anything longer is a 400 from it, not a
+# draft. 254 is the longest address any RFC-conformant mail server accepts.
+MAX_PERSON_NAME_CHARS = 200
+MAX_EMAIL_CHARS = 254
+MAX_BRIEF_CHARS = 20_000
+MAX_ASSESSMENT_SLOTS = 20
 
-class _BoundedCases(BaseModel):
-    """Mixin: a question's test cases must fit in one request body.
 
-    Without it a question can be CREATED but never EDITED — a PUT re-sends every
-    case, which is exactly how a title change on a question with a large
-    performance input came back 413 (R2-012).
+def _not_blank(value: str) -> str:
+    """Reject whitespace-only text. `min_length` cannot: " " has length 1, and the
+    agent strips before it checks (`questions.py::validate_question`)."""
+    if not value.strip():
+        raise ValueError("must not be blank")
+    return value
+
+
+NonBlankStr = Annotated[str, AfterValidator(_not_blank)]
+
+
+class TestCaseIn(BaseModel):
+    # Every rule here is one the agent's `validate_question` enforces on the way
+    # in: a case it refuses strands the candidate, who cannot edit the question
+    # (R2-002). `stdin` is the exception — it may legitimately be empty.
+    name: NonBlankStr = Field(max_length=MAX_CASE_NAME_CHARS)
+    stdin: str = Field(max_length=MAX_CASE_STDIN_CHARS)
+    expected: str = Field(min_length=1, max_length=MAX_CASE_EXPECTED_CHARS)
+    category: Category = "correctness"
+    weight: float = Field(default=1.0, gt=0, le=MAX_CASE_WEIGHT)
+
+
+class TestCaseOut(TestCaseIn):
+    id: int
+    # Intake rules must not become response-side validation: rows stored before
+    # they existed are larger, blank-named and zero-weighted, and FastAPI validates
+    # a response model — inheriting the rules would turn reading a legacy question
+    # into a 500. Every field the rules above touch is re-declared bare.
+    name: str
+    stdin: str
+    expected: str
+    weight: float = 1.0
+
+
+class _QuestionFields(BaseModel):
+    """Every mutable field of a question, and the rules that keep what the platform
+    STORES inside what the agent will GRADE.
+
+    Shared by create and update because the drift between the two is a bug of its
+    own: a cap on one and not the other is how a question with a large performance
+    input became creatable but never editable (R2-012, a PUT re-sends every case).
+    The rules mirror `../AssesmentAgent/assessment_agent/questions.py::validate_question`
+    — mirror, because the agent is a separate deployable and not a dependency here —
+    and `tests/test_agent_contract_parity.py` is what keeps the mirror honest.
     """
 
-    @field_validator("test_cases", check_fields=False)
+    title: NonBlankStr = Field(max_length=MAX_TITLE_CHARS)
+    prompt: NonBlankStr = Field(max_length=MAX_PROMPT_CHARS)
+    # Required, and no longer defaulted to "": the wizard's empty default IS
+    # R2-002 — 53 saved questions carried blank constraints, and every submission
+    # against them ended as "error" the interviewer could not explain.
+    constraints: NonBlankStr = Field(max_length=MAX_CONSTRAINTS_CHARS)
+    time_limit_s: float = Field(default=2.0, gt=0, le=MAX_TIME_LIMIT_S)
+    # Stored as a 0..1 fraction (the agent rejects anything outside (0, 1]). The
+    # wizard works in whole-number percent and converts at the API boundary.
+    pass_threshold: float = Field(default=0.9, gt=0, le=1)
+    required_complexity: str | None = Field(default=None, max_length=MAX_COMPLEXITY_CHARS)
+    example_input: str | None = Field(default=None, max_length=MAX_EXAMPLE_CHARS)
+    example_output: str | None = Field(default=None, max_length=MAX_EXAMPLE_CHARS)
+    difficulty: Difficulty | None = None
+    # The AI-drafted reference solution, carried through from a draft so it can be
+    # persisted. Null (and absent from the payload) for hand-authored questions.
+    reference_solution: str | None = Field(default=None, max_length=MAX_CODE_CHARS)
+    reference_language: str | None = Field(default=None, max_length=MAX_LANGUAGE_CHARS)
+    # Assessment time budget in minutes; None = untimed. Positive when set.
+    duration_minutes: int | None = Field(default=None, gt=0)
+    test_cases: list[TestCaseIn] = Field(default_factory=list, max_length=MAX_TEST_CASES)
+
+    @field_validator("test_cases")
     @classmethod
-    def _cases_fit_one_request_body(cls, cases: list[TestCaseIn]) -> list[TestCaseIn]:
+    def _cases_the_agent_will_grade(cls, cases: list[TestCaseIn]) -> list[TestCaseIn]:
+        names = [c.name for c in cases]
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        if duplicates:
+            raise ValueError(
+                f"test case names must be unique; repeated: {', '.join(duplicates)}"
+            )
         size = len(json.dumps([c.model_dump() for c in cases]).encode())
         if size > MAX_QUESTION_CASES_BYTES:
             raise ValueError(
@@ -81,65 +179,14 @@ class _BoundedCases(BaseModel):
         return cases
 
 
-class TestCaseIn(BaseModel):
-    name: str
-    stdin: str = Field(max_length=MAX_CASE_STDIN_CHARS)
-    expected: str = Field(max_length=MAX_CASE_EXPECTED_CHARS)
-    category: Category = "correctness"
-    weight: float = 1.0
-
-
-class TestCaseOut(TestCaseIn):
-    id: int
-    # Intake caps must not become response-side validation: rows stored before
-    # they existed are larger, and FastAPI validates a response model — inheriting
-    # the caps would turn reading a legacy question into a 500.
-    stdin: str
-    expected: str
-
-
-class QuestionCreate(_BoundedCases):
+class QuestionCreate(_QuestionFields):
     # Optional: the UI omits it and the server generates slug(title)+suffix. The
     # agent/CLI authoring path may still supply an explicit id, which is honored.
-    id: str | None = None
-    title: str
-    prompt: str
-    constraints: str = ""
-    time_limit_s: float = 2.0
-    # Stored as a 0..1 fraction (the agent rejects anything outside (0, 1]). The
-    # wizard works in whole-number percent and converts at the API boundary.
-    pass_threshold: float = Field(default=0.9, gt=0, le=1)
-    required_complexity: str | None = None
-    example_input: str | None = None
-    example_output: str | None = None
-    difficulty: Difficulty | None = None
-    # The AI-drafted reference solution, carried through from a draft so it can be
-    # persisted. Null (and absent from the payload) for hand-authored questions.
-    reference_solution: str | None = None
-    reference_language: str | None = None
-    # Assessment time budget in minutes; None = untimed. Positive when set.
-    duration_minutes: int | None = Field(default=None, gt=0)
-    test_cases: list[TestCaseIn] = Field(default_factory=list, max_length=MAX_TEST_CASES)
+    id: str | None = Field(default=None, max_length=MAX_ID_CHARS)
 
 
-class QuestionUpdate(_BoundedCases):
+class QuestionUpdate(_QuestionFields):
     """Full replace of a question's mutable fields (PUT semantics)."""
-
-    title: str
-    prompt: str
-    constraints: str = ""
-    time_limit_s: float = 2.0
-    # Stored as a 0..1 fraction (the agent rejects anything outside (0, 1]). The
-    # wizard works in whole-number percent and converts at the API boundary.
-    pass_threshold: float = Field(default=0.9, gt=0, le=1)
-    required_complexity: str | None = None
-    example_input: str | None = None
-    example_output: str | None = None
-    difficulty: Difficulty | None = None
-    reference_solution: str | None = None
-    reference_language: str | None = None
-    duration_minutes: int | None = Field(default=None, gt=0)
-    test_cases: list[TestCaseIn] = Field(default_factory=list, max_length=MAX_TEST_CASES)
 
 
 class QuestionOut(BaseModel):
@@ -167,8 +214,8 @@ class AssessmentSlotIn(BaseModel):
     (VS2), exactly one set. A set-slot hands each candidate a different variant
     at start time; a question-slot is the same question for everyone."""
 
-    question_id: str | None = None
-    variant_set_id: str | None = None
+    question_id: str | None = Field(default=None, max_length=MAX_ID_CHARS)
+    variant_set_id: str | None = Field(default=None, max_length=MAX_ID_CHARS)
 
     @model_validator(mode="after")
     def _exactly_one(self) -> AssessmentSlotIn:
@@ -185,8 +232,10 @@ class _AssessmentSlots(BaseModel):
     so existing clients need no change) OR the ordered `slots` list (mixed fixed
     questions + variant sets). Exactly one, at least one slot."""
 
-    question_ids: list[str] | None = None
-    slots: list[AssessmentSlotIn] | None = None
+    question_ids: list[Annotated[str, Field(max_length=MAX_ID_CHARS)]] | None = Field(
+        default=None, max_length=MAX_ASSESSMENT_SLOTS
+    )
+    slots: list[AssessmentSlotIn] | None = Field(default=None, max_length=MAX_ASSESSMENT_SLOTS)
 
     @model_validator(mode="after")
     def _one_source(self) -> _AssessmentSlots:
@@ -207,13 +256,13 @@ class AssessmentCreate(_AssessmentSlots):
     slots with an optional total time budget (T4, VS2)."""
 
     # Optional: the UI omits it and the server generates slug(title)+suffix.
-    id: str | None = None
-    title: str
+    id: str | None = Field(default=None, max_length=MAX_ID_CHARS)
+    title: NonBlankStr = Field(max_length=MAX_TITLE_CHARS)
     duration_minutes: int | None = Field(default=None, gt=0)  # None = untimed total
     # Per-assessment branding (A12). `org_name` is optional and defaults to the
     # organisation's own name. The logo is NOT settable here: it is snapshotted
     # from the organisation at creation (P3b), so there is nothing to send.
-    org_name: str | None = None
+    org_name: str | None = Field(default=None, max_length=MAX_TITLE_CHARS)
     # Integrity monitoring (I1). Defaults on; a caller that omits it gets a
     # monitored sitting, which is what the pre-I1 clients should now do.
     proctored: bool = True
@@ -222,9 +271,9 @@ class AssessmentCreate(_AssessmentSlots):
 class AssessmentUpdate(_AssessmentSlots):
     """Full replace of an assessment's mutable fields (PUT semantics)."""
 
-    title: str
+    title: NonBlankStr = Field(max_length=MAX_TITLE_CHARS)
     duration_minutes: int | None = Field(default=None, gt=0)
-    org_name: str | None = None
+    org_name: str | None = Field(default=None, max_length=MAX_TITLE_CHARS)
     proctored: bool = True
 
 
@@ -341,10 +390,10 @@ class AssessmentAttemptOut(BaseModel):
 class QuestionDraftIn(BaseModel):
     """An interviewer's brief for the AI question-authoring assistant."""
 
-    brief: str = Field(min_length=1)
-    language: str
-    difficulty: str | None = None
-    target_complexity: str | None = None
+    brief: NonBlankStr = Field(max_length=MAX_BRIEF_CHARS)
+    language: str = Field(max_length=MAX_LANGUAGE_CHARS)
+    difficulty: str | None = Field(default=None, max_length=MAX_COMPLEXITY_CHARS)
+    target_complexity: str | None = Field(default=None, max_length=MAX_COMPLEXITY_CHARS)
 
 
 class QuestionDraftOut(BaseModel):
@@ -366,11 +415,11 @@ class VariantSetDraftIn(BaseModel):
     """A brief to draft a SET of sibling variants from (the authoring inputs are
     pinned across the set so the variants stay in one difficulty band)."""
 
-    brief: str = Field(min_length=1)
-    language: str
+    brief: NonBlankStr = Field(max_length=MAX_BRIEF_CHARS)
+    language: str = Field(max_length=MAX_LANGUAGE_CHARS)
     count: int = Field(ge=2, le=8, description="How many variants to draft.")
-    difficulty: str | None = None
-    target_complexity: str | None = None
+    difficulty: str | None = Field(default=None, max_length=MAX_COMPLEXITY_CHARS)
+    target_complexity: str | None = Field(default=None, max_length=MAX_COMPLEXITY_CHARS)
 
 
 class VariantDraftOut(BaseModel):
@@ -397,17 +446,17 @@ class VariantSetDraftOut(BaseModel):
 class VariantCreate(QuestionCreate):
     """A reviewed variant to persist: a full question plus its label in the set."""
 
-    label: str | None = None
+    label: str | None = Field(default=None, max_length=MAX_CASE_NAME_CHARS)
 
 
 class VariantSetCreate(BaseModel):
-    id: str | None = None
-    title: str
-    brief: str
-    language: str
-    difficulty: str | None = None
-    target_complexity: str | None = None
-    variants: list[VariantCreate] = Field(min_length=2)
+    id: str | None = Field(default=None, max_length=MAX_ID_CHARS)
+    title: NonBlankStr = Field(max_length=MAX_TITLE_CHARS)
+    brief: str = Field(max_length=MAX_BRIEF_CHARS)
+    language: str = Field(max_length=MAX_LANGUAGE_CHARS)
+    difficulty: str | None = Field(default=None, max_length=MAX_COMPLEXITY_CHARS)
+    target_complexity: str | None = Field(default=None, max_length=MAX_COMPLEXITY_CHARS)
+    variants: list[VariantCreate] = Field(min_length=2, max_length=8)
 
 
 class VariantOut(QuestionOut):
@@ -446,7 +495,6 @@ class VariantSetSummaryOut(BaseModel):
 # candidate can hit unauthenticated carries one of these — before them a
 # multi-megabyte paste was accepted, stored in Submission.code, and only then
 # rejected by the agent.
-MAX_CODE_CHARS = 200_000
 # A comment box, not an essay box: long enough for a paragraph of real feedback,
 # short enough that the column is never a place to paste a CV.
 MAX_FEEDBACK_CHARS = 2_000
@@ -454,9 +502,9 @@ MAX_STDIN_CHARS = 1_000_000
 
 
 class SubmissionCreate(BaseModel):
-    question_id: str
-    candidate: str
-    language: str
+    question_id: str = Field(max_length=MAX_ID_CHARS)
+    candidate: NonBlankStr = Field(max_length=MAX_PERSON_NAME_CHARS)
+    language: str = Field(max_length=MAX_LANGUAGE_CHARS)
     code: str = Field(min_length=1, max_length=MAX_CODE_CHARS)
 
 
@@ -485,6 +533,10 @@ class SubmissionOut(BaseModel):
     # True when this submission arrived after the timed window closed (recorded
     # and graded, but flagged so the interviewer can weigh it).
     late: bool = False
+    # Set only when the submission ended in "error" with no grade: the grader's own
+    # sentence about why. The page that says "grading couldn't complete" is the one
+    # place an interviewer looks, and it had nothing to tell them (R2-002).
+    error_reason: str | None = None
     result: ResultOut | None = None
 
 
@@ -835,13 +887,13 @@ class InvitePublicOut(BaseModel):
 
 
 class CandidateSubmitIn(BaseModel):
-    candidate_name: str
-    candidate_email: EmailStr
-    language: str
+    candidate_name: NonBlankStr = Field(max_length=MAX_PERSON_NAME_CHARS)
+    candidate_email: EmailStr = Field(max_length=MAX_EMAIL_CHARS)
+    language: str = Field(max_length=MAX_LANGUAGE_CHARS)
     code: str = Field(min_length=1, max_length=MAX_CODE_CHARS)
     # Which question this submits. None (or omitted) targets the invite's single
     # question; required for a multi-question assessment invite.
-    question_id: str | None = None
+    question_id: str | None = Field(default=None, max_length=MAX_ID_CHARS)
     # Only consulted when this submit is what *begins* the sitting — a caller
     # that skipped /start. Once an attempt exists with consent recorded, the
     # sitting is consented and this is ignored, so the normal flow never asks
@@ -858,11 +910,11 @@ class CandidateDraftIn(BaseModel):
     """Autosave of in-progress code (CX2). Bounded because it's an
     unauthenticated write — far above any real solution, far below a flood."""
 
-    candidate_email: EmailStr
+    candidate_email: EmailStr = Field(max_length=MAX_EMAIL_CHARS)
     # None targets the invite's single question, like CandidateSubmitIn.
-    question_id: str | None = None
+    question_id: str | None = Field(default=None, max_length=MAX_ID_CHARS)
     code: str = Field(max_length=100_000)
-    language: str
+    language: str = Field(max_length=MAX_LANGUAGE_CHARS)
 
 
 class CandidateDraftOut(BaseModel):

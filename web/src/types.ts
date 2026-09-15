@@ -655,6 +655,9 @@ export interface SubmissionDetail {
   agent_job_id: string | null
   created_at: string
   late: boolean // arrived after the timed window closed (recorded + flagged)
+  /** Why this submission ended in "error" with no grade — the grader refused the
+   *  job, or never answered. Null whenever it was graded (R2-002). */
+  error_reason: string | null
   result: SubmissionResult | null
 }
 
