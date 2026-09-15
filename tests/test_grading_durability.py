@@ -168,6 +168,109 @@ def test_trigger_does_not_retry_a_rejected_job(client, monkeypatch) -> None:
     assert len(calls) == 1
 
 
+def test_a_refused_job_is_terminal_and_keeps_the_agent_s_reason(client, monkeypatch) -> None:
+    """R2-002: a 400 is the agent's final answer about the job as sent, so asking
+    again cannot change it. It used to be left "pending" anyway: the reaper burned
+    every attempt, flipped the row to "error" with NO stored reason, and the
+    interviewer's Retry button looped forever over a question only they could fix.
+    Record the refusal as the result instead — the one place the UI already reads.
+    """
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(agent_client, "_TRIGGER_RETRY_BACKOFF_S", 0.0)
+    posts: list[str] = []
+
+    def on_post(url, timeout, **kw):  # noqa: ANN001
+        posts.append(url)
+        return httpx.Response(
+            400,
+            json={"detail": "invalid question: question 'q': constraints must be non-empty"},
+            request=httpx.Request("POST", url),
+        )
+
+    patch_async_post(monkeypatch, on_post)
+    sub_id = client.post("/submissions", json=SUBMIT).json()["id"]
+
+    assert _state(sub_id) == ("error", sub_id, 1)
+    body = client.get(f"/submissions/{sub_id}").json()
+    assert body["result"]["verdict"] == "ERROR"
+    assert "constraints must be non-empty" in body["result"]["reason"]
+
+    # And the reaper leaves it alone: "error" is not a stranded state, so the
+    # attempts are spent on questions that can still be graded.
+    _age_submission(sub_id, config.TRIGGER_RETRY_AFTER_S + 1)
+    assert _tick() == []
+    assert len(posts) == 1
+
+
+def test_a_refused_job_can_still_be_retried_after_the_question_is_fixed(
+    client, monkeypatch
+) -> None:
+    """The reason is stored, not the verdict of a life sentence: once the
+    interviewer fixes the question, the existing manual retry re-grades the same
+    submission and the stored refusal is replaced by the real result."""
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(agent_client, "_TRIGGER_RETRY_BACKOFF_S", 0.0)
+    patch_async_post(
+        monkeypatch,
+        lambda url, timeout, **kw: httpx.Response(
+            400, json={"detail": "invalid question: weight must be > 0"},
+            request=httpx.Request("POST", url),
+        ),
+    )
+    sub_id = client.post("/submissions", json=SUBMIT).json()["id"]
+    assert _state(sub_id)[0] == "error"
+
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return(sub_id))
+    assert client.post(f"/submissions/{sub_id}/retry").json()["status"] == "running"
+    assert _state(sub_id) == ("running", sub_id, 2)
+
+
+def test_a_refusal_with_an_unreadable_body_still_records_rather_than_raising(
+    client, monkeypatch
+) -> None:
+    """`_trigger_agent` promises never to raise for the agent, and the reaper has
+    no per-submission guard: one row whose refusal blew up on the way to being
+    recorded would starve every row behind it. A proxy answering a bare JSON
+    string is the shape that used to do it."""
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(agent_client, "_TRIGGER_RETRY_BACKOFF_S", 0.0)
+    patch_async_post(
+        monkeypatch,
+        lambda url, timeout, **kw: httpx.Response(
+            400, json="bad request", request=httpx.Request("POST", url)
+        ),
+    )
+    sub_id = client.post("/submissions", json=SUBMIT).json()["id"]
+
+    assert _state(sub_id)[0] == "error"
+    assert "bad request" in client.get(f"/submissions/{sub_id}").json()["result"]["reason"]
+
+
+def test_a_shape_rejection_is_not_terminal(client, monkeypatch) -> None:
+    """422 is FastAPI refusing the request SHAPE, not the agent refusing the job:
+    it is what a platform deployed ahead of its agent produces, and the reaper's
+    retries are the recovery. Only the agent's own 400 ends a submission."""
+    client.post("/questions", json=_sample_question())
+    monkeypatch.setattr(agent_client, "_TRIGGER_RETRY_BACKOFF_S", 0.0)
+    patch_async_post(
+        monkeypatch,
+        lambda url, timeout, **kw: httpx.Response(
+            422, json={"detail": [{"loc": ["body", "job_id"], "msg": "field required"}]},
+            request=httpx.Request("POST", url),
+        ),
+    )
+    sub_id = client.post("/submissions", json=SUBMIT).json()["id"]
+    assert _state(sub_id) == ("pending", sub_id, 1)  # left for the reaper
+
+    async def agent_back(question, submission, callback_url, base_url=None):  # noqa: ANN001
+        return submission.agent_job_id
+
+    monkeypatch.setattr(agent_client, "trigger_assessment", agent_back)
+    _age_submission(sub_id, config.TRIGGER_RETRY_AFTER_S + 1)
+    assert _tick() == [sub_id]
+    assert _state(sub_id) == ("running", sub_id, 2)
+
+
 def test_candidate_submit_never_502s_when_the_agent_is_down(client, monkeypatch) -> None:
     client.post("/questions", json=_sample_question())
     token = client.post(
@@ -231,6 +334,11 @@ def test_stranded_pending_is_given_up_with_an_alert_after_max_attempts(
         assert _tick() == [sub_id]
     assert _state(sub_id) == ("error", sub_id, 2)
     assert any("needs a manual retry" in r.getMessage() for r in caplog.records)
+    # An "error" the interviewer cannot explain is the defect R2-002 was made of,
+    # so giving up records its reason where a grade would have gone.
+    given_up = client.get(f"/submissions/{sub_id}").json()
+    assert given_up["result"]["verdict"] == "ERROR"
+    assert "never answered after 2 attempt(s)" in given_up["result"]["reason"]
     # The interviewer's manual path is open again from here.
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return(sub_id))
     assert client.post(f"/submissions/{sub_id}/retry").json()["status"] == "running"

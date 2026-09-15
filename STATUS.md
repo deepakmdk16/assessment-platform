@@ -45,13 +45,16 @@ order; this file remains the tracked record of individual open items.
   in the order to take them, plus the nine mechanical gates (G1–G9) that would
   have caught each class. **S00 installs the gates and comes first.**
 
-One P0 is still live and reproduced: a question saved with blank constraints —
-the wizard's default — is refused by the agent's validator, so every submission
-against it ends as "error" (S02 closes it). The other, a grade lost whenever the
-question carried a performance input over 4 MB, is closed by S01: a stored case
-is bounded, the body cap is sized to fit the largest question so it can still be
-edited, and the agent sends a bounded excerpt of each value rather than the
-whole thing.
+Both of the audit's P0s are closed. A grade lost whenever the question carried a
+performance input over 4 MB went in S01: a stored case is bounded, the body cap is
+sized to fit the largest question so it can still be edited, and the agent sends a
+bounded excerpt of each value. A question the agent would never grade — blank
+constraints, the wizard's own default — went in S02, from both ends: the platform
+refuses to store what the grader refuses (shared `_QuestionFields` rules, mirrored
+from `questions.py::validate_question` and held by G1), the agent no longer refuses
+to GRADE over prose the candidate has already read, and a refusal that does happen
+is terminal with its reason recorded against the submission instead of three silent
+retries into a reasonless "error".
 
 Working rule for any item, here or there: **make the feature work end to end,
 then the UI, then scale** — open for extension, closed for modification.
@@ -75,7 +78,8 @@ gate fails if a listed violation starts *passing*, so the list cannot rot.
   locally, `./AssesmentAgent` in CI, which `checks.yml` now checks out) and skips
   with a notice when absent. Also asserts `question_rules.MIN_CORRECTNESS_CASES`
   equals the agent's, replacing the old "keep identical" comment.
-  Listed today: 10 × R2-002 (→ S02). The R2-001 entries came off in S01.
+  Nothing is listed any more: the R2-001 entries came off in S01 and S02 took the
+  nine R2-002 ones, so a divergence now fails the gate on sight.
   The agent's `scripts/checkpoints.sh` runs this test too — the edit that breaks
   it is usually made on that side.
 - **G8 · `tests/test_limiter_coverage.py`** — a route reachable without auth, one
@@ -87,10 +91,11 @@ gate fails if a listed violation starts *passing*, so the list cannot rot.
 - **G8 · `scripts/check-schema-limits.py`** — every field of every request body the
   API accepts must be bounded (`str`/`list` → `max_length`, numbers → `gt`/`ge`/
   `lt`/`le`). Models are reached through FastAPI's own `body_field`, so responses
-  are not touched. 99 unbounded fields today, listed in
+  are not touched. 37 unbounded fields left, listed in
   `scripts/schema-limits-baseline.txt`; the file only shrinks, and there is no
-  regenerate flag. Bounding a stored test case's `stdin`/`expected` is what lets
-  G1's size xfail be deleted.
+  regenerate flag. S02 took the whole question/assessment/candidate authoring path
+  (R2-073); what remains is auth, registration, invites and the org routes, each
+  owned by the session that fixes its finding.
 - **G5 · `docs/GLOSSARY.md` + `web/scripts/check-copy.mjs`** — one word per concept.
   The lint reads PROSE only (JSX text and quoted strings containing a space), so
   `OrganizationOut` and `/auth/login` are untouched while the copy is held to
@@ -132,6 +137,32 @@ visual gate rides the `e2e` job.
 stack instead of demanding :9000 be free. The platform server is handed a
 matching `FRONTEND_BASE_URL` — without it, invite links point at whatever holds
 the default port and every candidate spec walks into the wrong stack.
+
+### S02 leftovers — 2026-09-15
+
+- **P2 · S — Nothing finds the questions saved before S02's rules.**
+  53 dev questions carry blank constraints and 198 cases across 50 questions have
+  an empty expected output. The blank prose now grades (the agent degrades it to a
+  warning) and the empty expected output now fails legibly — the submission ends
+  as "error" carrying the grader's own sentence — but both are discovered one
+  candidate at a time. `scripts/check_question_cases.py` already walks every stored
+  question for the case floor; extend it to the rest of `_QuestionFields`' rules so
+  an operator can list and repair them in one pass instead. No production data
+  exists yet, which is the only reason this is not P1.
+- **P3 · S — A question below the grader's shape says so only in the result.**
+  The agent returns its downgraded authoring warnings ("constraints must be
+  non-empty") in the callback payload, and `full_result` keeps them, but no
+  interviewer surface reads them: the question page cannot tell you that the
+  question you are about to send out is missing the prose the candidate needs.
+  Fix: read `full_result.warnings` on the submission page, and re-validate on the
+  question page from the same rules the wizard uses.
+- **P3 · XS — `QuestionProse` renders inline markdown only.**
+  `` `code` `` and `**bold**` render; a fenced block or a `- list` in a drafted
+  prompt still shows its markers. Deliberate — a markdown block parser strips the
+  leading whitespace of every line, which flattens the indented example blocks
+  that 84 of the 90 dev questions are written with (the component's docstring
+  carries the reasoning). Fix if drafts start emitting fences: render fenced
+  blocks specifically, or teach the drafting prompt not to write them.
 
 ### S00b review leftovers — 2026-09-14
 

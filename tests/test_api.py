@@ -105,7 +105,7 @@ def test_question_crud_roundtrip(client) -> None:
     upd = {
         "title": "Sum of N (v2)",
         "prompt": "updated",
-        "constraints": "",
+        "constraints": "1 <= N <= 1e5",
         "time_limit_s": 3.0,
         "pass_threshold": 0.8,
         "required_complexity": "O(N)",

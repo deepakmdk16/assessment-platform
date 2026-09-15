@@ -45,6 +45,30 @@ describe('request() error messages', () => {
     expect(message).toBe('password must be at least 12 characters.')
   })
 
+  it('names the field a bare pydantic message is about', async () => {
+    // R2-052: "Input should be greater than 0" on its own left the interviewer
+    // hunting for which of the wizard's numbers the server would not take.
+    const message = await messageFrom(422, {
+      detail: [
+        { loc: ['body', 'pass_threshold'], msg: 'Input should be greater than 0' },
+        { loc: ['body', 'test_cases', 2, 'weight'], msg: 'Input should be greater than 0' },
+      ],
+    })
+    expect(message).toBe(
+      'Pass threshold: Input should be greater than 0; ' +
+        'Test case 3 weight: Input should be greater than 0',
+    )
+  })
+
+  it('does not repeat a field the message already names', async () => {
+    const message = await messageFrom(422, {
+      detail: [
+        { loc: ['body', 'new_password'], msg: 'Value error, password must be at least 12 characters.' },
+      ],
+    })
+    expect(message).toBe('password must be at least 12 characters.')
+  })
+
   it('keeps a string detail as-is', async () => {
     const message = await messageFrom(422, {
       detail: 'that password appears in a known data breach; please choose another.',

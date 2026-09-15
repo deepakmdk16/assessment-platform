@@ -6,8 +6,50 @@ import { apiMessage, type ErrorMessage } from '../errors'
 import { LANGUAGES } from '../types'
 import type { Language, TestCaseCategory, TestCaseIn } from '../types'
 
-function emptyTestCase(): TestCaseIn {
-  return { name: '', stdin: '', expected: '', category: 'correctness', weight: 1 }
+function emptyTestCase(category: TestCaseCategory = 'correctness'): TestCaseIn {
+  return { name: '', stdin: '', expected: '', category, weight: 1 }
+}
+
+/** The grader's floor, mirrored from `question_rules.py::case_floor_violations`.
+ *  A question under it is refused at save. */
+const MIN_CORRECTNESS_CASES = 4
+
+/** Mirrors `schemas.py::MAX_TIME_LIMIT_S`: the grader applies this to every case
+ *  and scales it per language, so a mis-typed 600 is minutes of sandbox time. */
+const MAX_TIME_LIMIT_S = 10
+
+/** The rows a new question starts with. One empty row could never be saved
+ *  (R2-010: the wizard's own default failed the floor, and the interviewer only
+ *  found out as a 422 on the last step), so it starts at the shape the grader
+ *  actually wants: the correctness floor plus the one performance case. */
+function seedTestCases(): TestCaseIn[] {
+  return [
+    ...Array.from({ length: MIN_CORRECTNESS_CASES }, () => emptyTestCase()),
+    emptyTestCase('performance'),
+  ]
+}
+
+/** Why a case set would be refused at save, or null. Mirrors the grader's rules
+ *  (`questions.py::validate_question`) so the interviewer is told on the step
+ *  they can fix it on, not by a 422 two steps later. */
+function caseProblem(rows: TestCaseIn[]): string | null {
+  const named = rows.filter((tc) => tc.name.trim())
+  if (named.length !== rows.length) return 'Every test case needs a name.'
+  const names = named.map((tc) => tc.name.trim())
+  const duplicate = names.find((n, i) => names.indexOf(n) !== i)
+  if (duplicate) return `Test case names must be unique — "${duplicate}" is used twice.`
+  if (rows.some((tc) => !tc.expected)) {
+    return 'Every test case needs an expected output — the grader compares against it.'
+  }
+  if (rows.some((tc) => !(tc.weight > 0))) return 'Every test case needs a weight above 0.'
+  const correctness = rows.filter((tc) => tc.category === 'correctness').length
+  if (correctness < MIN_CORRECTNESS_CASES) {
+    return `Needs at least ${MIN_CORRECTNESS_CASES} correctness cases (has ${correctness}).`
+  }
+  if (!rows.some((tc) => tc.category === 'performance')) {
+    return 'Needs at least one performance case — it is what catches a too-slow solution.'
+  }
+  return null
 }
 
 interface DraftFailure {
@@ -95,7 +137,7 @@ export function AddQuestionPage() {
   const [indefinite, setIndefinite] = useState(false)
   const [durationTouched, setDurationTouched] = useState(false)
 
-  const [testCases, setTestCases] = useState<TestCaseIn[]>([emptyTestCase()])
+  const [testCases, setTestCases] = useState<TestCaseIn[]>(seedTestCases)
 
   const [exampleInput, setExampleInput] = useState('')
   const [exampleOutput, setExampleOutput] = useState('')
@@ -233,12 +275,25 @@ export function AddQuestionPage() {
       if (!prompt.trim()) return 'Prompt is required.'
     }
     if (s === 1) {
-      if (!Number.isFinite(timeLimitS) || timeLimitS < 0) return 'Time limit must be 0 or more.'
-      if (passThreshold < 0 || passThreshold > 100) return 'Pass threshold must be between 0 and 100.'
+      // Constraints are what the candidate is held to, and the grader refuses a
+      // question without them (R2-002) — the wizard used to default them empty.
+      if (!constraints.trim()) return 'Constraints are required.'
+      if (!Number.isFinite(timeLimitS) || timeLimitS <= 0) {
+        return 'Time limit must be more than 0 seconds.'
+      }
+      if (timeLimitS > MAX_TIME_LIMIT_S) {
+        return `Time limit must be ${MAX_TIME_LIMIT_S} seconds or less.`
+      }
+      if (passThreshold <= 0 || passThreshold > 100) {
+        return 'Pass threshold must be between 1 and 100.'
+      }
+      // Clearing the field reads back as 0, which the API refuses; "no timer" is
+      // the Indefinite checkbox, not an empty box (R2-052).
+      if (!indefinite && !(durationMinutes >= 1)) {
+        return 'Time allowed must be at least 1 minute, or tick Indefinite.'
+      }
     }
-    if (s === 2 && testCases.some((tc) => !tc.name.trim())) {
-      return 'Every test case needs a name.'
-    }
+    if (s === 2) return caseProblem(testCases)
     return null
   }
 
@@ -505,6 +560,10 @@ export function AddQuestionPage() {
                   value={constraints}
                   onChange={(e) => setConstraints(e.target.value)}
                 />
+                <p className="hint-tight">
+                  Shown to the candidate under the prompt — the input sizes their
+                  solution has to hold for. Required.
+                </p>
               </div>
               <div className="grid2">
                 <div className="field">
@@ -512,7 +571,9 @@ export function AddQuestionPage() {
                   <input
                     id="time_limit_s"
                     type="number"
-                    min={0}
+                    min={0.1}
+                    max={MAX_TIME_LIMIT_S}
+                    step="any"
                     value={timeLimitS}
                     onChange={(e) => setTimeLimitS(Number(e.target.value))}
                   />
@@ -522,7 +583,7 @@ export function AddQuestionPage() {
                   <input
                     id="pass_threshold"
                     type="number"
-                    min={0}
+                    min={1}
                     max={100}
                     value={passThreshold}
                     onChange={(e) => setPassThreshold(Number(e.target.value))}
@@ -594,6 +655,11 @@ export function AddQuestionPage() {
         {step === 2 && (
           <div className="card pad">
             <div className="card-title">Test cases</div>
+            <p className="hint-tight tc-hint">
+              At least {MIN_CORRECTNESS_CASES} correctness cases and one performance
+              case — the large input that separates a fast solution from a slow one.
+              Every case needs a name, an expected output and a weight above 0.
+            </p>
             {testCases.map((tc, i) => (
               <div className="tc-card" key={i}>
                 <div className="tc-head">
@@ -618,7 +684,8 @@ export function AddQuestionPage() {
                       className="tc-weight"
                       aria-label={`Test case ${i + 1} weight`}
                       type="number"
-                      min={0}
+                      min={0.1}
+                      step="any"
                       value={tc.weight}
                       onChange={(e) => updateTestCase(i, { weight: Number(e.target.value) })}
                     />

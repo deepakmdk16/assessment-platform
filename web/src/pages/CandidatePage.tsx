@@ -21,6 +21,7 @@ import type {
 } from '../types'
 import { AssessmentFlow } from './AssessmentFlow'
 import { CandidateFeedbackForm } from '../components/CandidateFeedbackForm'
+import { QuestionProse } from '../components/QuestionProse'
 import { CandidateNotice } from './CandidateNotice'
 import { ConsoleResult } from './ConsoleResult'
 import { CRIT_MS, formatRemaining, WARN_MS } from './candidateTimer'
@@ -742,11 +743,11 @@ export function CandidatePage() {
             <span className="tab on">Description</span>
           </div>
           <div className="panel-body prose">
-            <p className="pre-text">{q?.prompt}</p>
+            <QuestionProse>{q?.prompt ?? ''}</QuestionProse>
             {q?.constraints && (
               <>
                 <h3>Constraints</h3>
-                <p className="pre-text">{q.constraints}</p>
+                <QuestionProse>{q.constraints}</QuestionProse>
               </>
             )}
             {hasExample && (

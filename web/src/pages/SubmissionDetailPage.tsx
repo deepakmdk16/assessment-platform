@@ -5,6 +5,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api, ApiError, downloadSubmissionReport } from '../api'
 import { badgeClass } from '../badges'
 import { IntegrityChip, IntegrityPanel } from '../components/IntegrityPanel'
+import { QuestionProse } from '../components/QuestionProse'
 import { useMediaQuery } from '../hooks/useMediaQuery'
 import { useTheme } from '../theme/ThemeContext'
 import { monacoTheme } from '../theme/theme'
@@ -165,11 +166,11 @@ export function SubmissionDetailPage() {
       <div className="panel-body prose">
         {question ? (
           <>
-            <p className="pre-text">{question.prompt}</p>
+            <QuestionProse>{question.prompt}</QuestionProse>
             {question.constraints && (
               <>
                 <h3>Constraints</h3>
-                <p className="pre-text">{question.constraints}</p>
+                <QuestionProse>{question.constraints}</QuestionProse>
               </>
             )}
             {(question.example_input || question.example_output) && (

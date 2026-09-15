@@ -8,6 +8,7 @@ import { IntegrityCell } from '../components/IntegrityPanel'
 import { InviteTable } from '../components/InviteTable'
 import { describeRecipients, parseRecipients } from '../invites'
 import { Pager } from '../components/Pager'
+import { QuestionProse } from '../components/QuestionProse'
 import type { Invite, InviteDelivery, QuestionOut, SubmissionRow } from '../types'
 
 const SUB_PAGE_SIZE = 100
@@ -196,9 +197,13 @@ export function QuestionDetailPage() {
         <div>
           <section className="card pad prose">
             <h2>Prompt</h2>
-            <p className="pre-text">{question.prompt}</p>
-            <h2>Constraints</h2>
-            <p className="pre-text">{question.constraints}</p>
+            <QuestionProse>{question.prompt}</QuestionProse>
+            {question.constraints && (
+              <>
+                <h2>Constraints</h2>
+                <QuestionProse>{question.constraints}</QuestionProse>
+              </>
+            )}
             {(question.example_input || question.example_output) && (
               <>
                 <h2>Example</h2>
