@@ -173,7 +173,8 @@ def test_a_refused_job_is_terminal_and_keeps_the_agent_s_reason(client, monkeypa
     again cannot change it. It used to be left "pending" anyway: the reaper burned
     every attempt, flipped the row to "error" with NO stored reason, and the
     interviewer's Retry button looped forever over a question only they could fix.
-    Record the refusal as the result instead — the one place the UI already reads.
+    The refusal is recorded on the submission — not as a 0%-ERROR result, which
+    would put a job that was never graded into every average, CSV cell and PDF.
     """
     client.post("/questions", json=_sample_question())
     monkeypatch.setattr(agent_client, "_TRIGGER_RETRY_BACKOFF_S", 0.0)
@@ -192,8 +193,9 @@ def test_a_refused_job_is_terminal_and_keeps_the_agent_s_reason(client, monkeypa
 
     assert _state(sub_id) == ("error", sub_id, 1)
     body = client.get(f"/submissions/{sub_id}").json()
-    assert body["result"]["verdict"] == "ERROR"
-    assert "constraints must be non-empty" in body["result"]["reason"]
+    assert "constraints must be non-empty" in body["error_reason"]
+    # A refusal is not a grade: nothing that reads results may see one.
+    assert body["result"] is None
 
     # And the reaper leaves it alone: "error" is not a stranded state, so the
     # attempts are spent on questions that can still be graded.
@@ -207,7 +209,8 @@ def test_a_refused_job_can_still_be_retried_after_the_question_is_fixed(
 ) -> None:
     """The reason is stored, not the verdict of a life sentence: once the
     interviewer fixes the question, the existing manual retry re-grades the same
-    submission and the stored refusal is replaced by the real result."""
+    submission — and the claim clears the reason, so the page never shows a
+    resolved failure beside a running attempt."""
     client.post("/questions", json=_sample_question())
     monkeypatch.setattr(agent_client, "_TRIGGER_RETRY_BACKOFF_S", 0.0)
     patch_async_post(
@@ -221,7 +224,9 @@ def test_a_refused_job_can_still_be_retried_after_the_question_is_fixed(
     assert _state(sub_id)[0] == "error"
 
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return(sub_id))
-    assert client.post(f"/submissions/{sub_id}/retry").json()["status"] == "running"
+    retried = client.post(f"/submissions/{sub_id}/retry").json()
+    assert retried["status"] == "running"
+    assert retried["error_reason"] is None
     assert _state(sub_id) == ("running", sub_id, 2)
 
 
@@ -243,7 +248,7 @@ def test_a_refusal_with_an_unreadable_body_still_records_rather_than_raising(
     sub_id = client.post("/submissions", json=SUBMIT).json()["id"]
 
     assert _state(sub_id)[0] == "error"
-    assert "bad request" in client.get(f"/submissions/{sub_id}").json()["result"]["reason"]
+    assert "bad request" in client.get(f"/submissions/{sub_id}").json()["error_reason"]
 
 
 def test_a_shape_rejection_is_not_terminal(client, monkeypatch) -> None:
@@ -335,10 +340,10 @@ def test_stranded_pending_is_given_up_with_an_alert_after_max_attempts(
     assert _state(sub_id) == ("error", sub_id, 2)
     assert any("needs a manual retry" in r.getMessage() for r in caplog.records)
     # An "error" the interviewer cannot explain is the defect R2-002 was made of,
-    # so giving up records its reason where a grade would have gone.
+    # so giving up records its reason too.
     given_up = client.get(f"/submissions/{sub_id}").json()
-    assert given_up["result"]["verdict"] == "ERROR"
-    assert "never answered after 2 attempt(s)" in given_up["result"]["reason"]
+    assert "never answered after 2 attempt(s)" in given_up["error_reason"]
+    assert given_up["result"] is None
     # The interviewer's manual path is open again from here.
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return(sub_id))
     assert client.post(f"/submissions/{sub_id}/retry").json()["status"] == "running"

@@ -98,6 +98,7 @@ describe('SubmissionsPage — recovering a failed grading (UI-A)', () => {
       id: 'bad',
       question_id: 'two-sum',
       candidate: 'Bo',
+      error_reason: null,
       erased: false,
       language: 'python',
       code: '',

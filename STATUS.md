@@ -141,14 +141,20 @@ the default port and every candidate spec walks into the wrong stack.
 ### S02 leftovers — 2026-09-15
 
 - **P2 · S — Nothing finds the questions saved before S02's rules.**
-  53 dev questions carry blank constraints and 198 cases across 50 questions have
-  an empty expected output. The blank prose now grades (the agent degrades it to a
-  warning) and the empty expected output now fails legibly — the submission ends
-  as "error" carrying the grader's own sentence — but both are discovered one
-  candidate at a time. `scripts/check_question_cases.py` already walks every stored
-  question for the case floor; extend it to the rest of `_QuestionFields`' rules so
-  an operator can list and repair them in one pass instead. No production data
-  exists yet, which is the only reason this is not P1.
+  53 dev questions carry blank constraints and 198 cases across 50 of them have an
+  empty expected output. The blank prose now grades (the agent degrades it to a
+  warning) and the empty expected output now fails legibly — the submission ends as
+  "error" carrying the grader's own sentence — but both are discovered one candidate
+  at a time, and until one is repaired the question cannot be SAVED from the edit
+  wizard at all: `QuestionUpdate` is a full replace, so a title fix re-sends the
+  blanks and is refused. That is the intended direction (the alternative is storing
+  more questions the grader will not grade) but it should be a list an operator can
+  work through, not a surprise mid-edit. `scripts/check_question_cases.py` already
+  walks every stored question for the case floor; extend it to the rest of
+  `_QuestionFields`' rules. Same trap, no UI at all, for `reference_solution` and
+  `reference_language`: the wizard carries them invisibly, so an over-cap stored
+  value would be unfixable from the page — no stored value is near the cap today.
+  No production data exists yet, which is the only reason this is not P1.
 - **P3 · S — A question below the grader's shape says so only in the result.**
   The agent returns its downgraded authoring warnings ("constraints must be
   non-empty") in the callback payload, and `full_result` keeps them, but no
@@ -156,6 +162,14 @@ the default port and every candidate spec walks into the wrong stack.
   question you are about to send out is missing the prose the candidate needs.
   Fix: read `full_result.warnings` on the submission page, and re-validate on the
   question page from the same rules the wizard uses.
+- **P3 · S — The refusal reason reaches the page but not the notification.**
+  `Submission.error_reason` is on the interviewer's submission page; the results
+  email and the `results.ready` webhook still carry only `verdict: ERROR` and
+  `score_pct: 0` (`notify.py::_graded_question` builds `GradedQuestion` from the
+  result row, and a refused submission has none). The customer's ATS therefore
+  records an unexplained failure, and the email sends the interviewer to the page
+  to find out why. Fix: carry `error_reason` through `GradedQuestion` into both
+  channels, which is also what makes the give-up case legible outside the app.
 - **P3 · XS — `QuestionProse` renders inline markdown only.**
   `` `code` `` and `**bold**` render; a fenced block or a `- list` in a drafted
   prompt still shows its markers. Deliberate — a markdown block parser strips the

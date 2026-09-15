@@ -533,6 +533,10 @@ class SubmissionOut(BaseModel):
     # True when this submission arrived after the timed window closed (recorded
     # and graded, but flagged so the interviewer can weigh it).
     late: bool = False
+    # Set only when the submission ended in "error" with no grade: the grader's own
+    # sentence about why. The page that says "grading couldn't complete" is the one
+    # place an interviewer looks, and it had nothing to tell them (R2-002).
+    error_reason: str | None = None
     result: ResultOut | None = None
 
 

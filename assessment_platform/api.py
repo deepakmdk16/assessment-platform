@@ -480,6 +480,7 @@ def _submission_out(sub: Submission, result: AssessmentResult | None) -> Submiss
         agent_job_id=sub.agent_job_id,
         created_at=sub.created_at,
         late=sub.late,
+        error_reason=sub.error_reason,
         result=result_out,
     )
 
@@ -4997,37 +4998,10 @@ def _cas(
     return won
 
 
-def _store_error_result(session: Session, sub: Submission, reason: str) -> None:
-    """Record an ERROR result for `sub` carrying `reason`, the way a callback would.
-
-    The grade a submission never got is still an outcome, and the interviewer reads
-    outcomes in exactly one place. Upserts, so a re-grade replaces the refusal
-    instead of leaving two answers for one submission — and, for the same reason,
-    a refusal replaces a previous failed attempt's payload. That only ever
-    discards ERROR diagnostics: both callers reach a submission that is (or is
-    about to be) in "error", and the manual retry is allowed from no other state.
-    """
-    existing = session.exec(
-        select(AssessmentResult).where(AssessmentResult.submission_id == sub.id)
-    ).first()
-    payload = {"job_id": sub.agent_job_id or sub.id, "status": "refused", "error": reason}
-    if existing is not None:
-        existing.verdict = "ERROR"
-        existing.score_pct = 0.0
-        existing.reason = reason
-        existing.full_result = payload
-        session.add(existing)
-    else:
-        session.add(
-            AssessmentResult(
-                submission_id=sub.id,
-                verdict="ERROR",
-                score_pct=0.0,
-                reason=reason,
-                full_result=payload,
-            )
-        )
-    session.commit()
+# An agent refusal is long-ish free text (the question's first broken rule, from
+# the agent's own message). Stored, so bounded: enough to name the field and the
+# rule, short enough that the column is never a place a payload hides.
+MAX_ERROR_REASON_CHARS = 500
 
 
 async def _end_sitting_if_complete(
@@ -5079,6 +5053,7 @@ async def _trigger_agent(
         status="pending",
         agent_job_id=sub.id,
         attempts=attempt,
+        error_reason=None,
     ):
         logger.info(
             "submission %s: trigger claim lost to another worker (status=%s)", sub.id, sub.status
@@ -5096,13 +5071,17 @@ async def _trigger_agent(
             # ends in the same "error", except with nothing to show for it, which
             # is the R2-002 candidates actually hit. Record the agent's own reason
             # and stop; the interviewer fixes the question and retries by hand.
-            reason = f"the grader refused this submission: {_agent_detail(cast(httpx.HTTPStatusError, exc))}"
+            reason = (
+                "the grader refused this submission: "
+                f"{_agent_detail(cast(httpx.HTTPStatusError, exc))}"
+            )[:MAX_ERROR_REASON_CHARS]
             if _cas(
                 session,
                 sub,
                 expect_status="pending",
                 expect_attempts=attempt,
                 status="error",
+                error_reason=reason,
             ):
                 logger.error(
                     "submission %s: agent refused the job with %d (attempt %d); "
@@ -5112,7 +5091,6 @@ async def _trigger_agent(
                     attempt,
                     reason,
                 )
-                _store_error_result(session, sub, reason)
                 await _end_sitting_if_complete(session, sub, background)
             return sub
         logger.warning(
@@ -5204,7 +5182,15 @@ async def _reap_tick() -> list[str]:
                     acted.append(sub.id)
                     continue
             if _cas(
-                session, sub, expect_status=sub.status, expect_attempts=sub.attempts, status="error"
+                session,
+                sub,
+                expect_status=sub.status,
+                expect_attempts=sub.attempts,
+                status="error",
+                error_reason=(
+                    f"the grader never answered after {sub.attempts} attempt(s); "
+                    "the submission was not graded."
+                ),
             ):
                 logger.error(
                     "submission %s gave up after %d agent trigger(s) (agent_job_id=%s): "
@@ -5212,14 +5198,6 @@ async def _reap_tick() -> list[str]:
                     sub.id,
                     sub.attempts,
                     sub.agent_job_id,
-                )
-                # The same rule as a refusal: an "error" the interviewer cannot
-                # explain is what R2-002 cost them. Giving up has a reason too.
-                _store_error_result(
-                    session,
-                    sub,
-                    f"the grader never answered after {sub.attempts} attempt(s); "
-                    "the submission was not graded.",
                 )
                 # X06: giving up ends the sitting exactly as a callback would, so
                 # it notifies exactly as a callback would. Without this a sitting

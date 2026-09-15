@@ -717,6 +717,14 @@ class Submission(SQLModel, table=True):
     # attempts) the version token for the compare-and-swap in `api._cas`; bounds
     # the reaper's automatic re-triggers (config.MAX_TRIGGER_ATTEMPTS).
     attempts: int = 0
+    # Why this submission ended in "error" WITHOUT a grade: the grader refused the
+    # job outright (a question it will not grade), or it never answered and the
+    # reaper gave up. Deliberately a column on the submission and not an
+    # `AssessmentResult`: a refusal is not a grade, and writing a fake 0%-ERROR
+    # result would put it into every average, chart, CSV cell and PDF that reads a
+    # result row — "no data" is not zero (R2-002). Cleared whenever the row is
+    # claimed for another attempt, so it never describes an older failure.
+    error_reason: str | None = None
     # What the agent's judge cost to grade this submission, lifted out of the
     # callback payload at the moment it lands (X02). The same number is inside
     # `AssessmentResult.full_result`, but only as opaque JSON: a column is what

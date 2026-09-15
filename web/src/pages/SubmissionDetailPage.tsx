@@ -292,6 +292,7 @@ export function SubmissionDetailPage() {
       ) : !result ? (
         <GradingNotice
           status={sub.status}
+          reason={sub.error_reason}
           timedOut={pollTimedOut}
           onRetry={handleRetryGrading}
           retrying={retrying}
@@ -392,12 +393,14 @@ export function SubmissionDetailPage() {
 
 function GradingNotice({
   status,
+  reason,
   timedOut,
   onRetry,
   retrying,
   retryError,
 }: {
   status: string
+  reason: string | null
   timedOut: boolean
   onRetry: () => void
   retrying: boolean
@@ -407,9 +410,13 @@ function GradingNotice({
     return (
       <div className="grading">
         <div className="grading-title">Grading couldn’t complete</div>
+        {/* The reason is the whole point of the notice: a question the grader
+            refuses is one only the interviewer can fix, and until S02 this page
+            could not tell them which rule it broke (R2-002). */}
         <p className="grading-sub">
-          The agent couldn’t be reached for this submission, so it was never graded. The
-          candidate’s code is stored — retrying re-runs the grade on this same submission.
+          {reason ??
+            'The agent couldn’t be reached for this submission, so it was never graded.'}{' '}
+          The candidate’s code is stored — retrying re-runs the grade on this same submission.
         </p>
         <button type="button" className="btn" onClick={onRetry} disabled={retrying}>
           {retrying ? 'Retrying…' : 'Retry grading'}
