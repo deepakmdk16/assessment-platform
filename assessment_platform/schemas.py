@@ -7,6 +7,7 @@ cases and return a submission-plus-result view without leaking ORM internals.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
@@ -37,19 +38,67 @@ class Page(BaseModel, Generic[T]):
     offset: int
 
 
+# R2-001: a stored question had no size bound at all, so neither did the result
+# callback the agent builds from it — a 9.6 MB performance input rendered a body
+# the platform's own MAX_BODY_BYTES 413'd, and because the agent does not retry a
+# 4xx the candidate's grade was lost with no stored reason. These three caps are
+# what make the worst question a bounded thing; config.MAX_BODY_BYTES is then
+# sized to fit it, and the agent excerpts what it echoes back.
+# 512 KiB of performance input is ~20k-80k values, which still separates a
+# quadratic solution from a linearithmic one inside a 2 s limit.
+MAX_CASE_STDIN_CHARS = 512 * 1024
+MAX_CASE_EXPECTED_CHARS = 64 * 1024
+MAX_TEST_CASES = 25
+# ...and the bound that actually holds R2-012, because the three above cannot.
+# They count CHARACTERS and `_limit_body_size` counts BYTES of JSON, where a
+# newline costs two and a control character six — a maximal question of
+# newline-separated performance input encodes to ~22 MB while multiplying the
+# caps out predicts 14.7 MB. So the caps above bound one case for sanity, and
+# this bounds the whole set in the units that decide whether a PUT is 413'd.
+# Headroom under MAX_BODY_BYTES is left for the rest of the question (prompt,
+# reference solution and the other fields still in the G8 baseline).
+MAX_QUESTION_CASES_BYTES = 12 * 1024 * 1024
+
+
+class _BoundedCases(BaseModel):
+    """Mixin: a question's test cases must fit in one request body.
+
+    Without it a question can be CREATED but never EDITED — a PUT re-sends every
+    case, which is exactly how a title change on a question with a large
+    performance input came back 413 (R2-012).
+    """
+
+    @field_validator("test_cases", check_fields=False)
+    @classmethod
+    def _cases_fit_one_request_body(cls, cases: list[TestCaseIn]) -> list[TestCaseIn]:
+        size = len(json.dumps([c.model_dump() for c in cases]).encode())
+        if size > MAX_QUESTION_CASES_BYTES:
+            raise ValueError(
+                f"test cases serialize to {size:,} bytes, over the "
+                f"{MAX_QUESTION_CASES_BYTES:,}-byte budget — the question could be created "
+                "but never edited, since a PUT re-sends every case."
+            )
+        return cases
+
+
 class TestCaseIn(BaseModel):
     name: str
-    stdin: str
-    expected: str
+    stdin: str = Field(max_length=MAX_CASE_STDIN_CHARS)
+    expected: str = Field(max_length=MAX_CASE_EXPECTED_CHARS)
     category: Category = "correctness"
     weight: float = 1.0
 
 
 class TestCaseOut(TestCaseIn):
     id: int
+    # Intake caps must not become response-side validation: rows stored before
+    # they existed are larger, and FastAPI validates a response model — inheriting
+    # the caps would turn reading a legacy question into a 500.
+    stdin: str
+    expected: str
 
 
-class QuestionCreate(BaseModel):
+class QuestionCreate(_BoundedCases):
     # Optional: the UI omits it and the server generates slug(title)+suffix. The
     # agent/CLI authoring path may still supply an explicit id, which is honored.
     id: str | None = None
@@ -70,10 +119,10 @@ class QuestionCreate(BaseModel):
     reference_language: str | None = None
     # Assessment time budget in minutes; None = untimed. Positive when set.
     duration_minutes: int | None = Field(default=None, gt=0)
-    test_cases: list[TestCaseIn] = Field(default_factory=list)
+    test_cases: list[TestCaseIn] = Field(default_factory=list, max_length=MAX_TEST_CASES)
 
 
-class QuestionUpdate(BaseModel):
+class QuestionUpdate(_BoundedCases):
     """Full replace of a question's mutable fields (PUT semantics)."""
 
     title: str
@@ -90,7 +139,7 @@ class QuestionUpdate(BaseModel):
     reference_solution: str | None = None
     reference_language: str | None = None
     duration_minutes: int | None = Field(default=None, gt=0)
-    test_cases: list[TestCaseIn] = Field(default_factory=list)
+    test_cases: list[TestCaseIn] = Field(default_factory=list, max_length=MAX_TEST_CASES)
 
 
 class QuestionOut(BaseModel):

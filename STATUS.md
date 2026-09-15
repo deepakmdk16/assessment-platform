@@ -45,11 +45,13 @@ order; this file remains the tracked record of individual open items.
   in the order to take them, plus the nine mechanical gates (G1–G9) that would
   have caught each class. **S00 installs the gates and comes first.**
 
-Two P0s are live and both are reproduced: a submission whose question has a
-performance input over 4 MB never receives its grade (the result callback
-exceeds the body cap), and a question saved with blank constraints — the wizard's
-default — is refused by the agent's validator, so every submission against it
-ends as "error".
+One P0 is still live and reproduced: a question saved with blank constraints —
+the wizard's default — is refused by the agent's validator, so every submission
+against it ends as "error" (S02 closes it). The other, a grade lost whenever the
+question carried a performance input over 4 MB, is closed by S01: a stored case
+is bounded, the body cap is sized to fit the largest question so it can still be
+edited, and the agent sends a bounded excerpt of each value rather than the
+whole thing.
 
 Working rule for any item, here or there: **make the feature work end to end,
 then the UI, then scale** — open for extension, closed for modification.
@@ -73,7 +75,7 @@ gate fails if a listed violation starts *passing*, so the list cannot rot.
   locally, `./AssesmentAgent` in CI, which `checks.yml` now checks out) and skips
   with a notice when absent. Also asserts `question_rules.MIN_CORRECTNESS_CASES`
   equals the agent's, replacing the old "keep identical" comment.
-  Listed today: 10 × R2-002 (→ S02), 1 × R2-001 (→ S01).
+  Listed today: 10 × R2-002 (→ S02). The R2-001 entries came off in S01.
   The agent's `scripts/checkpoints.sh` runs this test too — the edit that breaks
   it is usually made on that side.
 - **G8 · `tests/test_limiter_coverage.py`** — a route reachable without auth, one
@@ -132,6 +134,22 @@ matching `FRONTEND_BASE_URL` — without it, invite links point at whatever hold
 the default port and every candidate spec walks into the wrong stack.
 
 ### S00b review leftovers — 2026-09-14
+
+- **P2 · S — `MAX_BODY_BYTES` was raised 4x for every route, not just the two
+  that need it.** S01 raised the cap from 4 to 16 MiB so the largest storable
+  question still fits in one body (R2-012), but `_limit_body_size` is global, so
+  every unauthenticated candidate route will now buffer and parse 16 MiB — the
+  DoS control its own docstring describes is 4x weaker. Only `POST /questions`
+  and `PUT /questions/{id}` carry big bodies. Fix: a per-route override (the
+  question routes at 16 MiB, everything else back at 4), asserted by a test that
+  walks `app.routes` the way `test_limiter_coverage.py` does.
+  Decided knowingly in S01; recorded so it is not mistaken for an oversight.
+
+- **P3 · S — `full_result` rows written before S01 are still whole test inputs.**
+  44 dev rows totalling ~133 MB, max 10.4 MB, and `GET /submissions/{id}` still
+  re-serves one into a `<pre>` (R2-015). New results are bounded by the agent's
+  excerpt, so this shrinks on its own as old rows age out; there is no production
+  data. Fix if it matters: a one-off script that re-excerpts stored payloads.
 
 - **P2 · S — The visual gate does not cover `/submissions/:id` or
   `/variant-sets/:id`.** Both need a fixture the spec does not build (a graded

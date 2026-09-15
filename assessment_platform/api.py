@@ -44,6 +44,7 @@ from fastapi import (
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import ValidationError
 from sqlalchemy import delete, func, or_, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -2500,7 +2501,18 @@ async def draft_question(
 
     billing.record(session, org.org_id, draft_cost_usd=float(payload.get("cost_usd") or 0.0))
 
-    question = _question_create_from_agent(payload.get("question") or {})
+    try:
+        question = _question_create_from_agent(payload.get("question") or {})
+    except ValidationError as exc:
+        # The agent drafted something this platform will not store (too many cases,
+        # a case over the size caps). That is the agent's bug, not the
+        # interviewer's, so refund the allowance rather than charge for a draft
+        # they can never use — and say so instead of raising a bare 500.
+        billing.release(session, org.org_id, "drafts", 1)
+        raise HTTPException(
+            status_code=502,
+            detail=f"the agent drafted a question this platform cannot store: {exc}",
+        ) from exc
     return QuestionDraftOut(
         question=question,
         warnings=payload.get("warnings", []),
@@ -2613,10 +2625,18 @@ async def draft_variant_set(
             # A variant the agent couldn't draft carries no question; it's counted
             # in the set-level shortfall warning, not shown as an empty card.
             continue
+        try:
+            question = _question_create_from_agent(q)
+        except ValidationError:
+            # Same class as the missing-question case above: a variant this
+            # platform cannot store is a variant not delivered, so it rides the
+            # set-level shortfall (which releases its allowance) rather than
+            # 500-ing the whole set for one bad member.
+            continue
         variants.append(
             VariantDraftOut(
                 label=_VARIANT_LABELS[len(variants)] if len(variants) < len(_VARIANT_LABELS) else None,
-                question=_question_create_from_agent(q),
+                question=question,
                 reference_solution=v.get("reference_solution"),
                 reference_language=v.get("reference_language"),
                 warnings=v.get("warnings", []),

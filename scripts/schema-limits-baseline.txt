@@ -59,7 +59,6 @@ QuestionCreate.prompt — str needs max_length
 QuestionCreate.reference_language — str needs max_length
 QuestionCreate.reference_solution — str needs max_length
 QuestionCreate.required_complexity — str needs max_length
-QuestionCreate.test_cases — list needs max_length
 QuestionCreate.time_limit_s — number needs gt/ge/lt/le
 QuestionCreate.title — str needs max_length
 QuestionDraftIn.brief — str needs max_length
@@ -73,7 +72,6 @@ QuestionUpdate.prompt — str needs max_length
 QuestionUpdate.reference_language — str needs max_length
 QuestionUpdate.reference_solution — str needs max_length
 QuestionUpdate.required_complexity — str needs max_length
-QuestionUpdate.test_cases — list needs max_length
 QuestionUpdate.time_limit_s — number needs gt/ge/lt/le
 QuestionUpdate.title — str needs max_length
 RegisterIn.email — str needs max_length
@@ -86,9 +84,7 @@ ResetPasswordIn.token — str needs max_length
 SubmissionCreate.candidate — str needs max_length
 SubmissionCreate.language — str needs max_length
 SubmissionCreate.question_id — str needs max_length
-TestCaseIn.expected — str needs max_length
 TestCaseIn.name — str needs max_length
-TestCaseIn.stdin — str needs max_length
 TestCaseIn.weight — number needs gt/ge/lt/le
 UpdateMeIn.email — str needs max_length
 UpdateMeIn.name — str needs max_length
@@ -102,7 +98,6 @@ VariantCreate.prompt — str needs max_length
 VariantCreate.reference_language — str needs max_length
 VariantCreate.reference_solution — str needs max_length
 VariantCreate.required_complexity — str needs max_length
-VariantCreate.test_cases — list needs max_length
 VariantCreate.time_limit_s — number needs gt/ge/lt/le
 VariantCreate.title — str needs max_length
 VariantSetCreate.brief — str needs max_length

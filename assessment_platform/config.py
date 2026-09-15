@@ -51,9 +51,23 @@ LOG_FORMAT = os.getenv("LOG_FORMAT", "text").lower()
 # Hard ceiling on any request body, enforced from Content-Length before the JSON
 # is parsed. The per-field caps in schemas.py bound what we STORE; this bounds
 # what we are willing to READ, so an unauthenticated candidate route can't make
-# the server buffer a multi-megabyte blob just to 422 it. Generous enough for a
-# variant set of eight hand-authored questions with many test cases.
-MAX_BODY_BYTES = int(os.getenv("MAX_BODY_BYTES", str(4 * 1024 * 1024)))
+# the server buffer a multi-megabyte blob just to 422 it.
+#
+# Sized so the LARGEST question the schema will store still fits in one body:
+# MAX_TEST_CASES x (MAX_CASE_STDIN_CHARS + MAX_CASE_EXPECTED_CHARS) = 14,745,600.
+# That invariant is what makes a big question editable at all — a PUT re-sends
+# every case, and at the old 4 MiB a title change on a question with a large
+# performance input was 413'd (R2-012). The caps count characters and this counts
+# bytes, so a question of entirely multi-byte test input can still be refused;
+# that costs an interviewer a 413 they can act on, not a lost grade. Grades are
+# bounded separately and byte-exactly, by the excerpt the agent sends
+# (assessment_agent/agent.py::PAYLOAD_EXCERPT_BYTES).
+#
+# A variant set POSTs several questions at once and its `variants` list is still
+# uncapped, so a set is NOT covered by that invariant — in practice a drafted
+# variant carries one performance case the drafter now caps, so eight of them sit
+# around 4 MB. Capping the list is `VariantSetCreate.variants` in the G8 baseline.
+MAX_BODY_BYTES = int(os.getenv("MAX_BODY_BYTES", str(16 * 1024 * 1024)))
 
 # Create tables on startup via SQLModel.metadata.create_all. OFF by default:
 # production runs the Alembic migrations, and an unconditional create_all silently

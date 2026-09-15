@@ -96,10 +96,12 @@ server {
         # one origin was meant to prevent. Covers the logout clear too: that is
         # a Set-Cookie on the same path.
         proxy_cookie_path /auth /api/auth;
-        # Match MAX_BODY_BYTES (config.py, 4 MB default). nginx's own default is
+        # Match MAX_BODY_BYTES (config.py, 16 MiB default). nginx's own default is
         # 1 MB, which would reject a large submission here with a bare 413
-        # instead of the API's own error.
-        client_max_body_size 4m;
+        # instead of the API's own error. Raised with that cap in S01: left at 4m
+        # the proxy would 413 the very edit the cap was raised to allow (R2-012),
+        # and only in production — TestClient never sees this file.
+        client_max_body_size 16m;
         # Drafting a question calls the agent's LLM path; AGENT_DRAFT_TIMEOUT_S
         # is 240 s, so a shorter read timeout here would 504 a request the
         # platform is still legitimately waiting on.
