@@ -38,7 +38,12 @@ from assessment_platform import config
 from assessment_platform.agent_client import build_question_payload
 from assessment_platform.models import Question, QuestionTestCase
 from assessment_platform.question_rules import MIN_CORRECTNESS_CASES, case_floor_violations
-from assessment_platform.schemas import QuestionCreate, TestCaseIn
+from assessment_platform.schemas import (
+    MAX_QUESTION_CASES_BYTES,
+    QuestionCreate,
+    TestCaseIn,
+    TestCaseOut,
+)
 
 # --- locating the companion repo ---------------------------------------------
 # Local dev keeps the two repos side by side (`../AssesmentAgent`); CI cannot
@@ -310,12 +315,15 @@ def test_case_floor_constant_matches_the_agent() -> None:
 
 # --- 2. the result callback must fit the body cap the platform enforces -------
 
-# The agent echoes each case's `input`, `expected` and `actual` verbatim into the
-# result payload (`assessment_agent/agent.py::result_to_dict`), which it POSTs to
-# `POST /assessments/callback` — where the platform's own
-# `api.py::_limit_body_size` 413s anything over MAX_BODY_BYTES. The agent does not
-# retry a 4xx, so the grade is lost. For the callback to be deliverable for every
-# question the platform will store, the platform must BOUND what it stores.
+# The agent builds its result payload from each case's `input`, `expected` and
+# `actual` (`assessment_agent/agent.py::result_to_dict`) and POSTs it to
+# `POST /assessments/callback` — where the platform's own `api.py::_limit_body_size`
+# 413s anything over MAX_BODY_BYTES. The agent does not retry a 4xx, so an
+# oversized body loses the grade outright (R2-001). Two bounds keep that from
+# happening, and both are measured below: the platform bounds what it STORES, and
+# the agent excerpts what it ECHOES — needed separately, because a candidate's
+# stdout is bounded only by the agent's 64 MB output cap, which no choice of
+# MAX_BODY_BYTES could absorb.
 def _stored_case_char_caps() -> tuple[int | None, int | None]:
     """The platform's own `max_length` on a stored test case's stdin and expected
     (None = unbounded)."""
@@ -333,14 +341,13 @@ def _stored_case_count_cap() -> int | None:
     return next((m.max_length for m in meta if hasattr(m, "max_length")), None)
 
 
-@_xfail("R2-001", "S01")
 def test_a_stored_question_is_size_bounded() -> None:
-    """Step one of R2-001, and the half that needs no agent: what the platform
-    stores has to have a maximum size at all.
+    """Step one, and the half that needs no agent: what the platform stores has to
+    have a maximum size at all.
 
-    Until it does, no arithmetic about the callback is even possible — a question
-    can carry a 9.6 MB performance input (three of the dev questions do), and the
-    result for it is 413'd at `api.py::_limit_body_size` and lost.
+    Until it did, no arithmetic about the callback was even possible — a question
+    could carry a 9.6 MB performance input (three dev questions did), and the
+    result for it was 413'd at `api.py::_limit_body_size` and lost.
     """
     stdin_cap, expected_cap = _stored_case_char_caps()
     missing = [
@@ -360,39 +367,69 @@ def test_a_stored_question_is_size_bounded() -> None:
     )
 
 
+def test_the_largest_storable_question_fits_one_request_body() -> None:
+    """R2-012: a PUT re-sends every test case, so a question that does not fit in
+    one body cannot be EDITED — at the old 4 MiB cap a title change on a question
+    with a large performance input was 413'd. The per-field caps and
+    MAX_BODY_BYTES are therefore one decision, and this is where they meet.
+    """
+    assert MAX_QUESTION_CASES_BYTES < config.MAX_BODY_BYTES, (
+        f"the {MAX_QUESTION_CASES_BYTES:,}-byte budget for a question's test cases is over the "
+        f"{config.MAX_BODY_BYTES:,}-byte cap `_limit_body_size` enforces — so a question could "
+        "be created one case at a time but never edited (R2-012)."
+    )
+
+    # The budget has to be counted in the units the body cap is counted in. The
+    # per-field caps cannot do it: they count characters, and JSON spends two
+    # bytes on a newline and six on a control character, so newline-separated
+    # performance input encodes to far more than its length.
+    escaping = [
+        {"name": f"c{i}", "stdin": "1\n" * 300_000, "expected": "x",
+         "category": "correctness", "weight": 1.0}
+        for i in range(_stored_case_count_cap() or 25)
+    ]
+    assert _platform_stores({**_valid_payload(), "test_cases": escaping}) is None, (
+        "a question whose cases are under every per-field cap but over the body cap in "
+        "encoded bytes was accepted — it can be created and never edited (R2-012)."
+    )
+
+
 @needs_agent
-@_xfail("R2-001", "S01")
 def test_the_largest_storable_question_fits_the_callback_body_cap() -> None:
     """Step two: the worst body the agent can build for a storable question must
     fit under the cap the platform itself enforces.
 
-    The agent's per-case output cap is read from the agent, not mirrored here —
+    The agent's per-field excerpt cap is read from the agent, not mirrored here —
     mirroring a cross-repo constant by hand is the failure this whole file exists
-    to replace.
+    to replace. This arithmetic used to multiply by the agent's *output* cap
+    (`runner._OUTPUT_LIMIT_BYTES`, 64 MB) because the payload echoed every value
+    whole; S01 made it send an excerpt, so that cap no longer reaches the wire.
     """
-    stdin_cap, expected_cap = _stored_case_char_caps()
     case_cap = _stored_case_count_cap()
-    if stdin_cap is None or expected_cap is None or case_cap is None:
+    if case_cap is None:
         pytest.fail("unbounded stored question — see test_a_stored_question_is_size_bounded")
 
     _agent()  # puts the agent repo on sys.path
-    import assessment_agent.runner as agent_runner
+    import assessment_agent.agent as agent_module
 
-    output_cap = getattr(agent_runner, "_OUTPUT_LIMIT_BYTES", None)
-    assert output_cap is not None, (
-        "the agent's per-case output cap (runner._OUTPUT_LIMIT_BYTES, ASSESS_OUTPUT_LIMIT_MB) "
-        "could not be read — it moved, and this gate can no longer measure the real body."
+    excerpt_cap = getattr(agent_module, "PAYLOAD_EXCERPT_BYTES", None)
+    assert excerpt_cap is not None, (
+        "the agent's per-field excerpt cap (agent.PAYLOAD_EXCERPT_BYTES, "
+        "ASSESS_PAYLOAD_EXCERPT_KB) could not be read — it moved, and this gate can no "
+        "longer measure the real body. If the agent went back to echoing whole values, "
+        "multiply by runner._OUTPUT_LIMIT_BYTES instead and watch this fail."
     )
 
-    # Per case the callback echoes `input`, `expected` and `actual`
-    # (`assessment_agent/agent.py::result_to_dict`); `actual` is the candidate
-    # program's stdout, bounded only by the agent's output cap.
-    worst_case = case_cap * (stdin_cap + expected_cap + output_cap)
+    # Per case the callback carries `input`, `expected`, `actual` and `error`
+    # (`assessment_agent/agent.py::result_to_dict`), plus the execution-level
+    # `compile_error` and `infra_error` — raw compiler/runtime stderr, which no
+    # bound on the QUESTION reaches. Every one of them is excerpted to that cap,
+    # and every one of them is counted here; a new unexcerpted free-text field is
+    # the way this gate goes stale, so add it on both sides at once.
+    worst_case = (case_cap * 4 + 2) * excerpt_cap
     assert worst_case < config.MAX_BODY_BYTES, (
         f"the largest storable question renders a ~{worst_case:,}-byte callback body, over "
-        f"the {config.MAX_BODY_BYTES:,}-byte cap `_limit_body_size` enforces. Bound the "
-        "stored input, the case count and the echoed output together — or have the agent "
-        "send an excerpt rather than the whole input."
+        f"the {config.MAX_BODY_BYTES:,}-byte cap `_limit_body_size` enforces (R2-001)."
     )
 
 
@@ -414,3 +451,108 @@ def test_a_baseline_result_callback_is_well_under_the_cap() -> None:
     }
     size = len(json.dumps(body).encode())
     assert size < config.MAX_BODY_BYTES, f"baseline callback is {size:,} bytes"
+
+
+# --- 3. the regression the two bounds exist to prevent -------------------------
+
+
+def test_a_question_with_a_full_size_performance_input_can_be_created_and_edited(
+    client: Any,
+) -> None:
+    """R2-012, through the real routes and the real `_limit_body_size`.
+
+    A PUT re-sends every test case, so before the caps and the body cap were
+    chosen together, a question carrying a large performance input could be
+    created a case at a time but a title change on it was 413'd — the interviewer
+    could not correct their own question. Uses the largest input the schema now
+    accepts, so raising a cap without raising the body cap fails here.
+    """
+    stdin_cap, expected_cap = _stored_case_char_caps()
+    assert stdin_cap is not None and expected_cap is not None
+    payload = _valid_payload()
+    payload["id"] = "big-perf"
+    payload["test_cases"][-1]["stdin"] = "9" * stdin_cap
+    payload["test_cases"][-1]["expected"] = "9" * expected_cap
+
+    assert client.post("/questions", json=payload).status_code == 201
+
+    payload["title"] = "Renamed"
+    resp = client.put("/questions/big-perf", json=payload)
+    assert resp.status_code != 413, "a large question still cannot be edited (R2-012)"
+    assert resp.status_code == 200, resp.text
+    assert client.get("/questions/big-perf").json()["title"] == "Renamed"
+
+
+@needs_agent
+def test_the_worst_callback_the_agent_can_send_is_accepted(client: Any) -> None:
+    """R2-001, through the real route: the biggest body the contract now permits —
+    every case at the schema's limit, every echoed field at the agent's excerpt cap.
+
+    The P0 was a 413 here. The agent does not retry a 4xx, so the reaper
+    re-triggered three times and the submission ended as "error" with no stored
+    reason: the grade was simply gone. The job id is unknown on purpose — this
+    measures the size gate the body has to clear first, and 413 is the one status
+    that must never come back.
+    """
+    case_cap = _stored_case_count_cap()
+    if case_cap is None:
+        pytest.fail("unbounded case count — see test_a_stored_question_is_size_bounded")
+
+    _agent()  # puts the agent repo on sys.path
+    import assessment_agent.agent as agent_module
+
+    field = "9" * agent_module.PAYLOAD_EXCERPT_BYTES
+    body = {
+        "job_id": "no-such-job",
+        "verdict": "PASS",
+        "score_pct": 100.0,
+        "reason": "all cases passed",
+        "test_cases": [
+            {
+                "name": f"case_{i}",
+                "category": "performance",
+                "weight": 1.0,
+                "status": "PASS",
+                "input": field,
+                "expected": field,
+                "actual": field,
+                "duration_s": 0.1,
+                "timed_out": False,
+                "error": None,
+            }
+            for i in range(case_cap)
+        ],
+    }
+    assert client.post("/assessments/callback", json=body).status_code != 413, (
+        f"a {len(json.dumps(body).encode()):,}-byte callback — the worst the contract allows — "
+        f"is refused by the {config.MAX_BODY_BYTES:,}-byte body cap, so that grade is lost "
+        "(R2-001)."
+    )
+
+
+def test_the_intake_caps_do_not_reach_the_response_model() -> None:
+    """`TestCaseOut` inherits `TestCaseIn`, so the intake caps would be enforced on
+    the way OUT too — and FastAPI validates a response model, so every question
+    stored before S01 (nine dev cases are over the cap) would 500 on read instead
+    of being editable down to size. The re-declaration in `TestCaseOut` is what
+    prevents that; this fails if someone tidies it away.
+    """
+    stdin_cap, expected_cap = _stored_case_char_caps()
+    assert stdin_cap is not None and expected_cap is not None
+    TestCaseOut(id=1, name="legacy", stdin="9" * (stdin_cap + 1), expected="9" * (expected_cap + 1))
+
+
+def test_refusing_an_oversized_question_does_not_echo_it_back(client: Any) -> None:
+    """The size caps exist to stop a large body costing more than it should; a
+    422 that serializes pydantic's `input` back turned a 13 MB rejected question
+    into a 13 MB response, so the refusal cost as much as accepting it would.
+    """
+    cases = [
+        {"name": f"c{i}", "stdin": "1\n" * 173_000, "expected": "x",
+         "category": "correctness", "weight": 1.0}
+        for i in range(_stored_case_count_cap() or 25)
+    ]
+    resp = client.post("/questions", json={**_valid_payload(), "test_cases": cases})
+    assert resp.status_code == 422, resp.status_code
+    assert len(resp.content) < 4096, f"{len(resp.content):,}-byte response to a rejected question"
+    assert "over the" in resp.json()["detail"][0]["msg"]

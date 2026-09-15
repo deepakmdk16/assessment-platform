@@ -42,8 +42,10 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import ValidationError
 from sqlalchemy import delete, func, or_, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -360,6 +362,29 @@ async def _request_context(request: Request, call_next: Any) -> Any:
     response = await call_next(request)
     response.headers[observability.REQUEST_ID_HEADER] = request_id
     return response
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 without echoing the rejected body back.
+
+    pydantic puts the offending value in each error's `input`, and FastAPI's
+    default handler serializes it, so refusing a 13 MB question for its size
+    answered it with a 13 MB response — the amplification the size caps exist to
+    prevent, served by the very check that enforces them. The client reads `loc`
+    and `msg` (`web/src/api.ts` joins the msgs into the page's alert); it does not
+    read back the value it just sent. `ctx` is dropped with it: it can carry the
+    original exception object, which is not JSON at all.
+    """
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": [
+                {"type": e.get("type", ""), "loc": list(e.get("loc", ())), "msg": e.get("msg", "")}
+                for e in exc.errors()
+            ]
+        },
+    )
 
 
 @app.exception_handler(Exception)
@@ -2500,7 +2525,18 @@ async def draft_question(
 
     billing.record(session, org.org_id, draft_cost_usd=float(payload.get("cost_usd") or 0.0))
 
-    question = _question_create_from_agent(payload.get("question") or {})
+    try:
+        question = _question_create_from_agent(payload.get("question") or {})
+    except ValidationError as exc:
+        # The agent drafted something this platform will not store (too many cases,
+        # a case over the size caps). That is the agent's bug, not the
+        # interviewer's, so refund the allowance rather than charge for a draft
+        # they can never use — and say so instead of raising a bare 500.
+        billing.release(session, org.org_id, "drafts", 1)
+        raise HTTPException(
+            status_code=502,
+            detail=f"the agent drafted a question this platform cannot store: {exc}",
+        ) from exc
     return QuestionDraftOut(
         question=question,
         warnings=payload.get("warnings", []),
@@ -2613,10 +2649,18 @@ async def draft_variant_set(
             # A variant the agent couldn't draft carries no question; it's counted
             # in the set-level shortfall warning, not shown as an empty card.
             continue
+        try:
+            question = _question_create_from_agent(q)
+        except ValidationError:
+            # Same class as the missing-question case above: a variant this
+            # platform cannot store is a variant not delivered, so it rides the
+            # set-level shortfall (which releases its allowance) rather than
+            # 500-ing the whole set for one bad member.
+            continue
         variants.append(
             VariantDraftOut(
                 label=_VARIANT_LABELS[len(variants)] if len(variants) < len(_VARIANT_LABELS) else None,
-                question=_question_create_from_agent(q),
+                question=question,
                 reference_solution=v.get("reference_solution"),
                 reference_language=v.get("reference_language"),
                 warnings=v.get("warnings", []),
