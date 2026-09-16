@@ -322,7 +322,10 @@ export function CandidatePage() {
   // Warn before the tab closes while an unsubmitted single-question editor is
   // open (P2a). The multi-question flow guards itself, since it knows when the
   // sitting is complete.
-  useLeaveGuard(stage === 'editor' && !isMultiQuestion)
+  // Not in a tab that holds nothing: its own notice tells the candidate to close
+  // it and carry on in the other one, and warning them off doing that is the
+  // product arguing with itself (R2-041).
+  useLeaveGuard(stage === 'editor' && !isMultiQuestion && hasSitting)
 
   // Probe the link only — the question isn't served until the gate below proves
   // the visitor is one of the invited recipients.

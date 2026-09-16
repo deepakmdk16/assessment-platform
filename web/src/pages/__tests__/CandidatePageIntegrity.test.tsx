@@ -202,4 +202,22 @@ describe('a second tab on the same sitting stands down (R2-041)', () => {
     })
     expect(api.postIntegrityEvents).not.toHaveBeenCalled()
   })
+
+  it('does not warn the candidate against closing the tab it told them to close', async () => {
+    stubFullscreen()
+    localStorage.setItem(
+      'assessment-sitting:tok123:jane@example.com',
+      JSON.stringify({ tab: 'the-other-tab', at: Date.now() }),
+    )
+    const user = userEvent.setup()
+    renderCandidatePage()
+    await passGate(user)
+
+    expect(await screen.findByText(/open in another tab/i)).toBeInTheDocument()
+    const unload = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(unload)
+    // The notice says "close the other tab"; a "Leave site?" prompt on top of it
+    // is the product arguing with itself.
+    expect(unload.defaultPrevented).toBe(false)
+  })
 })

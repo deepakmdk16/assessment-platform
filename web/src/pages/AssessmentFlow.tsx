@@ -177,7 +177,7 @@ export function AssessmentFlow({
   const complete =
     submittedCount === questions.length || (timeUp && autoSubmitSettled) || leftEarly
   // Warn before the tab closes while the sitting is still open (P2a).
-  useLeaveGuard(!complete)
+  useLeaveGuard(!complete && holdsSitting)
   // What "Submit and leave" would send, what it would leave blank, and what a
   // per-question submit leaves open — the one predicate the loop below uses.
   const isWritten = (q: CandidateQuestionPublic) =>
