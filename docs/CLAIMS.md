@@ -24,7 +24,7 @@ than a whole paragraph.
 | Claim | Where | Proof |
 |---|---|---|
 | `This sitting is monitored` | IntegrityGate consent screen | `integrity.test.tsx` — "records nothing when the sitting is unmonitored" pins the negative; the positive is the rows below |
-| `Fullscreen, pasting blocked,` | IntegrityGate summary line | `CandidatePageIntegrity.test.tsx` — "requests fullscreen from the start click" drives the real page and the real hook and asserts the call count; "records the denial when the browser refuses" covers the other branch |
+| `Fullscreen, pasting blocked,` | IntegrityGate summary line | `e2e/candidate-fullscreen.spec.ts` — "the start click asks the browser for fullscreen", counted in a real browser with an instrumented `requestFullscreen` (verified red against the old code); `CandidatePageIntegrity.test.tsx` — "requests fullscreen from the start click" drives the real page and the real hook, and "records the denial when the browser refuses" covers the other branch |
 | `Pasting blocked,` | IntegrityGate summary line | `integrity.test.tsx` — "blocks text that was never copied inside the page" |
 | `Pasting code from outside this page is blocked.` | IntegrityGate detail | `integrity.test.tsx` — "blocks text that was never copied inside the page", "allows text copied within the page, and records it as context" |
 | `Tab switches are recorded and shared with the interviewer.` | IntegrityGate detail, and the help drawer (R2-039) | `integrity.test.tsx` — "records a tab switch with how long the candidate was away" |
