@@ -430,6 +430,13 @@ export interface InviteStartResponse {
   /** Server-authoritative submit deadline (ISO). null when untimed. The countdown
    *  runs to this, and the server enforces it on submit. */
   deadline?: string | null
+  /** When this sitting began and what the server's clock reads right now, both
+   *  ISO (R2-036). Their difference is how long the sitting has been running —
+   *  the only part a browser can trust, since its own clock may be wrong — and
+   *  is what integrity offsets are anchored to, so a reload continues the
+   *  timeline instead of restarting it at zero. */
+  started_at?: string | null
+  server_now?: string | null
   /** Per-assessment branding (A12): set only for an assessment invite whose
    *  Assessment carries them; null for a legacy single-question invite or an
    *  unbranded assessment. */

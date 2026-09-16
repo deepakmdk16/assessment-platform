@@ -4462,6 +4462,8 @@ def _candidate_question_view(
         questions=public,
         languages=config.SUPPORTED_LANGUAGES,
         deadline=deadline,
+        started_at=as_utc(attempt.started_at) if attempt else None,
+        server_now=datetime.now(timezone.utc) if attempt else None,
         # Branding (A12/P3b). The title is the assessment's and stays None for a
         # quick-screen invite, which has none. The organisation's name and logo
         # do NOT: a quick-screen sitting used to be the one candidate surface

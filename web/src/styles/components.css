@@ -2991,23 +2991,6 @@ button.tab:hover {
   color: var(--color-text);
 }
 
-/* The fullscreen prompt covers the whole viewport and takes its clicks — the
-   SITTING is paused, not just the editor, so the problem text and the language
-   picker are out of reach too. Fixed rather than absolute: `.panel` establishes
-   no positioning context and clips its overflow, which would strand or crop an
-   absolutely-positioned scrim. */
-.modal-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
-  backdrop-filter: blur(2px);
-}
-
 .editor-hint.blocked {
   display: flex;
   align-items: flex-start;
@@ -4072,4 +4055,104 @@ button.tab:hover {
   object-fit: contain;
   border-radius: var(--radius-sm);
   margin-bottom: 0.6rem;
+}
+
+/* =========================================================================
+   Sitting help (R2-039) — the Help control in the candidate's top bar, the
+   drawer behind it, and the one-line address on the fullscreen prompt.
+   ========================================================================= */
+
+/* The Help button is the only labelled control in `ide-top-right`, so it widens
+   from the square `.icon-btn` to fit its word and drops back to a square on a
+   phone, where the row is already full. */
+.icon-btn.help {
+  width: auto;
+  gap: 0.32rem;
+  padding: 0 0.5rem;
+  color: var(--color-accent-ink);
+}
+
+.icon-btn.help svg {
+  width: 15px;
+  height: 15px;
+}
+
+.icon-btn-label {
+  font-size: 0.8rem;
+}
+
+@media (max-width: 640px) {
+  .icon-btn.help {
+    width: 2rem;
+    padding: 0;
+  }
+
+  .icon-btn-label {
+    /* The accessible name still comes from the button's own `aria-label`. */
+    display: none;
+  }
+}
+
+/* One block of the help drawer: a small caps heading over prose or the rules
+   list, spaced by the flow rather than by margins on the children. */
+.help-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.help-block h3 {
+  margin: 0;
+  font-size: 0.73rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+
+.help-block p {
+  margin: 0;
+}
+
+.help-block ul {
+  margin: 0;
+  padding-left: 1.05rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.support-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-accent-ink);
+  font-weight: 500;
+  /* A long address on a phone must wrap inside the drawer, not widen it. */
+  word-break: break-all;
+}
+
+.support-link svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+/* The clock, repeated at the foot of the drawer because the top bar's copy is
+   behind the backdrop while the drawer is open. */
+.drawer-foot {
+  margin: 0;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.82rem;
+  color: var(--color-muted);
+}
+
+/* The address on the fullscreen prompt. The prompt covers the top bar, so this
+   is the only way out for a candidate whose browser will not go fullscreen. */
+.help-line {
+  margin: 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.82rem;
+  color: var(--color-muted);
 }

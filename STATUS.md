@@ -103,11 +103,13 @@ gate fails if a listed violation starts *passing*, so the list cannot rot.
   R2-111, R2-112, R2-118 → S10), keyed by file + fragment.
 - **G2 · `docs/CLAIMS.md` + `web/scripts/check-claims.mjs`** — a sentence asserting
   behaviour ("recorded", "blocked", "autosaved", "monitored", "cannot be") must
-  have a row naming the test that proves it. 17 claims registered; 5 of their rows
+  have a row naming the test that proves it. 19 claims registered; 2 of their rows
   say **owed**, which is the honest list of promises the product cannot currently
-  back: fullscreen (R2-003 → S04), the devtools half of the consent screen (S04),
-  "No consent recorded" (S04), multi-question autosave (R2-030 → S08), and the
-  buzzer-failure notice (R2-029 → S08).
+  back: multi-question autosave (R2-030 → S08) and the buzzer-failure notice
+  (R2-029 → S08). S04 closed the other three — the fullscreen claim now cites a
+  test that drives the real page and the real hook, the consent screen's
+  developer-tools sentence was narrowed to what the heuristic can actually see
+  (R2-040), and "No consent recorded" is pinned in both directions.
 
 - **G4 · `web/e2e/visual-gate.spec.ts`** (S00b) — every route at 1280x800 and
   390x844, in light and dark: no horizontal overflow, no serious/critical axe
@@ -239,6 +241,39 @@ the default port and every candidate spec walks into the wrong stack.
   and each re-walks `web/src` in its own node process. Extract `web/scripts/prose.mjs`
   when either needs its next change — a fix to the extractor currently has to be
   made twice.
+
+---
+
+### S04 leftovers — 2026-09-16
+
+- **P2 · S — The countdown is still anchored to the browser's clock.**
+  S04 added `started_at` + `server_now` to `POST /invite/{token}/start`
+  (`schemas.py::InvitePublicOut`) and used the pair to anchor integrity offsets to
+  the sitting rather than to the page load. The timer beside it still counts down
+  to `deadline` using `Date.now()`, so a candidate whose device clock is wrong
+  sees a wrong clock — R2-028, already S05's, and the two fields it needs are now
+  on the response.
+- **P3 · XS — The devtools heuristic cannot see what it never saw open.**
+  It scores growth in the window/viewport gap against the narrowest gap seen this
+  sitting, so devtools already open before the candidate started, or undocked into
+  their own window, raise no signal. This is now stated rather than papered over —
+  the consent screen says "when the browser makes it visible to the page" — but a
+  deploy that wants more has to ask the browser something the browser does not
+  offer. Do not "fix" this by going back to scoring the absolute gap: that is what
+  flagged every Edge vertical-tabs candidate (R2-040).
+- **P3 · XS — The sitting lock is per browser profile.**
+  `sittingLock.ts` arbitrates through `localStorage`, so a second *browser*, a
+  private window or another device sees no claim and both sittings record and save
+  freely. It fixes the common accident (a duplicated tab inflating the away total
+  and racing autosaves), not a candidate who is trying. A real lock is
+  server-side — a lease on `CandidateAttempt`, renewed on the events batch the
+  browser already sends — which is a bigger change than R2-041 justified.
+- **P3 · XS — Two dialogs still open with no explicit initial focus.**
+  The fullscreen prompt and the draft chooser are now native `<dialog>`s opened
+  with `showModal()`, so the browser traps focus and both refuse Escape. Neither
+  names which control should be focused first, so the browser picks the first
+  tabbable one. That is the right button in both cases today and would stop being
+  so the moment either dialog's actions are reordered.
 
 ---
 

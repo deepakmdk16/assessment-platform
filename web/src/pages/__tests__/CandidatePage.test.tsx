@@ -1343,3 +1343,60 @@ describe('P2a — start screen, confirmation and leaving', () => {
     })
   })
 })
+
+describe('the two-versions chooser is a real modal (R2-148)', () => {
+  /** A sitting where localStorage and the server hold different unsent work. */
+  async function startWithConflict(user: ReturnType<typeof userEvent.setup>) {
+    // The legacy, un-hashed key: `migrateLegacyDraft` moves it to the hashed one
+    // during start, which is how the other draft tests here seed local work.
+    localStorage.setItem(
+      'assessment-draft:tok123:jane@example.com',
+      JSON.stringify({ code: 'on this device', language: 'python', saved_at: new Date().toISOString() }),
+    )
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.startInvite).mockResolvedValue({
+      ...startResponse,
+      questions: [
+        {
+          id: 'q1', title: 'Two Sum', prompt: 'p', constraints: '', example_input: '',
+          example_output: '', time_limit_s: 2, submitted: false,
+        },
+      ],
+    })
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({
+      drafts: [
+        {
+          question_id: 'q1',
+          code: 'from your account',
+          language: 'python',
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    })
+    renderCandidatePage()
+    await passGate(user)
+  }
+
+  it('opens as a native dialog rather than a div claiming to be one', async () => {
+    const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal')
+    const user = userEvent.setup()
+    await startWithConflict(user)
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('heading', { name: /two versions of your work/i })).toBeInTheDocument()
+    expect(dialog.tagName).toBe('DIALOG')
+    expect(showModal).toHaveBeenCalled()
+    showModal.mockRestore()
+  })
+
+  it('refuses Escape, because dismissing it would pick a version silently', async () => {
+    const user = userEvent.setup()
+    await startWithConflict(user)
+
+    const dialog = await screen.findByRole('dialog')
+    const cancel = new Event('cancel', { cancelable: true })
+    dialog.dispatchEvent(cancel)
+
+    expect(cancel.defaultPrevented).toBe(true)
+  })
+})
