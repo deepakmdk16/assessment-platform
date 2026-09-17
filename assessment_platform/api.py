@@ -3380,6 +3380,10 @@ def create_invite(
         # Normalize on the way in so the start/submit checks can compare directly.
         recipients=[_normalize_email(r) for r in body.recipients],
         expires_at=body.expires_at,
+        # Freeze the length of the sitting onto the invite (R2-031), like
+        # `proctored` below: editing the question later must not move the
+        # deadline of a sitting already running against this link.
+        duration_minutes=question.duration_minutes,
     )
     session.add(invite)
     session.commit()
@@ -3442,6 +3446,8 @@ def create_assessment_invite(
         # Freeze the assessment's monitoring setting onto the sitting (I1); the
         # other two invite paths have no assessment and keep the default True.
         proctored=assessment.proctored,
+        # …and its length, for the same reason (R2-031).
+        duration_minutes=assessment.duration_minutes,
     )
     session.add(invite)
     session.commit()
@@ -3520,6 +3526,8 @@ def create_variant_set_invites(
             created_by=_require_id(current.id),
             recipients=[email],
             expires_at=body.expires_at,
+            # The assigned variant's own length, frozen at mint (R2-031).
+            duration_minutes=chosen.duration_minutes,
         )
         session.add(invite)
         created.append((invite, chosen.variant_label))
@@ -4087,14 +4095,60 @@ def revoke_invite(
 # --------------------------------------------------------------------------- #
 
 
-def _load_invite_or_error(token: str, session: Session) -> Invite:
-    """Resolve a candidate token: 404 if unknown, 410 if expired or revoked."""
+def _has_attempt(invite: Invite, email: str | None, session: Session) -> bool:
+    """Whether `email` has already started this invite — the fact that decides
+    whether its expiry still applies to them (R2-004)."""
+    if email is None:
+        return False
+    return (
+        session.exec(
+            select(CandidateAttempt).where(
+                CandidateAttempt.invite_id == invite.id,
+                CandidateAttempt.candidate_email == email,
+            )
+        ).first()
+        is not None
+    )
+
+
+def _load_invite_or_error(
+    token: str, session: Session, email: str | None = None, *, allow_expired: bool = False
+) -> Invite:
+    """Resolve a candidate token: 404 if unknown, 410 if revoked, 410 if expired
+    and this candidate has no sitting under way.
+
+    **Expiry bounds when a timed sitting may BEGIN, not how long it may last**
+    (R2-004). It used to end one mid-flight: a 24-hour link opened half an hour
+    before it expired, for a 60-minute assessment, lost the candidate's work at
+    the buzzer because every route resolved the token through here. Once the
+    candidate has a `CandidateAttempt`, the only clock that ends their sitting is
+    their own deadline (`started_at` + the invite's duration), which /submit
+    enforces.
+
+    An **untimed** sitting is the exception, because it has no such clock: the
+    link's expiry is the only bound anyone set on it, so it still applies. Without
+    that, a candidate could start on day 1 of a 7-day link and keep running — and
+    spending agent compute — indefinitely on a link the interviewer reads as
+    dead.
+
+    Pass `email` on every route that knows who is calling — including /start,
+    which is how a reload gets back into a sitting whose link has since expired.
+    The probe, which knows nobody, passes `allow_expired` instead and reports the
+    expiry as a status rather than making it fatal.
+
+    Revocation is untouched: that is the interviewer deliberately shutting a
+    sitting down, and it must stop one already running.
+    """
     invite = session.exec(select(Invite).where(Invite.token == token)).first()
     if invite is None:
         raise HTTPException(status_code=404, detail="invalid invite token.")
     if invite.status != "active":
         raise HTTPException(status_code=410, detail="this invite is no longer active.")
-    if _is_expired(invite.expires_at):
+    if (
+        not allow_expired
+        and _is_expired(invite.expires_at)
+        and not (_invite_duration(invite, session) is not None and _has_attempt(invite, email, session))
+    ):
         raise HTTPException(status_code=410, detail="this invite has expired.")
     return invite
 
@@ -4227,13 +4281,20 @@ def _invite_questions(
 
 
 def _invite_duration(invite: Invite, session: Session) -> int | None:
-    """Total time budget for the sitting: the assessment's (T4) or, for a legacy
-    invite, the single question's. None = untimed."""
-    if invite.assessment_id is not None:
-        a = session.get(Assessment, invite.assessment_id)
-        return a.duration_minutes if a else None
-    q = session.get(Question, invite.question_id) if invite.question_id else None
-    return q.duration_minutes if q else None
+    """Total time budget for the sitting, in minutes. None = untimed.
+
+    The invite's own snapshot and nothing else (R2-031): an edit to the
+    assessment (or the quick-screen question) afterwards must not move a deadline
+    a candidate is already counting down to. `session` is kept because callers
+    pass it and the signature is the seam a future per-slot budget would use.
+
+    **NULL means untimed, never "no snapshot".** Falling back to the live value
+    when the column is null reopened the bug for the one sitting that has no
+    deadline of its own — an interviewer turning a limit on mid-flight gave a
+    candidate promised none a deadline they were then recorded `late` against.
+    Pre-existing rows were backfilled by the migration for this reason.
+    """
+    return invite.duration_minutes
 
 
 def _resolve_question(
@@ -4497,14 +4558,23 @@ def _candidate_question_view(
 
 @app.get("/invite/{token}", response_model=InviteStatusOut)
 def get_invite(token: str, session: Session = Depends(get_session)) -> InviteStatusOut:
-    """Liveness probe for the link: 404 if unknown, 410 if revoked/expired.
+    """Liveness probe for the link: 404 if unknown, 410 if revoked, and an
+    `expired` status — not a 410 — once the expiry has passed.
+
+    Expiry answers 200 because this is the first call the candidate's page makes,
+    including on a reload *during* a sitting (R2-004). A 410 here made an expiry
+    that no longer ends the sitting look like one that does, and left the page
+    with nothing to offer but a dead end. Who may still go on is decided by
+    /start, which knows the candidate's address; this route only reports the
+    state, and `expires_at` is what lets the start screen say when the link
+    closes instead of letting the candidate discover it at the buzzer.
 
     Returns no question data on purpose. The problem is only handed out by
     `POST /invite/{token}/start`, once the caller has identified as an invited
     recipient — otherwise the email check below would be decorative, since anyone
     with the link could just read the question straight off this endpoint.
     """
-    invite = _load_invite_or_error(token, session)
+    invite = _load_invite_or_error(token, session, allow_expired=True)
     # Whether this sitting is monitored (I1) — needed before /start so the gate
     # screen can disclose it up front. Read from the invite's own frozen
     # snapshot, so it says what this sitting will actually do.
@@ -4518,15 +4588,17 @@ def get_invite(token: str, session: Session = Depends(get_session)) -> InviteSta
     # slot, on an unauthenticated route — and 404s an assessment with no
     # resolvable questions, which /start owns with its own message.
     a = invite.assessment
-    q = invite.question
     return InviteStatusOut(
-        status="active",
+        status="expired" if _is_expired(invite.expires_at) else "active",
+        expires_at=invite.expires_at,
         proctored=invite.proctored,
         assessment_title=a.title if a else None,
         org_name=a.org_name if a else None,
         logo_sha=a.logo_sha if a else None,
         question_count=len(a.questions) if a else 1,
-        duration_minutes=a.duration_minutes if a else (q.duration_minutes if q else None),
+        # The sitting's own frozen length (R2-031), so the start screen promises
+        # the same number the deadline will be computed from.
+        duration_minutes=_invite_duration(invite, session),
         languages=config.SUPPORTED_LANGUAGES,
         # Untagged on purpose (P2b): whoever holds the token reads this, and the
         # organisation's own tag would say whose assessment the link is for.
@@ -4550,8 +4622,8 @@ def start_invite(
     limiter.check(
         "start", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
-    invite = _load_invite_or_error(token, session)
     email = _normalize_email(body.candidate_email)
+    invite = _load_invite_or_error(token, session, email)
     _check_invited(invite, email)
     # A legacy single-question invite is one attempt: block re-entry once submitted.
     # A multi-question assessment invite lets the candidate return to finish other
@@ -4576,7 +4648,7 @@ def _load_invite_for_candidate(
     recipient, and they must not have submitted THIS question already. Without
     this, anyone holding the link could burn agent compute for free.
     """
-    invite = _load_invite_or_error(token, session)
+    invite = _load_invite_or_error(token, session, email)
     _check_invited(invite, email)
     question = _resolve_question(invite, question_id, email, session)
     _check_not_already_submitted(invite, email, question.id, session)
@@ -4682,10 +4754,10 @@ async def candidate_submit(
     limiter.check(
         "submit", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
-    invite = _load_invite_or_error(token, session)
     # Re-check the gates here, not just in /start: the start screen is only UI, so a
     # caller can POST straight to this route and skip it.
     email = _normalize_email(body.candidate_email)
+    invite = _load_invite_or_error(token, session, email)
     _check_invited(invite, email)
     # Which question this submits (the single one for a legacy invite; a named one
     # for an assessment — the candidate's assigned variant for a set-slot). One
@@ -4754,8 +4826,8 @@ def candidate_integrity_events(
     limiter.check(
         "events", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
-    invite = _load_invite_or_error(token, session)
     email = _normalize_email(body.candidate_email)
+    invite = _load_invite_or_error(token, session, email)
     _check_invited(invite, email)
 
     # Clamp client-reported offsets to the window the server can actually vouch
@@ -4838,8 +4910,8 @@ def candidate_feedback(
     limiter.check(
         "submit", client_ip(request), config.SUBMIT_RATE_LIMIT_MAX, config.RATE_LIMIT_WINDOW_S
     )
-    invite = _load_invite_or_error(token, session)
     email = _normalize_email(body.candidate_email)
+    invite = _load_invite_or_error(token, session, email)
     _check_invited(invite, email)
     attempt = session.exec(
         select(CandidateAttempt).where(
@@ -4900,8 +4972,8 @@ def candidate_save_draft(
         config.DRAFT_SAVE_RATE_LIMIT_MAX,
         config.RATE_LIMIT_WINDOW_S,
     )
-    invite = _load_invite_or_error(token, session)
     email = _normalize_email(body.candidate_email)
+    invite = _load_invite_or_error(token, session, email)
     _check_invited(invite, email)
     question = _resolve_question(invite, body.question_id, email, session)
 
@@ -4939,8 +5011,8 @@ def candidate_get_drafts(
     /start — one fetch covers a whole multi-question assessment. Same gates as
     the save; returns an empty list rather than 404 when nothing was saved, so
     the client needs no error path for the common cold start."""
-    invite = _load_invite_or_error(token, session)
     email = _normalize_email(candidate_email)
+    invite = _load_invite_or_error(token, session, email)
     _check_invited(invite, email)
     rows = session.exec(
         select(CandidateDraft).where(

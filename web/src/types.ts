@@ -386,7 +386,13 @@ export interface CandidateQuestionPublic extends InviteQuestionPublic {
  *  here: it's handed out by `POST /invite/{token}/start` once the candidate has
  *  identified as an invited recipient. */
 export interface InviteStatusResponse {
+  /** 'active' or 'expired'. An expired link answers 200 with this set rather
+   *  than 410 (R2-004): a candidate already sitting the assessment reads this
+   *  route on every reload, and /start is what decides whether they may go on. */
   status: string
+  /** When the link stops accepting new sittings; null = no expiry. Shown on the
+   *  start screen so the candidate knows before they begin. */
+  expires_at?: string | null
   /** Whether this sitting is monitored (I1) — known before /start so the gate
    *  screen can disclose it before the candidate identifies themselves. */
   proctored?: boolean

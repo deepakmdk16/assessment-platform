@@ -149,3 +149,189 @@ def test_submit_past_deadline_is_recorded_and_flagged_late(
     late_idx = header.split(",").index("late")
     row = next(line for line in lines if line.startswith(sid))
     assert row.split(",")[late_idx] == "True"
+
+
+# --------------------------------------------------------------------------- #
+# R2-031 — the duration a candidate was promised is frozen when the invite is    #
+# minted, like `Invite.proctored`. Editing the assessment (or the quick-screen   #
+# question) afterwards must not move the deadline of a sitting that is already   #
+# running, and must not turn an on-time submit into a late one.                  #
+# --------------------------------------------------------------------------- #
+
+
+def test_editing_an_assessment_duration_does_not_move_a_live_deadline(
+    anon_client: TestClient, monkeypatch
+) -> None:
+    tok = register_interviewer(anon_client, "t-edit@x.io")
+    anon_client.post("/questions", json=_question("q_edit", None), headers=_auth(tok))
+    aid = anon_client.post(
+        "/assessments",
+        json={"title": "Screen", "question_ids": ["q_edit"], "duration_minutes": 60},
+        headers=_auth(tok),
+    ).json()["id"]
+    link = anon_client.post(
+        f"/assessments/{aid}/invites", json={"recipients": ["c@x.io"]}, headers=_auth(tok)
+    ).json()["token"]
+
+    started = anon_client.post(
+        f"/invite/{link}/start", json={"candidate_email": "c@x.io", "consent": True}
+    )
+    deadline = started.json()["deadline"]
+    assert deadline is not None
+
+    # The interviewer cuts the assessment to a minute while the candidate sits it.
+    assert (
+        anon_client.put(
+            f"/assessments/{aid}",
+            json={"title": "Screen", "question_ids": ["q_edit"], "duration_minutes": 1},
+            headers=_auth(tok),
+        ).status_code
+        == 200
+    )
+
+    # The candidate's reload reads the same deadline it read before the edit.
+    assert (
+        anon_client.post(
+            f"/invite/{link}/start", json={"candidate_email": "c@x.io", "consent": True}
+        ).json()["deadline"]
+        == deadline
+    )
+
+    # And the sitting is still on time 30 minutes in — under the 60 minutes they
+    # were given, well past the 1 minute the assessment now says.
+    _age_attempt_started_at(tok, 30 * 60)
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-e"))
+    resp = anon_client.post(
+        f"/invite/{link}/submit",
+        json={
+            "candidate_name": "C",
+            "candidate_email": "c@x.io",
+            "consent": True,
+            "language": "python",
+            "code": "print(7)",
+            "question_id": "q_edit",
+        },
+    )
+    assert resp.status_code == 201
+    sub = anon_client.get(f"/submissions/{resp.json()['submission_id']}", headers=_auth(tok))
+    assert sub.json()["late"] is False
+
+
+def test_an_invite_minted_after_the_edit_carries_the_new_duration(
+    anon_client: TestClient,
+) -> None:
+    """Freezing is per invite, not per assessment: the next candidate invited gets
+    what the assessment says today."""
+    tok = register_interviewer(anon_client, "t-edit2@x.io")
+    anon_client.post("/questions", json=_question("q_edit2", None), headers=_auth(tok))
+    aid = anon_client.post(
+        "/assessments",
+        json={"title": "Screen", "question_ids": ["q_edit2"], "duration_minutes": 60},
+        headers=_auth(tok),
+    ).json()["id"]
+    anon_client.put(
+        f"/assessments/{aid}",
+        json={"title": "Screen", "question_ids": ["q_edit2"], "duration_minutes": 90},
+        headers=_auth(tok),
+    )
+    link = anon_client.post(
+        f"/assessments/{aid}/invites", json={"recipients": ["c2@x.io"]}, headers=_auth(tok)
+    ).json()["token"]
+
+    assert anon_client.get(f"/invite/{link}").json()["duration_minutes"] == 90
+    started = anon_client.post(
+        f"/invite/{link}/start", json={"candidate_email": "c2@x.io", "consent": True}
+    )
+    expected = datetime.now(timezone.utc) + timedelta(minutes=90)
+    got = datetime.fromisoformat(started.json()["deadline"])
+    assert abs((got - expected).total_seconds()) < 60
+
+
+def test_editing_a_quick_screen_question_duration_does_not_move_a_live_deadline(
+    anon_client: TestClient,
+) -> None:
+    """The legacy single-question invite reads the question's own duration, and
+    freezes it the same way."""
+    tok = register_interviewer(anon_client, "t-edit3@x.io")
+    anon_client.post("/questions", json=_question("q_quick", 60), headers=_auth(tok))
+    inv = _invite(anon_client, tok, "q_quick", "c3@x.io")
+
+    deadline = anon_client.post(
+        f"/invite/{inv['token']}/start", json={"candidate_email": "c3@x.io", "consent": True}
+    ).json()["deadline"]
+
+    edited = dict(_question("q_quick", 5))
+    edited.pop("id")
+    assert (
+        anon_client.put("/questions/q_quick", json=edited, headers=_auth(tok)).status_code == 200
+    )
+
+    assert (
+        anon_client.post(
+            f"/invite/{inv['token']}/start", json={"candidate_email": "c3@x.io", "consent": True}
+        ).json()["deadline"]
+        == deadline
+    )
+    # The probe the candidate's start screen reads says the same thing.
+    assert anon_client.get(f"/invite/{inv['token']}").json()["duration_minutes"] == 60
+
+
+def test_an_untimed_sitting_cannot_be_given_a_clock_mid_flight(
+    anon_client: TestClient, monkeypatch
+) -> None:
+    """The snapshot has to record "no limit" as a value, not as an absent one.
+
+    Storing NULL for an untimed invite and reading NULL as "nothing recorded"
+    conflates the two: the invite fell back to the live assessment, so turning a
+    30-minute limit on mid-sitting gave a candidate who was promised no limit a
+    deadline — and then recorded their submit `late`.
+    """
+    tok = register_interviewer(anon_client, "t-untimed-edit@x.io")
+    anon_client.post("/questions", json=_question("q_ue", None), headers=_auth(tok))
+    aid = anon_client.post(
+        "/assessments",
+        json={"title": "Screen", "question_ids": ["q_ue"], "duration_minutes": None},
+        headers=_auth(tok),
+    ).json()["id"]
+    link = anon_client.post(
+        f"/assessments/{aid}/invites", json={"recipients": ["c@x.io"]}, headers=_auth(tok)
+    ).json()["token"]
+
+    assert (
+        anon_client.post(
+            f"/invite/{link}/start", json={"candidate_email": "c@x.io", "consent": True}
+        ).json()["deadline"]
+        is None
+    )
+
+    anon_client.put(
+        f"/assessments/{aid}",
+        json={"title": "Screen", "question_ids": ["q_ue"], "duration_minutes": 30},
+        headers=_auth(tok),
+    )
+
+    assert (
+        anon_client.post(
+            f"/invite/{link}/start", json={"candidate_email": "c@x.io", "consent": True}
+        ).json()["deadline"]
+        is None
+    )
+    assert anon_client.get(f"/invite/{link}").json()["duration_minutes"] is None
+
+    # An hour in, with no limit to be past: recorded, and not flagged late.
+    _age_attempt_started_at(tok, 60 * 60)
+    monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-ue"))
+    resp = anon_client.post(
+        f"/invite/{link}/submit",
+        json={
+            "candidate_name": "C",
+            "candidate_email": "c@x.io",
+            "consent": True,
+            "language": "python",
+            "code": "print(7)",
+            "question_id": "q_ue",
+        },
+    )
+    assert resp.status_code == 201
+    sub = anon_client.get(f"/submissions/{resp.json()['submission_id']}", headers=_auth(tok))
+    assert sub.json()["late"] is False

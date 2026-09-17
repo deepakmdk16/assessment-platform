@@ -1,6 +1,28 @@
 // Shared candidate-flow timer helpers (no JSX), used by both the single-question
 // CandidatePage and the multi-question AssessmentFlow.
 
+import { parseServerDate } from '../invites'
+
+/** How far this browser's clock sits from the server's, in ms (R2-028).
+ *
+ *  `server_now` comes back from /start; `receivedAtMs` is the browser's own clock
+ *  at the moment the response landed. Add the result to `Date.now()` and you have
+ *  the server's time, which is the only clock the deadline means anything on: a
+ *  laptop three minutes fast auto-submitted the candidate three minutes early,
+ *  and a slow one let them run past the deadline and be recorded `late`.
+ *
+ *  The measurement carries one network hop, so it is right to within the
+ *  response's own latency — tens of milliseconds against a countdown in minutes.
+ */
+export function clockOffsetMs(serverNowIso: string, receivedAtMs: number = Date.now()): number {
+  return parseServerDate(serverNowIso).getTime() - receivedAtMs
+}
+
+/** The server's clock, as this browser can best tell it. */
+export function serverNow(offsetMs: number, nowMs: number = Date.now()): number {
+  return nowMs + offsetMs
+}
+
 // Countdown urgency thresholds (ms): amber under 5 min, red under 1 min.
 export const WARN_MS = 5 * 60 * 1000
 export const CRIT_MS = 60 * 1000

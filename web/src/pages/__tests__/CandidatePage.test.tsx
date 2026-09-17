@@ -1400,3 +1400,151 @@ describe('the two-versions chooser is a real modal (R2-148)', () => {
     expect(cancel.defaultPrevented).toBe(true)
   })
 })
+
+describe("the countdown runs on the server's clock (R2-028)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    vi.mocked(api.getInvite).mockResolvedValue({ status: 'active' })
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({ drafts: [] })
+  })
+
+  /** A sitting whose deadline is `minutes` away ON THE SERVER, started by a
+   *  browser whose clock is `skewMinutes` fast. Both timestamps come from the
+   *  server, so the browser's disagreement is entirely in `Date.now()`. */
+  function skewedStart(minutes: number, skewMinutes: number) {
+    const serverNowMs = Date.now() - skewMinutes * 60_000
+    return {
+      started_at: new Date(serverNowMs - 60_000).toISOString(),
+      server_now: new Date(serverNowMs).toISOString(),
+      deadline: new Date(serverNowMs + minutes * 60_000).toISOString(),
+    }
+  }
+
+  async function startSitting() {
+    const user = userEvent.setup()
+    renderCandidatePage()
+    await user.type(await screen.findByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
+    await user.click(screen.getByRole('button', { name: /start/i }))
+    return user
+  }
+
+  it('shows the time the server says is left, not the time a fast laptop does', async () => {
+    // Five minutes fast: the old countdown read the deadline against Date.now()
+    // and showed 5:00 of a 10-minute sitting, then auto-submitted at 5:00 past.
+    vi.mocked(api.startInvite).mockResolvedValue({
+      ...startResponse,
+      ...skewedStart(10, 5),
+    })
+
+    await startSitting()
+
+    const timer = await screen.findByRole('timer')
+    expect(timer).toHaveTextContent(/^9:5\d left$/)
+  })
+
+  it('does the same for a multi-question sitting', async () => {
+    vi.mocked(api.startInvite).mockResolvedValue({
+      ...multiStartResponse,
+      ...skewedStart(10, 5),
+    })
+
+    await startSitting()
+
+    const timer = await screen.findByRole('timer')
+    expect(timer).toHaveTextContent(/^9:5\d left$/)
+  })
+
+  it('still counts down when the server sends no clock of its own', async () => {
+    // A pre-existing attempt row (started before /start returned the pair) has
+    // no server_now: the browser clock is all there is, and a countdown is
+    // better than none.
+    vi.mocked(api.startInvite).mockResolvedValue({
+      ...startResponse,
+      deadline: new Date(Date.now() + 10 * 60_000).toISOString(),
+    })
+
+    await startSitting()
+
+    expect(await screen.findByRole('timer')).toHaveTextContent(/^9:5\d left$/)
+  })
+})
+
+describe('an expired link (R2-004)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({ drafts: [] })
+  })
+
+  const EXPIRY = '2026-09-17T12:00:00Z'
+
+  it('names the expiry on the start screen while the link is live', async () => {
+    vi.mocked(api.getInvite).mockResolvedValue({
+      status: 'active',
+      duration_minutes: 60,
+      question_count: 1,
+      languages: ['python'],
+      expires_at: EXPIRY,
+    })
+
+    renderCandidatePage()
+
+    const expected = new Date(EXPIRY).toLocaleString()
+    expect(await screen.findByText(new RegExp(`start by ${expected}`, 'i'))).toBeInTheDocument()
+  })
+
+  it('lets a candidate who already started get back in, instead of a dead end', async () => {
+    // The page reloads through GET /invite, which used to 410 once the link
+    // expired — so a sitting still running on the server had nowhere to go.
+    vi.mocked(api.getInvite).mockResolvedValue({
+      status: 'expired',
+      duration_minutes: 60,
+      question_count: 1,
+      expires_at: EXPIRY,
+    })
+    vi.mocked(api.startInvite).mockResolvedValue(startResponse)
+
+    const user = userEvent.setup()
+    renderCandidatePage()
+
+    expect(await screen.findByText(/this link expired/i)).toBeInTheDocument()
+    await user.type(await screen.findByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    expect(await screen.findByLabelText(/code editor/i)).toBeInTheDocument()
+  })
+
+  it('dead-ends someone who never started, on the server’s refusal', async () => {
+    vi.mocked(api.getInvite).mockResolvedValue({
+      status: 'expired',
+      duration_minutes: 60,
+      question_count: 1,
+      expires_at: EXPIRY,
+    })
+    vi.mocked(api.startInvite).mockRejectedValue(new ApiError(410, 'this invite has expired.'))
+
+    const user = userEvent.setup()
+    renderCandidatePage()
+
+    await user.type(await screen.findByLabelText(/^name$/i), 'Jane Doe')
+    await user.type(screen.getByLabelText(/^email$/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/i agree to my assessment/i))
+    await user.click(screen.getByRole('button', { name: /start/i }))
+
+    expect(await screen.findByRole('heading', { name: /no longer active/i })).toBeInTheDocument()
+    expect(screen.queryByLabelText(/code editor/i)).not.toBeInTheDocument()
+  })
+
+  it('still dead-ends a revoked link, which the server answers 410', async () => {
+    vi.mocked(api.getInvite).mockRejectedValue(new ApiError(410, 'no longer active'))
+
+    renderCandidatePage()
+
+    expect(await screen.findByRole('heading', { name: /no longer active/i })).toBeInTheDocument()
+  })
+})

@@ -415,10 +415,9 @@ export function AssessmentDetailPage() {
               Indefinite (no timer)
             </label>
             <p className="cellsub">
-              Applies to every attempt immediately — a timed attempt’s deadline is its own start
-              time plus this limit, so changing it also moves the deadline for candidates
-              mid-sitting (their on-screen countdown updates only when they reload). It can’t
-              restart a sitting whose timer already ran out — re-invite to give a fresh clock.
+              Applies to invites you send from now on. Every invite already sent keeps the time
+              limit it carried, whether or not the candidate has started, so a change here never
+              moves a deadline someone is counting down to. Re-invite to hand out the new limit.
             </p>
           </div>
           <div className="field">

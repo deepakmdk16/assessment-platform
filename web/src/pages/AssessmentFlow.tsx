@@ -21,7 +21,7 @@ import { CandidateFeedbackForm } from '../components/CandidateFeedbackForm'
 import { QuestionProse } from '../components/QuestionProse'
 import { CandidateNotice } from './CandidateNotice'
 import { ConsoleResult } from './ConsoleResult'
-import { formatRemaining, timerClass } from './candidateTimer'
+import { formatRemaining, serverNow, timerClass } from './candidateTimer'
 import { PRODUCT_NAME } from '../branding'
 
 interface Answer {
@@ -43,6 +43,10 @@ interface Props {
   questions: CandidateQuestionPublic[]
   languages: Language[]
   deadline: string | null
+  /** The browser clock's offset from the server's, measured at /start (R2-028).
+   *  The deadline above is a server timestamp; counting down to it against an
+   *  uncorrected `Date.now()` ends the sitting at the wrong moment. */
+  clockSkewMs: number
   /** Per-assessment branding (A12); all null/undefined for an unbranded
    *  assessment — the header falls back to the generic "Coding assessment". */
   assessmentTitle?: string | null
@@ -87,6 +91,7 @@ export function AssessmentFlow({
   questions,
   languages,
   deadline,
+  clockSkewMs,
   assessmentTitle,
   orgName,
   logoSha,
@@ -224,14 +229,14 @@ export function AssessmentFlow({
     // the terminal screen for as long as the tab is left open.
     if (!deadline || complete) return
     const tick = () => {
-      const ms = new Date(deadline).getTime() - Date.now()
+      const ms = new Date(deadline).getTime() - serverNow(clockSkewMs)
       setRemainingMs(ms)
       if (ms <= 0) setTimeUp(true)
     }
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [deadline, complete])
+  }, [deadline, complete, clockSkewMs])
 
   // Tell the parent, which owns proctoring. This component renders its own
   // terminal screen and never told anyone it had finished, so capture stayed on:
