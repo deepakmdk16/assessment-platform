@@ -89,6 +89,6 @@ describe('the fullscreen prompt carries its own address', () => {
 
   it('shows no line at all when the deploy configures no address', () => {
     render(<IntegrityOverlay integrity={outOfFullscreen()} remainingLabel="24:13 left" />)
-    expect(screen.queryByText(/stuck\?/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/need help\?/i)).not.toBeInTheDocument()
   })
 })

@@ -94,7 +94,7 @@ export function SittingHelp({
           </div>
           <p className="drawer-foot">
             {remainingLabel
-              ? `${remainingLabel} on the clock — it keeps running while this is open.`
+              ? `${remainingLabel} — the clock keeps running while this is open.`
               : 'No time limit on this sitting.'}
           </p>
         </div>
@@ -111,7 +111,7 @@ export function SittingHelpLine({ supportEmail }: { supportEmail?: string | null
   if (!supportEmail) return null
   return (
     <p className="help-line">
-      Stuck? <a href={`mailto:${supportEmail}`}>{supportEmail}</a>
+      Need help? <a href={`mailto:${supportEmail}`}>{supportEmail}</a>
     </p>
   )
 }
