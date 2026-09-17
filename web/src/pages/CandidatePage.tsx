@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import { api, ApiError, logoSrc } from '../api'
 import { parseServerDate } from '../invites'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { IntegrityNotice, IntegrityOverlay } from '../components/IntegrityGate'
+import { SittingHelp } from '../components/SittingHelp'
+import { SittingLockNotice } from '../components/SittingLockNotice'
 import { fullscreenSupported, useIntegrity } from '../integrity'
 import { useLeaveGuard } from '../leaveGuard'
+import { useSittingLock } from '../sittingLock'
 import { ThemeCycleButton } from '../components/ThemeToggle'
 import { SourceLink } from '../components/SourceLink'
 import { useTheme } from '../theme/ThemeContext'
@@ -180,6 +183,35 @@ function AssessmentNotice({ orgName }: { orgName?: string | null }) {
   )
 }
 
+/** The two-versions chooser, as a real modal dialog (R2-148).
+ *
+ *  It used to be a `div` wearing `role="dialog" aria-modal="true"` behind a
+ *  scrim, which is a claim of modality with nothing behind it: Tab walked
+ *  straight past the two buttons into the editor underneath, and Escape did
+ *  nothing at all. A native `<dialog>` opened with `showModal()` is what every
+ *  other dialog in the app already is, and the browser supplies the trap.
+ *
+ *  Escape is deliberately refused: both copies are still on disk at this point
+ *  and the dialog exists to choose between them, so dismissing it without a
+ *  choice would silently keep whichever one the restore happened to pick. */
+function DraftConflictDialog({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (el && !el.open) el.showModal()
+  }, [])
+  return (
+    <dialog
+      ref={ref}
+      className="modal"
+      aria-labelledby="dc-title"
+      onCancel={(e) => e.preventDefault()}
+    >
+      {children}
+    </dialog>
+  )
+}
+
 export function CandidatePage() {
   const { token } = useParams<{ token: string }>()
   const { resolved } = useTheme()
@@ -259,19 +291,41 @@ export function CandidatePage() {
   // after a multi-question sitting ends. Tracking completion separately stops
   // monitoring without pre-empting that screen.
   const [sittingComplete, setSittingComplete] = useState(false)
+  // When this sitting began, on this browser's clock (R2-036). Derived from the
+  // server's own pair rather than read off `started_at` directly, so a candidate
+  // whose device clock is days out still gets offsets measured from the sitting.
+  const [sittingStartedAtMs, setSittingStartedAtMs] = useState<number | null>(null)
+  // One sitting, one tab (R2-041). A duplicated tab recorded every switch
+  // between the two as the candidate leaving, and both tabs autosaved over each
+  // other. The tab that does not hold the lock records nothing and saves
+  // nothing; `hasSitting` is what every write path below is gated on.
+  // Normalized exactly as the server normalizes it (`api.py::_normalize_email`),
+  // or two tabs of one sitting that typed the address with different
+  // capitalisation would each hold a lock of their own and neither stand down.
+  const hasSitting = useSittingLock(
+    stage === 'editor' && token && candidateEmail
+      ? `${token}:${candidateEmail.trim().toLowerCase()}`
+      : null,
+  )
   const integrity = useIntegrity({
     token: token ?? '',
     candidateEmail,
     questionId: activeQuestionId,
-    enabled: stage === 'editor' && proctored && !sittingComplete,
+    enabled: stage === 'editor' && proctored && !sittingComplete && hasSitting,
+    startedAtMs: sittingStartedAtMs,
   })
   // The sitting is suspended: the gate is up and the candidate must return to
-  // fullscreen. Everything that could change or submit an answer is off.
-  const blocked = integrity.mustReturnToFullscreen
+  // fullscreen, or this tab does not hold the sitting. Everything that could
+  // change or submit an answer is off — a tab told its work is going nowhere
+  // must not be able to submit that work as the final answer either.
+  const blocked = integrity.mustReturnToFullscreen || !hasSitting
   // Warn before the tab closes while an unsubmitted single-question editor is
   // open (P2a). The multi-question flow guards itself, since it knows when the
   // sitting is complete.
-  useLeaveGuard(stage === 'editor' && !isMultiQuestion)
+  // Not in a tab that holds nothing: its own notice tells the candidate to close
+  // it and carry on in the other one, and warning them off doing that is the
+  // product arguing with itself (R2-041).
+  useLeaveGuard(stage === 'editor' && !isMultiQuestion && hasSitting)
 
   // Probe the link only — the question isn't served until the gate below proves
   // the visitor is one of the invited recipients.
@@ -302,19 +356,19 @@ export function CandidatePage() {
     // Not while a draft choice is pending: the autosave would overwrite the local
     // copy with the pre-selected winner, so choosing "this device" would restore
     // the server's code instead.
-    if (stage !== 'editor' || !token || draftConflict) return
+    if (stage !== 'editor' || !token || draftConflict || !hasSitting) return
     const t = setTimeout(
       () => saveDraft(token, candidateEmail, { code, language, saved_at: new Date().toISOString() }),
       500,
     )
     return () => clearTimeout(t)
-  }, [stage, token, candidateEmail, code, language, draftConflict])
+  }, [stage, token, candidateEmail, code, language, draftConflict, hasSitting])
 
   // Server-side autosave (CX2), single-question flow only — AssessmentFlow
   // saves per question itself. Gentler cadence than the localStorage one, and
   // fire-and-forget: a lost save costs at most a few seconds of typing.
   useEffect(() => {
-    if (stage !== 'editor' || !token || isMultiQuestion || !code) return
+    if (stage !== 'editor' || !token || isMultiQuestion || !code || !hasSitting) return
     const t = setTimeout(() => {
       void api
         .saveCandidateDraft(token, {
@@ -326,7 +380,7 @@ export function CandidatePage() {
         .catch(() => {})
     }, 2000)
     return () => clearTimeout(t)
-  }, [stage, token, isMultiQuestion, code, language, candidateEmail, activeQuestionId])
+  }, [stage, token, isMultiQuestion, code, language, candidateEmail, activeQuestionId, hasSitting])
 
   useEffect(() => {
     if (token && (stage === 'submitted' || stage === 'already_submitted'))
@@ -357,6 +411,14 @@ export function CandidatePage() {
       const data = await api.startInvite(token, candidateEmail, candidateName, consented)
       setInvite(data)
       setDeadline(data.deadline ?? null)
+      // Anchor integrity offsets to the sitting, not to this page load (R2-036).
+      // Only the gap between the server's two timestamps is used, so nothing
+      // here depends on the candidate's clock agreeing with ours.
+      if (data.started_at && data.server_now) {
+        const elapsedMs =
+          parseServerDate(data.server_now).getTime() - parseServerDate(data.started_at).getTime()
+        setSittingStartedAtMs(Date.now() - Math.max(0, elapsedMs))
+      }
       // Server-side drafts for the sitting (CX2). Best-effort: a failed fetch
       // restores nothing rather than blocking the start.
       let drafts: ServerDraft[] = []
@@ -687,6 +749,8 @@ export function CandidatePage() {
         integrity={integrity}
         initialDrafts={serverDrafts}
         supportEmail={supportEmail}
+        proctored={proctored}
+        holdsSitting={hasSitting}
         feedbackEnabled={invite.feedback_enabled}
         onQuestionChange={setActiveQuestionId}
         onExpired={() => setStage('expired')}
@@ -733,6 +797,13 @@ export function CandidatePage() {
               Time&rsquo;s up — submitting…
             </span>
           )}
+          <SittingHelp
+            supportEmail={supportEmail}
+            proctored={proctored}
+            remainingLabel={
+              remainingMs !== null && remainingMs > 0 ? `${formatRemaining(remainingMs)} left` : null
+            }
+          />
           <ThemeCycleButton />
         </div>
       </header>
@@ -792,8 +863,7 @@ export function CandidatePage() {
           </div>
 
           {draftConflict && (
-            <div className="modal-scrim" role="dialog" aria-modal="true" aria-labelledby="dc-title">
-              <div className="modal">
+            <DraftConflictDialog>
                 <div className="stack">
                   <h2 id="dc-title">Two versions of your work</h2>
                   <p>
@@ -820,9 +890,10 @@ export function CandidatePage() {
                     </button>
                   </div>
                 </div>
-              </div>
-            </div>
+            </DraftConflictDialog>
           )}
+
+          {!hasSitting && <SittingLockNotice />}
 
           <IntegrityOverlay
             integrity={integrity}
@@ -830,6 +901,7 @@ export function CandidatePage() {
               remainingMs !== null && remainingMs > 0 ? `${formatRemaining(remainingMs)} left` : null
             }
             onSubmitAndLeave={code.trim() ? () => setConfirmOpen(true) : null}
+            supportEmail={supportEmail}
           />
           <ConfirmDialog
             open={confirmOpen}
@@ -865,7 +937,7 @@ export function CandidatePage() {
                 // The scrim is a pointer overlay: it never stopped the keyboard,
                 // so a candidate kept typing behind a screen that claimed to
                 // have blocked them, and STATUS claimed the editor was blocked.
-                readOnly: timeUp || integrity.mustReturnToFullscreen,
+                readOnly: timeUp || blocked,
               }}
             />
           </div>

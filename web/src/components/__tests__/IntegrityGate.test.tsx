@@ -137,3 +137,26 @@ describe('coming back from another tab (U05)', () => {
     expect(container).toBeEmptyDOMElement()
   })
 })
+
+describe('the fullscreen prompt is a real modal (R2-038)', () => {
+  it('opens as a native dialog, so the browser traps focus instead of the app claiming to', () => {
+    const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal')
+    render(<IntegrityOverlay integrity={outOfFullscreen()} remainingLabel="24:18 left" />)
+
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.tagName).toBe('DIALOG')
+    // showModal, not show(): only the modal form puts the dialog in the top
+    // layer, which is what makes Tab stay inside it and the editor inert.
+    expect(showModal).toHaveBeenCalled()
+    showModal.mockRestore()
+  })
+
+  it('refuses Escape — the way on is back into fullscreen, not out of the prompt', () => {
+    render(<IntegrityOverlay integrity={outOfFullscreen()} remainingLabel="24:18 left" />)
+
+    const cancel = new Event('cancel', { cancelable: true })
+    screen.getByRole('dialog').dispatchEvent(cancel)
+
+    expect(cancel.defaultPrevented).toBe(true)
+  })
+})

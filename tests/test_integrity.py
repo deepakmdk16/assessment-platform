@@ -687,3 +687,38 @@ def test_attempts_grid_carries_the_risk_level(client) -> None:
 
     off_aid, _ = _assessment_sitting(client, proctored=False, qid="q3")
     assert client.get(f"/assessments/{off_aid}/attempts").json()[0]["integrity_risk"] is None
+
+
+def test_start_reports_the_sittings_own_start_and_the_server_clock(client) -> None:
+    """R2-036: the browser must be able to place its offsets against the sitting,
+    not against this page load.
+
+    A reload used to restart `offset_ms` at zero, so an event an hour into a
+    sitting was stored as if it had happened at the beginning and the
+    interviewer's timeline sorted out of order. The client cannot compute the
+    anchor on its own — its clock may be wrong by any amount — so /start returns
+    both the attempt's start and the server's own `now`, and the browser derives
+    the offset from the difference between them.
+    """
+    token = _invited(client)
+    _age_attempt(minutes=17)
+
+    body = client.post(
+        f"/invite/{token}/start", json={"candidate_email": "cand@x.io", "consent": True}
+    ).json()
+
+    started = datetime.fromisoformat(body["started_at"])
+    server_now = datetime.fromisoformat(body["server_now"])
+    # Both are absolute and tz-aware, so the client never has to guess a zone.
+    assert started.tzinfo is not None and server_now.tzinfo is not None
+    # The gap between them IS the anchor: how long this sitting has been running.
+    elapsed_s = (server_now - started).total_seconds()
+    assert 17 * 60 - 5 < elapsed_s < 17 * 60 + 5
+
+    # Re-opening the link reports the same start — the clock is never reset, so a
+    # reload's offsets continue where the previous load's left off.
+    again = client.post(
+        f"/invite/{token}/start", json={"candidate_email": "cand@x.io", "consent": True}
+    ).json()
+    assert again["started_at"] == body["started_at"]
+    assert datetime.fromisoformat(again["server_now"]) >= server_now

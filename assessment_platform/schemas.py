@@ -861,6 +861,15 @@ class InvitePublicOut(BaseModel):
     # invite). None when untimed. The candidate UI counts down to this off the
     # server clock, not the browser's.
     deadline: datetime | None = None
+    # The anchor the browser measures integrity offsets from (R2-036), as a pair:
+    # when this candidate's attempt began, and what the server thinks the time is
+    # right now. The difference is how long the sitting has been running, which is
+    # the only part the client can trust — its own clock may be wrong by any
+    # amount, and a reload that re-anchored on page load restarted every offset at
+    # zero and sorted the interviewer's timeline out of order. Both None before an
+    # attempt exists (the pre-start probe), which is also when nothing is recorded.
+    started_at: datetime | None = None
+    server_now: datetime | None = None
     # Per-assessment branding (A12): set only for an assessment invite whose
     # Assessment carries them; None for a legacy single-question invite or an
     # unbranded assessment (candidate UI falls back to a generic header).

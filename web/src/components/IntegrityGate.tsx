@@ -2,9 +2,10 @@
  *  the two things enforcement puts on top of the editor — the fullscreen prompt
  *  and the blocked-paste message. Capture itself lives in `../integrity.ts`. */
 
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { IntegrityState } from '../integrity'
 import { fullscreenSupported } from '../integrity'
+import { SittingHelpLine } from './SittingHelp'
 
 /** Shown on the start gate, before the candidate identifies themselves — nothing
  *  is recorded until the sitting begins, and they read this first.
@@ -24,14 +25,35 @@ export function IntegrityNotice() {
           tab switches recorded.
         </span>
       </summary>
-      <ul>
-        {fullscreenSupported() && (
-          <li>It runs in fullscreen. Leaving fullscreen pauses you until you return.</li>
-        )}
-        <li>Pasting code from outside this page is blocked.</li>
-        <li>Tab switches and developer-tools use are recorded and shared with the interviewer.</li>
-      </ul>
+      <IntegrityRules />
     </details>
+  )
+}
+
+/** What monitoring actually does, as the candidate is told it — on the start
+ *  screen where they consent, and again in the sitting's help drawer, which is
+ *  the only place they can re-read it without leaving (R2-039).
+ *
+ *  One component rather than two copies on purpose: every sentence here has a
+ *  row in docs/CLAIMS.md naming the test that proves it, and a second copy
+ *  somewhere else is a second thing to keep in step with the code.
+ *
+ *  The developer-tools line is deliberately narrower than it used to be
+ *  (R2-040). The old wording promised that every use of developer tools was
+ *  seen, which was not true: the heuristic notices a window/viewport gap opening
+ *  during the sitting, so devtools undocked into their own window, or already
+ *  open before the candidate started, pass unnoticed. It now says only what it
+ *  can actually see. */
+export function IntegrityRules() {
+  return (
+    <ul>
+      {fullscreenSupported() && (
+        <li>It runs in fullscreen. Leaving fullscreen pauses you until you return.</li>
+      )}
+      <li>Pasting code from outside this page is blocked.</li>
+      <li>Tab switches are recorded and shared with the interviewer.</li>
+      <li>Opening developer tools is recorded when the browser makes it visible to the page.</li>
+    </ul>
   )
 }
 
@@ -53,6 +75,7 @@ export function IntegrityOverlay({
   integrity,
   remainingLabel,
   onSubmitAndLeave,
+  supportEmail,
 }: {
   integrity: IntegrityState
   /** e.g. "24:18 left" — the clock keeps running while they're out of fullscreen,
@@ -63,6 +86,9 @@ export function IntegrityOverlay({
    *  for its own confirmation first. Null when nothing can be submitted, which
    *  disables the button rather than hiding the choice. */
   onSubmitAndLeave?: (() => void) | null
+  /** Where to write for help. The prompt below covers the top bar, and with it
+   *  the Help button, so this is the stuck candidate's only address (R2-039). */
+  supportEmail?: string | null
 }) {
   const { mustReturnToFullscreen, pasteBlocked, dismissPasteBlock, awayNotice, dismissAwayNotice } =
     integrity
@@ -104,6 +130,7 @@ export function IntegrityOverlay({
           integrity={integrity}
           remainingLabel={remainingLabel}
           onSubmitAndLeave={onSubmitAndLeave}
+          supportEmail={supportEmail}
         />
       )}
     </>
@@ -117,25 +144,43 @@ function FullscreenPrompt({
   integrity,
   remainingLabel,
   onSubmitAndLeave,
+  supportEmail,
 }: {
   integrity: IntegrityState
   remainingLabel?: string | null
   onSubmitAndLeave?: (() => void) | null
+  supportEmail?: string | null
 }) {
   const { fullscreenExits } = integrity
   const [leaving, setLeaving] = useState(false)
+  const ref = useRef<HTMLDialogElement>(null)
+  const promptId = useId()
+  const leaveId = useId()
+
+  // A native <dialog>, opened modally, like every other dialog in the app
+  // (R2-038): the browser then owns the focus trap, so Tab cannot walk into the
+  // editor behind the scrim. It used to be a plain div wearing role="dialog",
+  // which announces a trap to a screen reader without providing one.
+  useEffect(() => {
+    const el = ref.current
+    if (el && !el.open) el.showModal()
+  }, [])
 
   return (
-    <div
-      className="modal-scrim"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={leaving ? 'leave-title' : 'fs-title'}
+    <dialog
+      ref={ref}
+      className="modal"
+      aria-labelledby={leaving ? leaveId : promptId}
+      // Escape must not dismiss this one. It is the gate that stops the sitting
+      // while the candidate is out of fullscreen, and the editor behind it is
+      // read-only: dismissing it would leave them staring at a frozen page with
+      // nothing to act on.
+      onCancel={(e) => e.preventDefault()}
     >
-      <div className="modal">
+      <div className="stack">
         {leaving ? (
           <>
-            <h2 id="leave-title">Leave the assessment?</h2>
+            <h2 id={leaveId}>Leave the assessment?</h2>
             <ul className="modal-facts">
               <li>Your work so far is autosaved.</li>
               <li>
@@ -172,7 +217,7 @@ function FullscreenPrompt({
           </>
         ) : (
           <>
-            <h2 id="fs-title">Return to fullscreen to continue</h2>
+            <h2 id={promptId}>Return to fullscreen to continue</h2>
             <p>
               Your assessment must run in fullscreen.
               {remainingLabel ? ` The clock is still running — ${remainingLabel}.` : ''} The
@@ -193,9 +238,10 @@ function FullscreenPrompt({
                 {fullscreenExits} {fullscreenExits === 1 ? 'exit' : 'exits'} recorded
               </span>
             </div>
+            <SittingHelpLine supportEmail={supportEmail} />
           </>
         )}
       </div>
-    </div>
+    </dialog>
   )
 }

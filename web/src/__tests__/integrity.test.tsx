@@ -3,7 +3,7 @@
  *  test is the classification (which signal, blocked or not) and the batching,
  *  not the browser's own behaviour. */
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IntegrityCell, IntegrityChip, IntegrityPanel } from '../components/IntegrityPanel'
@@ -19,12 +19,21 @@ vi.mock('../api', () => ({
 const postEvents = vi.mocked(api.postIntegrityEvents)
 
 /** Mount the hook and expose its latest state to the test. */
-function Harness({ enabled = true, questionId = 'q1' }: { enabled?: boolean; questionId?: string }) {
+function Harness({
+  enabled = true,
+  questionId = 'q1',
+  startedAtMs,
+}: {
+  enabled?: boolean
+  questionId?: string
+  startedAtMs?: number | null
+}) {
   const integrity = useIntegrity({
     token: 'tok',
     candidateEmail: 'cand@x.io',
     questionId,
     enabled,
+    startedAtMs,
   })
   return (
     <div>
@@ -300,6 +309,20 @@ describe('the interviewer panel', () => {
     expect(screen.getByText('blocked')).toBeInTheDocument()
   })
 
+  it('tells a sitting with no consent record apart from a consented one', () => {
+    // The panel's other states were covered; this one was not, so nothing
+    // stopped it from silently disappearing (R2-003's other half). A sitting
+    // that predates the consent record must not read as one that consented.
+    render(<IntegrityPanel report={report({ consent_at: null })} />)
+    expect(screen.getByText('No consent recorded')).toBeInTheDocument()
+    expect(screen.queryByText('Consented')).not.toBeInTheDocument()
+
+    cleanup()
+    render(<IntegrityPanel report={report({ consent_at: '2026-09-15T10:00:00Z' })} />)
+    expect(screen.getByText('Consented')).toBeInTheDocument()
+    expect(screen.queryByText('No consent recorded')).not.toBeInTheDocument()
+  })
+
   it('says a clean sitting is clean', () => {
     render(
       <IntegrityPanel
@@ -468,5 +491,154 @@ describe('states that must not look alike', () => {
       <IntegrityChip report={{ ...base, risk: { score: 12, level: 'low', reasons: [] } }} />,
     )
     expect(screen.getByText('Integrity · 4')).toHaveClass('chip-neutral')
+  })
+})
+
+describe('offsets are anchored to the sitting, not to the page load (R2-036)', () => {
+  it('places an event at its distance from the server-reported start', async () => {
+    // A candidate 40 minutes in who reloads: the browser knows how long the
+    // sitting has run because /start returned `started_at` and `server_now`, so
+    // the first event of the NEW page load is still placed 40 minutes along.
+    render(<Harness startedAtMs={Date.now() - 40 * 60_000} />)
+    act(() => {
+      document.dispatchEvent(clipboardEvent('paste', 'from somewhere else'))
+    })
+    act(() => screen.getByText('flush').click())
+    await waitFor(() => expect(posted()).toHaveLength(1))
+
+    const offset = posted()[0].offset_ms
+    expect(offset).toBeGreaterThan(39 * 60_000)
+    expect(offset).toBeLessThan(41 * 60_000)
+  })
+
+  it('falls back to this page load when the server reported no start', async () => {
+    // The pre-attempt case: nothing to anchor to, and measuring from now is the
+    // most the browser can honestly say.
+    render(<Harness startedAtMs={null} />)
+    act(() => {
+      document.dispatchEvent(clipboardEvent('paste', 'from somewhere else'))
+    })
+    act(() => screen.getByText('flush').click())
+    await waitFor(() => expect(posted()).toHaveLength(1))
+
+    expect(posted()[0].offset_ms).toBeLessThan(1000)
+  })
+})
+
+describe('the devtools heuristic scores a change, not a size (R2-040)', () => {
+  /** jsdom lets these be assigned; the hook only ever reads them. */
+  function setWindow(outer: number, inner: number) {
+    window.outerWidth = outer
+    window.innerWidth = inner
+    window.outerHeight = 900
+    window.innerHeight = 900
+  }
+
+  it('ignores a gap that was already there when the sitting began', async () => {
+    // Edge's vertical tabs and Firefox's sidebar both open a permanent gap of
+    // this size. Scoring the absolute gap flagged every one of those candidates
+    // as having opened developer tools.
+    setWindow(1600, 1300)
+    render(<Harness />)
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    act(() => screen.getByText('flush').click())
+    await act(async () => {
+      vi.advanceTimersByTime(50)
+    })
+    expect(posted().find((e) => e.kind === 'devtools')).toBeUndefined()
+  })
+
+  it('records a gap that opens during the sitting', async () => {
+    setWindow(1600, 1580)
+    render(<Harness />)
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    // Docked developer tools: the window is unchanged, the viewport shrinks.
+    setWindow(1600, 1100)
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+
+    act(() => screen.getByText('flush').click())
+    await waitFor(() => expect(posted().find((e) => e.kind === 'devtools')).toBeDefined())
+  })
+
+  it('does not read leaving fullscreen as devtools opening', async () => {
+    // Fullscreen removes the browser's chrome, so the gap collapses. Sharing one
+    // baseline across that boundary made ~0 the sitting's minimum and turned
+    // every later exit — the thing this sitting asks candidates NOT to do, and
+    // therefore the thing they do — into a "devtools" signal on the report.
+    setWindow(1600, 1350)
+    render(<Harness />)
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+
+    // Into fullscreen: no chrome, no gap.
+    Object.defineProperty(document, 'fullscreenElement', {
+      value: document.documentElement,
+      configurable: true,
+    })
+    setWindow(1600, 1600)
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+
+    // ...and back out, which restores exactly the gap we started with.
+    Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true })
+    setWindow(1600, 1350)
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+
+    act(() => screen.getByText('flush').click())
+    await act(async () => {
+      vi.advanceTimersByTime(50)
+    })
+    expect(posted().find((e) => e.kind === 'devtools')).toBeUndefined()
+  })
+
+  it('still sees devtools opened while the candidate is in fullscreen', async () => {
+    Object.defineProperty(document, 'fullscreenElement', {
+      value: document.documentElement,
+      configurable: true,
+    })
+    setWindow(1600, 1600)
+    render(<Harness />)
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    setWindow(1600, 1150) // docked devtools inside the fullscreen window
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+
+    act(() => screen.getByText('flush').click())
+    await waitFor(() => expect(posted().find((e) => e.kind === 'devtools')).toBeDefined())
+    Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true })
+  })
+
+  it('still sees devtools opened after the candidate closes a sidebar', async () => {
+    // The narrowest chrome seen so far is the baseline, not the first sample —
+    // otherwise closing a sidebar and then opening devtools nets out to zero.
+    setWindow(1600, 1300) // sidebar open at the start
+    render(<Harness />)
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    setWindow(1600, 1580) // sidebar closed
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    setWindow(1600, 1300) // devtools opened, same gap as the old sidebar
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+
+    act(() => screen.getByText('flush').click())
+    await waitFor(() => expect(posted().find((e) => e.kind === 'devtools')).toBeDefined())
   })
 })

@@ -3,6 +3,8 @@ import Editor from '@monaco-editor/react'
 import { api, ApiError, logoSrc } from '../api'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { IntegrityOverlay } from '../components/IntegrityGate'
+import { SittingHelp } from '../components/SittingHelp'
+import { SittingLockNotice } from '../components/SittingLockNotice'
 import { useLeaveGuard } from '../leaveGuard'
 import { ThemeCycleButton } from '../components/ThemeToggle'
 import { useTheme } from '../theme/ThemeContext'
@@ -57,6 +59,12 @@ interface Props {
   /** Where a candidate writes with a question (P2b) — the platform's own tagged
    *  address, from /start. Undefined when the deploy configures none. */
   supportEmail?: string | null
+  /** Whether this sitting is monitored, so the help drawer only lists the
+   *  monitoring rules when there are any (R2-039). */
+  proctored: boolean
+  /** False when this sitting is already open in another tab (R2-041): this one
+   *  must not autosave over it. Owned by CandidatePage, which holds the lock. */
+  holdsSitting: boolean
   /** Whether this sitting can take feedback at the end (P2b), from /start. */
   feedbackEnabled?: boolean
   /** Bubble a 410/404 (expired/revoked) up so the page shows the shared notice. */
@@ -85,6 +93,8 @@ export function AssessmentFlow({
   integrity,
   initialDrafts,
   supportEmail,
+  proctored,
+  holdsSitting,
   feedbackEnabled,
   onQuestionChange,
   onExpired,
@@ -152,13 +162,13 @@ export function AssessmentFlow({
   // that said they were blocked. `locked` already drives readOnly and every
   // action, so folding it in here locks all of them at once.
   // Editing is blocked: drives readOnly and every action.
-  const locked = isDone || timeUp || integrity.mustReturnToFullscreen || submittingAll
+  const locked = isDone || timeUp || integrity.mustReturnToFullscreen || submittingAll || !holdsSitting
   // Persistence is a SEPARATE condition. Gating the autosave on `locked` meant
   // that leaving fullscreen mid-debounce cancelled the pending save and
   // scheduled nothing — a candidate who never came back to that tab lost
   // everything typed since the last successful save. A submitted or timed-out
   // question still stops saving, which is the original intent.
-  const savingStopped = isDone || timeUp
+  const savingStopped = isDone || timeUp || !holdsSitting
   const submittedCount = questions.filter((q) => submitted[q.id]).length
   // Terminal screen (A5): reached from BOTH triggers — every question
   // submitted manually before time's up, or the timeout auto-submit pass has
@@ -167,7 +177,7 @@ export function AssessmentFlow({
   const complete =
     submittedCount === questions.length || (timeUp && autoSubmitSettled) || leftEarly
   // Warn before the tab closes while the sitting is still open (P2a).
-  useLeaveGuard(!complete)
+  useLeaveGuard(!complete && holdsSitting)
   // What "Submit and leave" would send, what it would leave blank, and what a
   // per-question submit leaves open — the one predicate the loop below uses.
   const isWritten = (q: CandidateQuestionPublic) =>
@@ -444,6 +454,13 @@ export function AssessmentFlow({
               Time&rsquo;s up
             </span>
           )}
+          <SittingHelp
+            supportEmail={supportEmail}
+            proctored={proctored}
+            remainingLabel={
+              remainingMs !== null && remainingMs > 0 ? `${formatRemaining(remainingMs)} left` : null
+            }
+          />
           <ThemeCycleButton />
         </div>
       </header>
@@ -519,12 +536,15 @@ export function AssessmentFlow({
             )}
           </div>
 
+          {!holdsSitting && <SittingLockNotice />}
+
           <IntegrityOverlay
             integrity={integrity}
             remainingLabel={
               remainingMs !== null && remainingMs > 0 ? `${formatRemaining(remainingMs)} left` : null
             }
             onSubmitAndLeave={() => setConfirm('all')}
+            supportEmail={supportEmail}
           />
           <ConfirmDialog
             open={confirm !== null}

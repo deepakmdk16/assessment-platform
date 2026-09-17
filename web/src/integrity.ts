@@ -38,10 +38,27 @@ const AWAY_NOTICE_MS = 1500
  *  without limit; the oldest entries fall off first. */
 const COPY_MEMORY = 40
 
-/** A window/viewport gap this large is taken as docked devtools. Deliberately
- *  generous: a wrong "devtools" flag on an interviewer's screen is worse than a
- *  missed one, and a normal sitting has no such gap in fullscreen. */
-const DEVTOOLS_GAP_PX = 200
+/** How much the window/viewport gap must GROW, against the narrowest it has been
+ *  this sitting, to be taken as docked devtools opening. Deliberately generous:
+ *  a wrong "devtools" flag on an interviewer's screen is worse than a missed one.
+ *
+ *  Growth rather than absolute size (R2-040): Edge's vertical tabs and Firefox's
+ *  sidebar hold a gap of this order open for the whole sitting, and scoring the
+ *  size flagged every candidate who uses one. What devtools actually does is
+ *  make the gap grow while the sitting is running. The honest limits of that —
+ *  devtools already open before the sitting began, or undocked into its own
+ *  window — are why the consent screen says "when the browser makes it visible"
+ *  rather than claiming every use is seen. */
+const DEVTOOLS_GROWTH_PX = 200
+
+/** The larger of the two window/viewport gaps, which is where docked devtools
+ *  shows up whichever edge it is docked to. */
+function currentGap(): number {
+  return Math.max(
+    window.outerWidth - window.innerWidth,
+    window.outerHeight - window.innerHeight,
+  )
+}
 
 /** Clipboard text as compared against what was copied in-page. Whitespace is
  *  normalized so re-indentation by the editor doesn't turn an in-page copy into
@@ -65,6 +82,14 @@ export interface IntegrityOptions {
   /** False for an unmonitored sitting (assessment.proctored = false) — nothing is
    *  recorded, nothing is enforced, and the candidate sees no notice. */
   enabled: boolean
+  /** When the sitting began, translated into this browser's own clock from the
+   *  `started_at`/`server_now` pair /start returns (R2-036). Every offset is
+   *  measured from here, so a reload three-quarters of the way through a sitting
+   *  keeps placing events three-quarters of the way along the interviewer's
+   *  timeline instead of restarting at zero. Null until /start has answered, and
+   *  for a sitting the server reports no attempt for; the first event then falls
+   *  back to this page load, which is the best the browser can say on its own. */
+  startedAtMs?: number | null
 }
 
 export interface IntegrityState {
@@ -92,6 +117,7 @@ export function useIntegrity({
   candidateEmail,
   questionId,
   enabled,
+  startedAtMs,
 }: IntegrityOptions): IntegrityState {
   const queue = useRef<IntegrityEventIn[]>([])
   // Stamped when monitoring starts, not at render — offsets are measured from
@@ -101,28 +127,48 @@ export function useIntegrity({
   const awaySince = useRef<number | null>(null)
   const fullscreenLeftAt = useRef<number | null>(null)
   const devtoolsReported = useRef(false)
+  // The narrowest window/viewport gap seen this sitting, kept separately for
+  // windowed and fullscreen, which is the baseline the devtools heuristic
+  // measures growth against (R2-040).
+  const narrowestGap = useRef<{ windowed: number | null; fullscreen: number | null }>({
+    windowed: null,
+    fullscreen: null,
+  })
   // The latest question id, read by listeners that were registered once.
   const currentQuestion = useRef<string | null | undefined>(questionId)
   useEffect(() => {
     currentQuestion.current = questionId
   }, [questionId])
 
+  // The server's answer wins over whatever this page load assumed: it is the
+  // same value across every reload of the same sitting, which is the whole point
+  // (R2-036).
+  useEffect(() => {
+    if (startedAtMs != null) startedAt.current = startedAtMs
+  }, [startedAtMs])
+
   const [mustReturnToFullscreen, setMustReturn] = useState(false)
   const [fullscreenExits, setFullscreenExits] = useState(0)
   const [pasteBlocked, setPasteBlocked] = useState<{ size: number } | null>(null)
   const [awayNotice, setAwayNotice] = useState<{ durationMs: number } | null>(null)
 
+  // Put an event on the queue. `record` wraps this with the "is monitoring on?"
+  // test; `enterFullscreen` deliberately does not — see the comment there.
+  const enqueue = useCallback((kind: IntegrityEventKind, extra: Partial<IntegrityEventIn> = {}) => {
+    if (queue.current.length >= MAX_BATCH) return // drop rather than grow unbounded
+    queue.current.push({
+      kind,
+      offset_ms: Math.max(0, Date.now() - (startedAt.current ?? Date.now())),
+      ...extra,
+    })
+  }, [])
+
   const record = useCallback(
     (kind: IntegrityEventKind, extra: Partial<IntegrityEventIn> = {}) => {
       if (!enabled) return
-      if (queue.current.length >= MAX_BATCH) return // drop rather than grow unbounded
-      queue.current.push({
-        kind,
-        offset_ms: Math.max(0, Date.now() - (startedAt.current ?? Date.now())),
-        ...extra,
-      })
+      enqueue(kind, extra)
     },
-    [enabled],
+    [enabled, enqueue],
   )
 
   const flush = useCallback(() => {
@@ -141,7 +187,18 @@ export function useIntegrity({
   }, [enabled, token, candidateEmail])
 
   const enterFullscreen = useCallback(async () => {
-    if (!enabled || !fullscreenSupported()) return
+    // Deliberately NOT gated on `enabled`, and neither is the denial below
+    // (R2-003). The only gesture a browser grants fullscreen from is the click
+    // that starts the sitting, and that handler runs BEFORE the render where
+    // `enabled` flips true — so the hook object it holds is the one from the
+    // render where monitoring was still off. Testing `enabled` here meant the
+    // call never happened: a live proctored sitting recorded `requestFullscreen`
+    // call count 0 while the interviewer's panel read "Stayed in fullscreen".
+    // The caller decides whether this sitting is monitored; for an unmonitored
+    // one it is simply never called, and anything queued below is never sent
+    // because `flush` and its effect are still gated on `enabled`.
+    if (!fullscreenSupported()) return
+    startedAt.current ??= Date.now()
     try {
       await document.documentElement.requestFullscreen()
       setMustReturn(false)
@@ -149,10 +206,10 @@ export function useIntegrity({
       // Denied (permissions policy, an unsupported browser, a user refusal).
       // Record it as context and let the sitting continue unlocked — a candidate
       // whose browser won't go fullscreen must not be stuck on a modal.
-      record('fullscreen_denied')
+      enqueue('fullscreen_denied')
       setMustReturn(false)
     }
-  }, [enabled, record])
+  }, [enqueue])
 
   // Focus loss: the tab/window went to the background. `visibilitychange` is the
   // reliable half (a real tab switch); `blur` alone fires for things as innocent
@@ -237,22 +294,34 @@ export function useIntegrity({
     }
   }, [enabled, record])
 
-  // Devtools, by the one signal that doesn't need a debugger trick: a large gap
+  // Devtools, by the one signal that doesn't need a debugger trick: the gap
   // between the window and the viewport, which docked devtools opens. Reported
   // at most once — it's a hint that the sitting is worth a look, not a count.
   useEffect(() => {
     if (!enabled) return
+    // The narrowest gap seen so far is this browser's own chrome; anything above
+    // it appeared during the sitting. Tracking the minimum rather than the first
+    // sample matters because a candidate who closes a sidebar and then opens
+    // devtools would otherwise net out to no change at all.
+    //
+    // One baseline per fullscreen state, because entering fullscreen removes the
+    // browser's chrome and collapses the gap to nothing. Sharing a baseline
+    // across that boundary made the fullscreen gap the sitting's minimum, so
+    // every LATER exit from fullscreen — the one thing this sitting expects
+    // candidates to do — scored as a 200px+ growth and was recorded as devtools.
     const check = () => {
+      const state = document.fullscreenElement ? 'fullscreen' : 'windowed'
+      const gap = currentGap()
+      const seen = narrowestGap.current[state]
+      if (seen === null || gap < seen) narrowestGap.current[state] = gap
       if (devtoolsReported.current) return
-      const gap = Math.max(
-        window.outerWidth - window.innerWidth,
-        window.outerHeight - window.innerHeight,
-      )
-      if (gap > DEVTOOLS_GAP_PX) {
+      const baseline = narrowestGap.current[state]
+      if (baseline !== null && gap - baseline > DEVTOOLS_GROWTH_PX) {
         devtoolsReported.current = true
         record('devtools')
       }
     }
+    check()
     window.addEventListener('resize', check)
     return () => window.removeEventListener('resize', check)
   }, [enabled, record])
