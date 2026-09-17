@@ -473,6 +473,19 @@ class Invite(SQLModel, table=True):
     # unmonitored report as a clean one. A quick-screen invite has no assessment
     # and is always monitored.
     proctored: bool = True
+    # How long this sitting gets, in minutes — snapshotted from the assessment
+    # (or, for a quick screen, the question) when the invite was minted, and
+    # frozen for the same reason `proctored` above is (R2-031). Read live, an
+    # interviewer editing the duration moved the deadline of every sitting
+    # already running: a candidate at "59:59 left" saw a 1-minute clock on their
+    # next reload, and an on-time submit was recorded `late`. The next invite
+    # minted picks up the new value — freezing is per invite, not per assessment.
+    # **NULL means untimed, and nothing else** — rows that predate the column
+    # were backfilled by the migration for exactly that reason: read as "no
+    # snapshot recorded", the live fallback survived for the one sitting that
+    # has no deadline of its own, and an interviewer turning a limit on
+    # mid-flight could still hand a candidate promised none a deadline.
+    duration_minutes: int | None = None
     status: str = "active"
     created_at: datetime = _created_at()
     updated_at: datetime = _updated_at()

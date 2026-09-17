@@ -111,6 +111,18 @@ gate fails if a listed violation starts *passing*, so the list cannot rot.
   developer-tools sentence was narrowed to what the heuristic can actually see
   (R2-040), and "No consent recorded" is pinned in both directions.
 
+- **G7 · `docs/LIFECYCLE.md` + `scripts/check-lifecycle.py`** (S05) — every entity
+  (question, assessment, variant set, invite, sitting, member, organisation,
+  candidate token, plan) against every way it ends or changes under something
+  that already points at it: create, edit-after-use, archive, delete, expire,
+  owner-removed, org-deleted. A cell is `path::test_name`, `n/a — reason`, or
+  `owed → Snn`; the script fails when a cited test no longer exists, when a cell
+  is neither, or when the owed count moves off its baseline in either direction.
+  It caught five wrong citations on its first run. 34 cells cite a live test, 14
+  are owed — 11 to S06 (the whole org/member column), 2 to S14 (variant-set
+  archive and delete), 1 to S20. **A new entity or state must add its row here**;
+  `/integration-check` and `ship` P5 read it.
+
 - **G4 · `web/e2e/visual-gate.spec.ts`** (S00b) — every route at 1280x800 and
   390x844, in light and dark: no horizontal overflow, no serious/critical axe
   violation, and a screenshot for a human. Runs in the `e2e` CI job and under
@@ -246,13 +258,6 @@ the default port and every candidate spec walks into the wrong stack.
 
 ### S04 leftovers — 2026-09-16
 
-- **P2 · S — The countdown is still anchored to the browser's clock.**
-  S04 added `started_at` + `server_now` to `POST /invite/{token}/start`
-  (`schemas.py::InvitePublicOut`) and used the pair to anchor integrity offsets to
-  the sitting rather than to the page load. The timer beside it still counts down
-  to `deadline` using `Date.now()`, so a candidate whose device clock is wrong
-  sees a wrong clock — R2-028, already S05's, and the two fields it needs are now
-  on the response.
 - **P3 · XS — The devtools heuristic cannot see what it never saw open.**
   It scores growth in the window/viewport gap against the narrowest gap seen this
   sitting, so devtools already open before the candidate started, or undocked into
@@ -274,6 +279,47 @@ the default port and every candidate spec walks into the wrong stack.
   names which control should be focused first, so the browser picks the first
   tabbable one. That is the right button in both cases today and would stop being
   so the moment either dialog's actions are reordered.
+
+### S05 leftovers — 2026-09-17
+
+- **P3 · S — An untimed sitting on an expiring link still loses work at the
+  buzzer.** Expiry yields to a sitting under way because that sitting has its own
+  deadline; an untimed one has none, so the link's expiry stays its only bound
+  (`api.py::_load_invite_or_error`) and a submit after it is refused 410 — the
+  R2-004 failure, in the one case R2-004 does not cover. The alternative is to
+  give an untimed sitting the expiry AS its deadline, so the submit is recorded
+  and flagged `late` like any other: the machinery is already there
+  (`_deadline_for`), but it changes what "no time limit" means on the start
+  screen, which is the interviewer's promise to change, not this session's.
+- **P2 · S — A sitting still running behind an expired link is invisible to the
+  interviewer.** `web/src/invites.ts::inviteState` derives the badge from
+  `expires_at` alone, so the row reads "expired" while a candidate is
+  legitimately still working — and `InviteOut` carries nothing that could say
+  otherwise (no attempt count, and `AssessmentAttemptOut` has no `started_at`).
+  The badge is true of the *link*; what is missing is any sign of the sitting.
+  S15 owns the interviewer's data surfaces; this wants an in-progress signal on
+  the invite row, which needs a field on `InviteOut` first.
+- **P3 · S — An invite's frozen duration never reaches an interviewer.**
+  `Invite.duration_minutes` has no serializer (`schemas.py::InviteOut`,
+  `web/src/types.ts::Invite`), so the edit dialog's promise — every invite keeps
+  the limit it carried — cannot be verified from the page, and a batch sent
+  before an edit is indistinguishable from one sent after. The assessment
+  header still shows `assessment.duration_minutes`, which is now only what
+  *future* invites will carry.
+- **P3 · XS — An expired link now discloses the organisation it belonged to.**
+  `GET /invite/{token}` answers 200 for an expired token (R2-004 needs it to, so
+  a candidate mid-sitting can reload), which means `org_name`, `assessment_title`
+  and `logo_sha` outlive the expiry where a 410 used to reveal nothing. Anyone
+  holding the token could have read the same while it was live, so this widens a
+  window rather than opening a door — but P2b's "untagged on purpose" rule for
+  this DTO was written when expiry was fatal, and should be re-read now.
+- **P3 · XS — The invite email does not mention the expiry.**
+  `email_templates.py::invite_body` says nothing about when the link closes, so
+  "Start by …" on the gate screen is the first the candidate hears of it — after
+  they have opened the link, which is the thing that has a deadline.
+- **P3 · XS — `_invite_duration` still takes a `session` it no longer reads.**
+  Kept because eight call sites pass it and it is the seam a per-slot budget
+  would need; drop it if that never arrives.
 
 ---
 
@@ -345,19 +391,16 @@ reported — visible in the same screenshot)*
 
 ## Launch audit — 2026-09-06
 
-- **P03 · P1 · S — Assessment and variant-set invites cannot be revoked (no route);
-archiving does not stop links.**
-  Evidence: the only revoke route requires Invite.question_id == question_id
-  (api.py:1992-2003); assessment invites have question_id=None (api.py:1437-1446);
-  live: revoke via the question route → 404; _load_invite_or_error checks only
-  invite status/expiry (api.py:2023-2026); the API's own 409 text says "Revoke its
-  invites instead" (api.py:1067,1101). Why: a leaked assessment link stays live
-  indefinitely, and expiry is now the only control an interviewer has over one.
-  Fix: owner-scoped POST /assessments/{id}/invites/{token}/revoke (+ variant-set);
-  the shared InviteTable already renders a revoke column when handed an
-  `onRevoke`, so the web half is one prop once the routes exist.
-  _Verified: live run in this audit; source: backend,frontend,live. Expiry and the
-  status column landed 2026-09-08._
+- **P03 · P2 · XS — Archiving a question or assessment does not stop its links.**
+  `_load_invite_or_error` reads the invite's own status and expiry, never the
+  archived state of what it points at, so archiving something with live invites
+  retires it from the library while its candidate links keep working. Revocation
+  is the control that stops them, and S05 gave every invite kind one
+  (`api.py::revoke_any_invite`, wired into the assessment page and the
+  variant-set panel) — which is what took the rest of this item off the list.
+  Decide whether archive should imply revoke, or whether it deliberately means
+  "stop offering it, honour what is out there".
+  _Verified: live run in the 2026-09-06 audit; source: backend,frontend,live._
 - **X24 · P2 · S — The results webhook's SSRF gate is TOCTOU.**
   Evidence: `notify.webhook_url_error` resolves the host and refuses private
   addresses, then `httpx.post` resolves it again independently — a name with a

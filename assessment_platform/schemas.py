@@ -763,7 +763,15 @@ class InviteStatusOut(BaseModel):
     candidate is agreeing to must be readable before they agree. Titles and
     prompts of the questions themselves are not part of it."""
 
+    # "active" or "expired". Expiry is reported rather than fatal (R2-004): it
+    # bounds when a sitting may begin, and a candidate already sitting one reads
+    # this route on every reload. A revoked or unknown token never reaches here —
+    # those stay 410/404.
     status: str
+    # When the link stops accepting new sittings; None = no expiry. Shown on the
+    # start screen so the candidate knows before they begin, instead of finding
+    # out when they cannot start.
+    expires_at: datetime | None = None
     proctored: bool = True
     # Whose assessment, and what it is called. None for a quick-screen invite,
     # which has no Assessment — the question's own title must never stand in.

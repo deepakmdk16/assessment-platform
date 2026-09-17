@@ -200,7 +200,9 @@ aborts the push; E2E stays opt-in via `RUN_E2E=1` (CI already gates it). Gates
 1. `uv run pytest` passes; `uv run ruff check .` and `uv run mypy` clean.
 2. If `web/` changed: `npm run build`, `typecheck`, `lint`, `test` all clean.
    `lint` includes the copy and claims gates — see [docs/GLOSSARY.md](docs/GLOSSARY.md)
-   and [docs/CLAIMS.md](docs/CLAIMS.md).
+   and [docs/CLAIMS.md](docs/CLAIMS.md). `checkpoints.sh` also holds the lifecycle
+   matrix to its tests — a new entity or state needs a row in
+   [docs/LIFECYCLE.md](docs/LIFECYCLE.md).
    - **If a `.tsx` changed, run the visual gate**: `RUN_E2E=1 bash scripts/checkpoints.sh`,
      or `cd web && npx playwright test visual-gate`. It renders the routes it
      lists (see the spec) at 1280x800 and 390x844 in both themes and asserts no

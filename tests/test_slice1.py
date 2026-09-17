@@ -221,6 +221,9 @@ def test_invite_probe_reveals_no_question(anon_client: TestClient) -> None:
     # set is closed: a new field has to be added here, on purpose.
     assert set(body) == {
         "status",
+        # R2-004: when the link stops accepting new sittings, so the start screen
+        # can say so rather than letting the candidate find out at the buzzer.
+        "expires_at",
         "proctored",
         "assessment_title",
         "org_name",
@@ -311,7 +314,12 @@ def test_expired_invite_410(anon_client: TestClient, monkeypatch) -> None:
         s.add(row)
         s.commit()
 
-    assert anon_client.get(f"/invite/{inv['token']}").status_code == 410
+    # The probe reports the expiry rather than dying on it (R2-004) — a candidate
+    # mid-sitting reloads through this call, and /start decides who may go on.
+    probe = anon_client.get(f"/invite/{inv['token']}")
+    assert probe.status_code == 200 and probe.json()["status"] == "expired"
+
+    # This candidate never started, so the link is closed to them.
 
     monkeypatch.setattr(agent_client, "trigger_assessment", async_return("job-x"))
     resp = anon_client.post(

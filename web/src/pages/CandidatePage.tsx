@@ -27,7 +27,7 @@ import { CandidateFeedbackForm } from '../components/CandidateFeedbackForm'
 import { QuestionProse } from '../components/QuestionProse'
 import { CandidateNotice } from './CandidateNotice'
 import { ConsoleResult } from './ConsoleResult'
-import { CRIT_MS, formatRemaining, WARN_MS } from './candidateTimer'
+import { clockOffsetMs, CRIT_MS, formatRemaining, serverNow, WARN_MS } from './candidateTimer'
 
 type Stage =
   | 'loading'
@@ -157,6 +157,14 @@ function GateFacts({ info }: { info: InviteStatusResponse }) {
       <span className={info.duration_minutes != null ? 'chip chip-accent' : 'chip chip-neutral'}>
         {info.duration_minutes != null ? `${info.duration_minutes}-minute clock` : 'No time limit'}
       </span>
+      {/* When the link stops letting anyone begin (R2-004). The candidate used
+          to be told nothing about it and find out at the buzzer. Once they have
+          begun, their own clock is the one that ends the sitting. */}
+      {info.status === 'active' && info.expires_at && (
+        <span className="chip chip-neutral">
+          Start by {parseServerDate(info.expires_at).toLocaleString()}
+        </span>
+      )}
       {languages && <span className="chip chip-neutral">{languages}</span>}
     </div>
   )
@@ -295,6 +303,12 @@ export function CandidatePage() {
   // server's own pair rather than read off `started_at` directly, so a candidate
   // whose device clock is days out still gets offsets measured from the sitting.
   const [sittingStartedAtMs, setSittingStartedAtMs] = useState<number | null>(null)
+  // How far this browser's clock is from the server's, measured at /start
+  // (R2-028). The deadline is a server timestamp, so counting down to it against
+  // an uncorrected `Date.now()` handed a candidate with a fast laptop a shorter
+  // sitting than they were given — and auto-submitted them early. Zero until
+  // /start answers, and for a response that carries no `server_now`.
+  const [clockSkewMs, setClockSkewMs] = useState(0)
   // One sitting, one tab (R2-041). A duplicated tab recorded every switch
   // between the two as the candidate leaving, and both tabs autosaved over each
   // other. The tab that does not hold the lock records nothing and saves
@@ -414,6 +428,7 @@ export function CandidatePage() {
       // Anchor integrity offsets to the sitting, not to this page load (R2-036).
       // Only the gap between the server's two timestamps is used, so nothing
       // here depends on the candidate's clock agreeing with ours.
+      if (data.server_now) setClockSkewMs(clockOffsetMs(data.server_now))
       if (data.started_at && data.server_now) {
         const elapsedMs =
           parseServerDate(data.server_now).getTime() - parseServerDate(data.started_at).getTime()
@@ -551,19 +566,20 @@ export function CandidatePage() {
   }
 
   // Tick the countdown once a second while the editor is open and the assessment
-  // is timed. Reads the server deadline against the local clock — the server is
-  // the real authority (it enforces the deadline on submit); this is the display.
+  // is timed. Reads the server deadline against the server's clock as corrected
+  // from this browser's (R2-028) — the server is the real authority (it enforces
+  // the deadline on submit); this is the display, and it must agree with it.
   useEffect(() => {
     if (stage !== 'editor' || !deadline || isMultiQuestion) return
     const tick = () => {
-      const ms = new Date(deadline).getTime() - Date.now()
+      const ms = new Date(deadline).getTime() - serverNow(clockSkewMs)
       setRemainingMs(ms)
       if (ms <= 0) setTimeUp(true)
     }
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [stage, deadline, isMultiQuestion])
+  }, [stage, deadline, isMultiQuestion, clockSkewMs])
 
   // At zero, auto-submit whatever's in the editor — exactly once — so time running
   // out records the attempt rather than losing it.
@@ -643,6 +659,20 @@ export function CandidatePage() {
           <span className="auth-eyebrow">{gateInfo?.org_name ?? 'Invitation'}</span>
           <h1>{gateInfo?.assessment_title ?? 'Coding assessment'}</h1>
           <p className="auth-lead">{gateLead(gateInfo)}</p>
+          {/* Expired, but not necessarily over (R2-004): the server now lets a
+              candidate whose sitting is already under way carry on to their own
+              deadline, and refuses anyone else at /start. Saying so here is what
+              turns a reload during a live sitting back into a way in. */}
+          {gateInfo?.status === 'expired' && (
+            <p role="status" className="form-warning">
+              This link expired
+              {gateInfo.expires_at ? ` on ${parseServerDate(gateInfo.expires_at).toLocaleString()}` : ''}
+              .{' '}
+              {gateInfo.duration_minutes != null
+                ? 'If you had already begun, sign in with the same email address to carry on until your own time runs out. If you had not, ask whoever sent the link for a new one.'
+                : 'Ask whoever sent it for a new one.'}
+            </p>
+          )}
           {gateInfo?.languages?.length ? <GateFacts info={gateInfo} /> : null}
           {gateProctored && <IntegrityNotice />}
           <AssessmentNotice orgName={gateInfo?.org_name} />
@@ -743,6 +773,7 @@ export function CandidatePage() {
         questions={invite.questions}
         languages={invite.languages}
         deadline={deadline}
+        clockSkewMs={clockSkewMs}
         assessmentTitle={invite.assessment_title}
         orgName={invite.org_name}
         logoSha={invite.logo_sha}
