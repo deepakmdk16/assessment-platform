@@ -25,7 +25,7 @@ describe('InviteTable', () => {
     expect(screen.queryByText('active')).not.toBeInTheDocument()
   })
 
-  it('offers no revoke on an expired or revoked link', () => {
+  it('offers no revoke on a link that is already revoked', () => {
     const onRevoke = vi.fn()
     render(
       <InviteTable invites={[invite({ status: 'revoked' })]} onRevoke={onRevoke} />,
@@ -33,9 +33,19 @@ describe('InviteTable', () => {
     expect(screen.queryByRole('button', { name: /revoke/i })).not.toBeInTheDocument()
   })
 
-  it('omits the revoke column entirely where there is no revoke route', () => {
-    // Assessment and variant-set invites have none yet, so the column must be
-    // absent rather than offering a control that cannot work.
+  it('still offers revoke once the link has expired (R2-004)', () => {
+    // An expired link takes no new sittings but can still have one running
+    // behind it, and revoking is the only thing that ends it.
+    render(
+      <InviteTable
+        invites={[invite({ expires_at: '2020-01-01T00:00:00Z' })]}
+        onRevoke={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('button', { name: /revoke/i })).toBeInTheDocument()
+  })
+
+  it('omits the revoke column where the caller offers no revoke handler', () => {
     render(<InviteTable invites={[invite()]} />)
     expect(screen.queryByRole('button', { name: /revoke/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /copy link/i })).toBeInTheDocument()

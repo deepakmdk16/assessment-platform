@@ -511,6 +511,11 @@ export const api = {
   listInvites: (questionId: string) =>
     request<Invite[]>(`/questions/${questionId}/invites`, { auth: true }),
 
+  /** Revoke any invite this organisation owns, whatever it points at. The only
+   *  control that ends a sitting already under way, now that an expired link no
+   *  longer does (R2-004). */
+  revokeAnyInvite: (token: string) =>
+    request<Invite>(`/invites/${token}/revoke`, { method: 'POST' }),
   revokeInvite: (questionId: string, token: string) =>
     request<Invite>(`/questions/${questionId}/invites/${token}/revoke`, {
       method: 'POST',

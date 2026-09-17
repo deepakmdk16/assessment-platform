@@ -291,6 +291,32 @@ the default port and every candidate spec walks into the wrong stack.
   and flagged `late` like any other: the machinery is already there
   (`_deadline_for`), but it changes what "no time limit" means on the start
   screen, which is the interviewer's promise to change, not this session's.
+- **P2 · S — A sitting still running behind an expired link is invisible to the
+  interviewer.** `web/src/invites.ts::inviteState` derives the badge from
+  `expires_at` alone, so the row reads "expired" while a candidate is
+  legitimately still working — and `InviteOut` carries nothing that could say
+  otherwise (no attempt count, and `AssessmentAttemptOut` has no `started_at`).
+  The badge is true of the *link*; what is missing is any sign of the sitting.
+  S15 owns the interviewer's data surfaces; this wants an in-progress signal on
+  the invite row, which needs a field on `InviteOut` first.
+- **P3 · S — An invite's frozen duration never reaches an interviewer.**
+  `Invite.duration_minutes` has no serializer (`schemas.py::InviteOut`,
+  `web/src/types.ts::Invite`), so the edit dialog's promise — every invite keeps
+  the limit it carried — cannot be verified from the page, and a batch sent
+  before an edit is indistinguishable from one sent after. The assessment
+  header still shows `assessment.duration_minutes`, which is now only what
+  *future* invites will carry.
+- **P3 · XS — An expired link now discloses the organisation it belonged to.**
+  `GET /invite/{token}` answers 200 for an expired token (R2-004 needs it to, so
+  a candidate mid-sitting can reload), which means `org_name`, `assessment_title`
+  and `logo_sha` outlive the expiry where a 410 used to reveal nothing. Anyone
+  holding the token could have read the same while it was live, so this widens a
+  window rather than opening a door — but P2b's "untagged on purpose" rule for
+  this DTO was written when expiry was fatal, and should be re-read now.
+- **P3 · XS — The invite email does not mention the expiry.**
+  `email_templates.py::invite_body` says nothing about when the link closes, so
+  "Start by …" on the gate screen is the first the candidate hears of it — after
+  they have opened the link, which is the thing that has a deadline.
 - **P3 · XS — `_invite_duration` still takes a `session` it no longer reads.**
   Kept because eight call sites pass it and it is the seam a per-slot budget
   would need; drop it if that never arrives.
@@ -365,19 +391,16 @@ reported — visible in the same screenshot)*
 
 ## Launch audit — 2026-09-06
 
-- **P03 · P1 · S — Assessment and variant-set invites cannot be revoked (no route);
-archiving does not stop links.**
-  Evidence: the only revoke route requires Invite.question_id == question_id
-  (api.py:1992-2003); assessment invites have question_id=None (api.py:1437-1446);
-  live: revoke via the question route → 404; _load_invite_or_error checks only
-  invite status/expiry (api.py:2023-2026); the API's own 409 text says "Revoke its
-  invites instead" (api.py:1067,1101). Why: a leaked assessment link stays live
-  indefinitely, and expiry is now the only control an interviewer has over one.
-  Fix: owner-scoped POST /assessments/{id}/invites/{token}/revoke (+ variant-set);
-  the shared InviteTable already renders a revoke column when handed an
-  `onRevoke`, so the web half is one prop once the routes exist.
-  _Verified: live run in this audit; source: backend,frontend,live. Expiry and the
-  status column landed 2026-09-08._
+- **P03 · P2 · XS — Archiving a question or assessment does not stop its links.**
+  `_load_invite_or_error` reads the invite's own status and expiry, never the
+  archived state of what it points at, so archiving something with live invites
+  retires it from the library while its candidate links keep working. Revocation
+  is the control that stops them, and S05 gave every invite kind one
+  (`api.py::revoke_any_invite`, wired into the assessment page and the
+  variant-set panel) — which is what took the rest of this item off the list.
+  Decide whether archive should imply revoke, or whether it deliberately means
+  "stop offering it, honour what is out there".
+  _Verified: live run in the 2026-09-06 audit; source: backend,frontend,live._
 - **X24 · P2 · S — The results webhook's SSRF gate is TOCTOU.**
   Evidence: `notify.webhook_url_error` resolves the host and refuses private
   addresses, then `httpx.post` resolves it again independently — a name with a

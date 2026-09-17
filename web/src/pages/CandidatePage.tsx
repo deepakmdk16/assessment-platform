@@ -667,8 +667,10 @@ export function CandidatePage() {
             <p role="status" className="form-warning">
               This link expired
               {gateInfo.expires_at ? ` on ${parseServerDate(gateInfo.expires_at).toLocaleString()}` : ''}
-              . If you had already begun, sign in with the same email address to carry on. If you
-              had not, ask whoever sent the link for a new one.
+              .{' '}
+              {gateInfo.duration_minutes != null
+                ? 'If you had already begun, sign in with the same email address to carry on until your own time runs out. If you had not, ask whoever sent the link for a new one.'
+                : 'Ask whoever sent it for a new one.'}
             </p>
           )}
           {gateInfo?.languages?.length ? <GateFacts info={gateInfo} /> : null}

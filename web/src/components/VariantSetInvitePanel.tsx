@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api } from '../api'
+import { api, ApiError } from '../api'
 import { apiMessage, type ErrorMessage } from '../errors'
 import { ExpiryField } from './ExpiryField'
 import { InviteTable } from './InviteTable'
@@ -21,8 +21,27 @@ export function VariantSetInvitePanel({
   const [overrides, setOverrides] = useState<Record<string, string>>({})
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<ErrorMessage | null>(null)
+  const [revokingToken, setRevokingToken] = useState<string | null>(null)
+  const [revokeError, setRevokeError] = useState<{ token: string; message: string } | null>(null)
 
   const recipients = useMemo(() => parseRecipients(raw), [raw])
+
+  async function handleRevoke(token: string) {
+    if (!window.confirm('Revoke this invite? The candidate link will stop working.')) return
+    setRevokeError(null)
+    setRevokingToken(token)
+    try {
+      const updated = await api.revokeAnyInvite(token)
+      setInvites((prev) => prev.map((inv) => (inv.token === token ? updated : inv)))
+    } catch (err) {
+      setRevokeError({
+        token,
+        message: err instanceof ApiError ? err.message : 'Failed to revoke invite',
+      })
+    } finally {
+      setRevokingToken(null)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -143,10 +162,15 @@ export function VariantSetInvitePanel({
       {invites.length > 0 && (
         <>
           <h3 className="sect-title">Sent</h3>
-          {/* No onRevoke: there is no revoke route for variant-set invites yet
-              (P03, backend). The column stays absent rather than offering a
-              control that can't work. */}
-          <InviteTable invites={invites} showVariant />
+          {/* Revoking is now the only thing that ends a sitting under way: an
+              expired link no longer stops one (R2-004). */}
+          <InviteTable
+            invites={invites}
+            showVariant
+            onRevoke={(token) => void handleRevoke(token)}
+            revokingToken={revokingToken}
+            revokeError={revokeError}
+          />
         </>
       )}
     </div>

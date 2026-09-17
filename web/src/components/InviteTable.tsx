@@ -175,7 +175,11 @@ function InviteRow({
         {onRevoke && (
           <td>
             <div className="row-actions">
-              {state === "active" && (
+              {/* Also while expired (R2-004): a link closed to new sittings can
+                  still have one running behind it, and revoking is the only
+                  thing that ends it. Only a revoked invite has nothing left to
+                  revoke. */}
+              {state !== "revoked" && (
                 <button
                   type="button"
                   className="btn danger sm"

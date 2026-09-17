@@ -331,3 +331,52 @@ def test_an_untimed_sitting_still_ends_when_the_link_does(anon_client: TestClien
         ).status_code
         == 410
     )
+
+
+def test_any_invite_can_be_revoked_by_its_organisation(anon_client: TestClient) -> None:
+    """Revocation is the only way to end a sitting under way, so it has to exist
+    for every kind of invite — not just the quick screen.
+
+    The nested `/questions/{id}/invites/{token}/revoke` route covers one of the
+    three invite kinds. STATUS's P03 accepted that gap because "expiry is now the
+    only control an interviewer has over one"; once expiry stops ending a live
+    sitting, that reasoning is spent and an assessment invite needs a way in.
+    """
+    tok = register_interviewer(anon_client, "expiry-revoke@x.io")
+    anon_client.post("/questions", json=_question("q_rev"), headers=_auth(tok))
+    aid = anon_client.post(
+        "/assessments",
+        json={"title": "Screen", "question_ids": ["q_rev"], "duration_minutes": 60},
+        headers=_auth(tok),
+    ).json()["id"]
+    link = anon_client.post(
+        f"/assessments/{aid}/invites", json={"recipients": [CANDIDATE]}, headers=_auth(tok)
+    ).json()["token"]
+
+    assert _start(anon_client, link).status_code == 200
+
+    revoked = anon_client.post(f"/invites/{link}/revoke", headers=_auth(tok))
+    assert revoked.status_code == 200 and revoked.json()["status"] == "revoked"
+    assert _start(anon_client, link).status_code == 410
+
+
+def test_an_expired_invite_can_still_be_revoked(anon_client: TestClient) -> None:
+    """The window where revocation matters most: the link is closed to new
+    sittings, one candidate is still working, and the interviewer wants them
+    stopped."""
+    tok, link = _invited(anon_client, "expired-revoke@x.io")
+    assert _start(anon_client, link, "expired-revoke@x.io").status_code == 200
+    _expire(link)
+
+    assert anon_client.post(f"/invites/{link}/revoke", headers=_auth(tok)).status_code == 200
+    assert _start(anon_client, link, "expired-revoke@x.io").status_code == 410
+
+
+def test_revoking_is_scoped_to_the_organisation_that_owns_the_invite(
+    anon_client: TestClient,
+) -> None:
+    _tok, link = _invited(anon_client, "scoped@x.io")
+    outsider = register_interviewer(anon_client, "outsider@x.io")
+
+    assert anon_client.post(f"/invites/{link}/revoke", headers=_auth(outsider)).status_code == 404
+    assert anon_client.post("/invites/not-a-token/revoke", headers=_auth(outsider)).status_code == 404

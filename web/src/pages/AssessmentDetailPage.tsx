@@ -21,6 +21,8 @@ export function AssessmentDetailPage() {
   const [sentTo, setSentTo] = useState<string[]>([])
   const [undelivered, setUndelivered] = useState<InviteDelivery[]>([])
   const [error, setError] = useState<ErrorMessage | null>(null)
+  const [revokingToken, setRevokingToken] = useState<string | null>(null)
+  const [revokeError, setRevokeError] = useState<{ token: string; message: string } | null>(null)
   // Edit dialog (settings only — title/timer/monitoring/branding). The question
   // set is deliberately not editable here: post-invite the server locks it (A9),
   // and pre-invite it would mean rebuilding the whole builder on this page.
@@ -72,6 +74,23 @@ export function AssessmentDetailPage() {
       setError(apiMessage(err, 'Failed to create invite'))
     } finally {
       setSending(false)
+    }
+  }
+
+  async function handleRevoke(token: string) {
+    if (!window.confirm('Revoke this invite? The candidate link will stop working.')) return
+    setRevokeError(null)
+    setRevokingToken(token)
+    try {
+      const updated = await api.revokeAnyInvite(token)
+      setInvites((prev) => prev.map((inv) => (inv.token === token ? updated : inv)))
+    } catch (err) {
+      setRevokeError({
+        token,
+        message: err instanceof ApiError ? err.message : 'Failed to revoke invite',
+      })
+    } finally {
+      setRevokingToken(null)
     }
   }
 
@@ -319,9 +338,15 @@ export function AssessmentDetailPage() {
           {invites.length > 0 && (
             <>
               <div className="card">
-                {/* No onRevoke: assessment invites have no revoke route yet
-                    (P03, backend), so expiry is the only control here. */}
-                <InviteTable invites={invites} showDeliveries />
+                {/* Revoking is now the only thing that ends a sitting under way:
+                    an expired link no longer stops one (R2-004). */}
+                <InviteTable
+                  invites={invites}
+                  showDeliveries
+                  onRevoke={(token) => void handleRevoke(token)}
+                  revokingToken={revokingToken}
+                  revokeError={revokeError}
+                />
               </div>
             </>
           )}

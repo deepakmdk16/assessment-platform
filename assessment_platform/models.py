@@ -480,8 +480,11 @@ class Invite(SQLModel, table=True):
     # already running: a candidate at "59:59 left" saw a 1-minute clock on their
     # next reload, and an on-time submit was recorded `late`. The next invite
     # minted picks up the new value — freezing is per invite, not per assessment.
-    # None means untimed; null on rows created before this column existed, which
-    # fall back to the live value rather than losing their timer.
+    # **NULL means untimed, and nothing else** — rows that predate the column
+    # were backfilled by the migration for exactly that reason: read as "no
+    # snapshot recorded", the live fallback survived for the one sitting that
+    # has no deadline of its own, and an interviewer turning a limit on
+    # mid-flight could still hand a candidate promised none a deadline.
     duration_minutes: int | None = None
     status: str = "active"
     created_at: datetime = _created_at()

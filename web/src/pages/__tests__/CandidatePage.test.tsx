@@ -1548,3 +1548,30 @@ describe('an expired link (R2-004)', () => {
     expect(await screen.findByRole('heading', { name: /no longer active/i })).toBeInTheDocument()
   })
 })
+
+describe('an expired link with no time limit (R2-004)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    vi.mocked(api.getCandidateDrafts).mockResolvedValue({ drafts: [] })
+  })
+
+  it('does not offer to let anyone carry on, because the server will not', async () => {
+    // An untimed sitting has no deadline of its own, so the link's expiry stays
+    // its only bound and /start refuses everyone — including the candidate who
+    // had begun. Offering re-entry here would be the page contradicting the API.
+    vi.mocked(api.getInvite).mockResolvedValue({
+      status: 'expired',
+      duration_minutes: null,
+      question_count: 1,
+      languages: ['python'],
+      expires_at: '2026-09-17T12:00:00Z',
+    })
+
+    renderCandidatePage()
+
+    const notice = await screen.findByText(/this link expired/i)
+    expect(notice).toHaveTextContent(/ask whoever sent it for a new one/i)
+    expect(notice).not.toHaveTextContent(/carry on/i)
+  })
+})

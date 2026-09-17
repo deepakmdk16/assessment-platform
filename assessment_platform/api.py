@@ -4069,6 +4069,34 @@ def analytics_assessment(
     )
 
 
+@app.post("/invites/{token}/revoke", response_model=InviteOut)
+def revoke_any_invite(
+    token: str,
+    org: Membership = Depends(get_current_membership),
+    session: Session = Depends(get_session),
+) -> InviteOut:
+    """Deactivate any invite this organisation owns, whatever it points at.
+
+    Revocation is the only thing that ends a sitting already under way (R2-004
+    made expiry stop doing that, deliberately), so it cannot be a control that
+    exists for one of the three invite kinds. The older nested route stays for
+    the quick-screen page that calls it; this one is scoped by the invite's own
+    organisation, which is where the invite belongs.
+
+    404 rather than 403 for an invite in another organisation: whether a token
+    exists is not something an outsider gets to learn.
+    """
+    invite = session.exec(select(Invite).where(Invite.token == token)).first()
+    owner = support.invite_org(invite, session) if invite is not None else None
+    if invite is None or owner is None or owner.id != org.org_id:
+        raise HTTPException(status_code=404, detail="invalid invite token.")
+    invite.status = "revoked"
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    return _invite_out(invite)
+
+
 @app.post("/questions/{question_id}/invites/{token}/revoke", response_model=InviteOut)
 def revoke_invite(
     question_id: str,
